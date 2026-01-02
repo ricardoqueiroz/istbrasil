@@ -2,4 +2,9 @@
 @use './tailwind.css';
 @use './layout/layout.scss';
 @use 'primeicons/primeicons.css';
+@use '@fortawesome/fontawesome-free/css/all.css';
 @use './demo/demo.scss';
+
+.p-timeline-event {
+    display: block !important;
+}

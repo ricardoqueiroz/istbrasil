@@ -1,0 +1,63 @@
+:host ::ng-deep {
+    .customized-timeline {
+        .p-timeline-event-opposite {
+            flex: 0.2; // Dá mais espaço para o card e menos para o ano
+            padding: 0 1rem;
+        }
+        
+        .p-timeline-event-content {
+            flex: 0.8;
+        }
+
+        // Responsividade para celular
+        @media screen and (max-width: 960px) {
+            .p-timeline-event:nth-child(even) {
+                flex-direction: row !important; // Mantém alinhamento mesmo no celular se desejar
+            }
+            .p-timeline-event-opposite {
+                text-align: right;
+                flex: 0.2;
+            }
+            .p-timeline-event-content {
+                flex: 0.8;
+            }
+        }
+    }
+
+    .custom-marker {
+        display: flex;
+        width: 2.5rem;
+        height: 2.5rem;
+        align-items: center;
+        justify-content: center;
+        border-radius: 50%;
+        z-index: 1;
+        transition: transform 0.3s;
+        
+        &:hover {
+            transform: scale(1.2);
+        }
+    }
+
+    .card-timeline {
+        background: rgba(255, 255, 255, 0.95);
+        border-left: 5px solid var(--primary-color); // Identidade visual lateral
+        
+        .p-card-title {
+            font-family: 'Merriweather', serif; // Fonte clássica para títulos
+            color: #3e2723; // Marrom café
+            font-size: 1.5rem;
+        }
+        
+        .p-card-subtitle {
+            color: #bf9b30; // Dourado
+            font-weight: 600;
+        }
+    }
+    
+    // Fundo da página (opcional, se quiser textura)
+    .surface-ground {
+        background-image: url('/assets/images/texture-paper.png'); // Sugestão: textura de papel suave
+        background-blend-mode: multiply;
+    }
+}

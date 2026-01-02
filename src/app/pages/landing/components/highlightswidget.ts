@@ -5,39 +5,67 @@ import { Component } from '@angular/core';
     template: `
         <div id="highlights" class="py-6 px-6 lg:px-20 mx-0 my-12 lg:mx-20">
             <div class="text-center">
-                <div class="text-surface-900 dark:text-surface-0 font-normal mb-2 text-4xl">Powerful Everywhere</div>
-                <span class="text-muted-color text-2xl">Amet consectetur adipiscing elit...</span>
+                <div class="text-surface-900 dark:text-surface-0 font-normal mb-2 text-4xl">Reconhecimento da Obra</div>
+                <span class="text-muted-color text-2xl">Patrimônio Cultural</span>
             </div>
 
-            <div class="grid grid-cols-12 gap-4 mt-20 pb-2 md:pb-20">
-                <div class="flex justify-center col-span-12 lg:col-span-6 bg-purple-100 p-0 order-1 lg:order-0" style="border-radius: 8px">
-                    <img src="https://primefaces.org/cdn/templates/sakai/landing/mockup.png" class="w-11/12" alt="mockup mobile" />
-                </div>
-
-                <div class="col-span-12 lg:col-span-6 my-auto flex flex-col lg:items-end text-center lg:text-right gap-4">
-                    <div class="flex items-center justify-center bg-purple-200 self-center lg:self-end" style="width: 4.2rem; height: 4.2rem; border-radius: 10px">
-                        <i class="pi pi-fw pi-mobile text-4xl! text-purple-700"></i>
+            <div class="grid grid-cols-12 gap-4 mt-10 mb-10 p-6 md:p-10 items-center bg-surface-0 dark:bg-surface-900 shadow-lg rounded-3xl border border-surface-200 dark:border-surface-700">
+                <div class="col-span-12 lg:col-span-8 text-left">
+                    <div class="leading-none text-surface-900 dark:text-surface-0 text-3xl font-normal mb-4">Manifestação da Cultura Nacional</div>
+                    <div class="text-surface-700 dark:text-surface-100 text-2xl leading-normal">
+                        <div class="mb-4">
+                            <strong>Legislação:</strong> Lei Federal nº 15.319, de 29 de dezembro de 2025.
+                        </div>
+                        <div class="mb-4">
+                            <strong>Autoria:</strong> Deputado Federal Airton Luiz Faleiro
+                        </div>
+                        <div>
+                            <strong>Sobre o reconhecimento:</strong> Esta lei eleva a obra de Sebastião Tapajós ao mais alto patamar da cultura brasileira, assegurando sua proteção e difusão em todo o território nacional. É o reconhecimento definitivo de que seus acordes são fundamentais para a identidade musical do Brasil.
+                        </div>
                     </div>
-                    <div class="leading-none text-surface-900 dark:text-surface-0 text-3xl font-normal">Congue Quisque Egestas</div>
-                    <span class="text-surface-700 dark:text-surface-100 text-2xl leading-normal ml-0 md:ml-2" style="max-width: 650px"
-                        >Lectus arcu bibendum at varius vel pharetra vel turpis nunc. Eget aliquet nibh praesent tristique magna sit amet purus gravida. Sit amet mattis vulputate enim nulla aliquet.</span
-                    >
+                </div>
+                <div class="col-span-12 lg:col-span-4 flex justify-center">
+                    <img src="/assets/images/brasao-federal.png" class="!max-w-[195px] h-fit" alt="Brasão Federal" />
                 </div>
             </div>
 
-            <div class="grid grid-cols-12 gap-4 my-20 pt-2 md:pt-20">
-                <div class="col-span-12 lg:col-span-6 my-auto flex flex-col text-center lg:text-left lg:items-start gap-4">
-                    <div class="flex items-center justify-center bg-yellow-200 self-center lg:self-start" style="width: 4.2rem; height: 4.2rem; border-radius: 10px">
-                        <i class="pi pi-fw pi-desktop text-3xl! text-yellow-700"></i>
+            <div class="grid grid-cols-12 gap-4 mb-10 p-6 md:p-10 items-center bg-surface-0 dark:bg-surface-900 shadow-lg rounded-3xl border border-surface-200 dark:border-surface-700">
+                <div class="col-span-12 lg:col-span-8 text-left">
+                    <div class="leading-none text-surface-900 dark:text-surface-0 text-3xl font-normal mb-4">Patrimônio Cultural Imaterial do Estado do Pará</div>
+                    <div class="text-surface-700 dark:text-surface-100 text-2xl leading-normal">
+                        <div class="mb-4">
+                            <strong>Legislação:</strong> Lei Estadual nº 9.652, de 1º de julho de 2022.
+                        </div>
+                        <div class="mb-4">
+                            <strong>Autoria:</strong> Deputada Estadual Dilvanda Faro.
+                        </div>
+                        <div>
+                            <strong>Sobre o reconhecimento:</strong> Consagra o legado artístico de Tapajós como um bem de natureza imaterial essencial para a memória do povo paraense. A lei garante a preservação de sua técnica violonística única como um tesouro do Estado do Pará.
+                        </div>
                     </div>
-                    <div class="leading-none text-surface-900 dark:text-surface-0 text-3xl font-normal">Celerisque Eu Ultrices</div>
-                    <span class="text-surface-700 dark:text-surface-100 text-2xl leading-normal mr-0 md:mr-2" style="max-width: 650px"
-                        >Adipiscing commodo elit at imperdiet dui. Viverra nibh cras pulvinar mattis nunc sed blandit libero. Suspendisse in est ante in. Mauris pharetra et ultrices neque ornare aenean euismod elementum nisi.</span
-                    >
                 </div>
+                <div class="col-span-12 lg:col-span-4 flex justify-center">
+                    <img src="/assets/images/brasao-estadual.png" class="!max-w-[195px] h-fit" alt="Brasão Estadual" />
+                </div>
+            </div>
 
-                <div class="flex justify-end order-1 sm:order-2 col-span-12 lg:col-span-6 bg-yellow-100 p-0" style="border-radius: 8px">
-                    <img src="https://primefaces.org/cdn/templates/sakai/landing/mockup-desktop.png" class="w-11/12" alt="mockup" />
+            <div class="grid grid-cols-12 gap-4 mb-10 p-6 md:p-10 items-center bg-surface-0 dark:bg-surface-900 shadow-lg rounded-3xl border border-surface-200 dark:border-surface-700">
+                <div class="col-span-12 lg:col-span-8 text-left">
+                    <div class="leading-none text-surface-900 dark:text-surface-0 text-3xl font-normal mb-4">Patrimônio Cultural Imaterial do Município de Santarém</div>
+                    <div class="text-surface-700 dark:text-surface-100 text-2xl leading-normal">
+                        <div class="mb-4">
+                            <strong>Legislação:</strong> Lei Municipal nº 21.444, de 13 de dezembro de 2021.
+                        </div>
+                        <div class="mb-4">
+                            <strong>Autoria:</strong> Vereador Carlos Martins.
+                        </div>
+                        <div>
+                            <strong>Sobre o reconhecimento:</strong> Oficializa o orgulho da terra natal do artista, reconhecendo sua obra como pilar da cultura santarena. Este ato fortalece as raízes amazônicas de sua música e incentiva as novas gerações de músicos da Pérola do Tapajós.
+                        </div>
+                    </div>
+                </div>
+                <div class="col-span-12 lg:col-span-4 flex justify-center">
+                    <img src="/assets/images/brasao-municipal.png" class="!max-w-[195px] h-fit" alt="Brasão Municipal" />
                 </div>
             </div>
         </div>
