@@ -98,24 +98,29 @@ import { RouterModule } from '@angular/router';
             </div>
 
             <div class="col-span-12 text-center mt-20 mb-6">
-                <div class="text-surface-900 dark:text-surface-0 font-normal mb-2 text-4xl">Nosso Patrono</div>
-                <span class="text-muted-color text-2xl">Um exemplo de dedicação e talento</span>
+                <div class="text-surface-900 dark:text-surface-0 font-normal mb-2 text-4xl">Sebastião Tapajós</div>
+                <span class="text-muted-color text-2xl">Exemplo de dedicação e talento</span>
             </div>
             <!-- link para a página /patrono/info -->
             <div
                 class="col-span-12 mt-6 mb-20 p-2 md:p-20"
                 style="border-radius: 20px; background: linear-gradient(0deg, rgba(255, 255, 255, 0.6), rgba(255, 255, 255, 0.6)), radial-gradient(77.36% 256.97% at 77.36% 57.52%, #efe1af 0%, #c3dcfa 100%)"
             >
-                <a routerLink="/patrono/info" class="block h-full">
+                <div class="block h-full">
                     <div class="flex flex-col justify-center items-center text-center px-4 py-4 md:py-0">
                         <img src="/assets/images/st-banner.jpg" class="mt-6 mb-6 rounded-2xl shadow-xl !max-w-full h-auto" alt="Sebastião Tapajós" />
-                        <div class="text-gray-900 mb-2 text-3xl font-semibold">Sebastião Tapajós</div>
-                        <span class="text-gray-600 text-2xl">Vida & Obra</span>
+                        <div class="text-gray-900 mb-2 text-3xl font-semibold">Vida & Obra</div>
                         <p class="text-gray-900 sm:line-height-2 md:line-height-4 text-2xl mt-6" style="max-width: 800px">
-                            O encontro perfeito entre a alma brasileira e a técnica universal. Em mais de 50 anos de carreira, levou a cultura amazônica para dialogar com o Jazz e a música erudita mundial. Descubra a história, as lutas e as glórias deste ícone que carregou o nome de um rio e a força de um povo
+                            O encontro perfeito entre a alma brasileira e a técnica universal. Em mais de 50 anos de carreira, levou a cultura amazônica para dialogar com o Jazz e a música erudita mundial. Descubra a história, as lutas e as glórias deste ícone que carregou o nome de um rio e a força de um povo.
                         </p>
+                        <!-- Links para as páginas /patrono/biografia, /patrono/obra, /patrono/museu -->
+                        <div class="mt-8 flex flex-col md:flex-row gap-8 justify-center">
+                            <a routerLink="/patrono/biografia" class="px-6 py-3 bg-primary text-white font-semibold rounded-lg hover:bg-primary-dark transition-colors w-full md:w-56 text-center"><i class="layout-menuitem-icon pi pi-fw pi-info-circle mr-2"></i><span class="layout-menuitem-text ng-tns-c207508854-18">Biografia</span></a> 
+                            <a routerLink="/patrono/obra" class="px-6 py-3 bg-primary text-white font-semibold rounded-lg hover:bg-primary-dark transition-colors w-full md:w-56 text-center"><i class="layout-menuitem-icon pi-fw  pi pi-volume-up mr-2"></i><span class="layout-menuitem-text ng-tns-c207508854-18">Obra Musical</span></a> 
+                            <a routerLink="/patrono/museu" class="px-6 py-3 bg-primary text-white font-semibold rounded-lg hover:bg-primary-dark transition-colors w-full md:w-56 text-center"><i class="layout-menuitem-icon pi pi-fw pi-fw pi-camera mr-2"></i><span class="layout-menuitem-text ng-tns-c207508854-18">Museu Virtual</span></a>
+                        </div>
                     </div>
-                </a>
+                </div>
             </div>
         </div>
     </div>`
