@@ -16,8 +16,8 @@ export interface TimelineEvent {
     providedIn: 'root'
 })
 export class TimelineService {
-    // Ajuste para a URL real da sua API Node.js
-    private apiUrl = 'http://localhost:3000/api/timeline';
+    // Ajuste para usar o caminho relativo (o Nginx vai redirecionar)
+    private apiUrl = '/api/timeline';
 
     constructor(private http: HttpClient) {}
 
