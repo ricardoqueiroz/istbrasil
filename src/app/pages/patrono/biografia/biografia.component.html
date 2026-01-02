@@ -25,7 +25,7 @@
                     <ng-template pTemplate="footer">
                         <div class="text-sm text-500 border-top-1 pt-2 mt-3" [class.border-transparent]="!event.midia">
                             <div *ngIf="event.midia && isYoutube(event.midia)" class="relative w-full mb-3" style="padding-bottom: 56.25%; height: 0; overflow: hidden;">
-                                <iframe [src]="getSafeUrl(event.midia)" class="absolute top-0 left-0 w-full h-full border-round-xl" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
+                                <iframe [src]="getSafeUrl(event.midia)" [title]="event.titulo || 'Vídeo biografia'" class="absolute top-0 left-0 w-full h-full border-round-xl" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
                             </div>
                             <span class="white-space-nowrap" [innerHTML]="event.footer"></span>
                         </div>

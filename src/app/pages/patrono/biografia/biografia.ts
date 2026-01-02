@@ -72,6 +72,11 @@ export class BiografiaComponent implements OnInit {
     getSafeUrl(url: string): SafeResourceUrl | null {
         if (!url) return null;
         
+        // Se já for um link de embed, confia nele
+        if (url.includes('youtube.com/embed/')) {
+             return this.sanitizer.bypassSecurityTrustResourceUrl(url);
+        }
+
         let videoId = '';
         if (url.includes('youtube.com/watch?v=')) {
             videoId = url.split('v=')[1].split('&')[0];

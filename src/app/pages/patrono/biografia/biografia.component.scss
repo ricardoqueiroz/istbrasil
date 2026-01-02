@@ -1,5 +1,8 @@
 :host ::ng-deep {
     .customized-timeline {
+        max-width: 500px;
+        margin: 0 auto;
+
         .p-timeline-event-opposite {
             flex: 0.2; // Dá mais espaço para o card e menos para o ano
             padding: 0 1rem;

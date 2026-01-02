@@ -31,7 +31,7 @@ export class AppMenu {
             {
                 label: 'O PATRONO',
                 items: [
-                    { label: 'Sobre Sebastião Tapajós', icon: 'pi pi-fw pi-info-circle', routerLink: ['/patrono/biografia'] },
+                    { label: 'Biografia', icon: 'pi pi-fw pi-info-circle', routerLink: ['/patrono/biografia'] },
                     { label: 'Obra Musical', icon: 'pi pi-fw pi-volume-up', routerLink: ['/patrono/obra'] },
                     { label: 'Museu Virtual', icon: 'pi pi-fw pi-camera', routerLink: ['/patrono/museu'] }
                 ]

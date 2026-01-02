@@ -1,6 +1,7 @@
 import { HttpClient } from '@angular/common/http';
 import { Injectable } from '@angular/core';
 import { Observable } from 'rxjs';
+import { environment } from '../../environments/environment';
 
 // Interface baseada na View SQL criada
 export interface TimelineEvent {
@@ -16,8 +17,8 @@ export interface TimelineEvent {
     providedIn: 'root'
 })
 export class TimelineService {
-    // Ajuste para usar o caminho relativo (o Nginx vai redirecionar)
-    private apiUrl = '/api/timeline';
+    // URL definida automaticamente pelo environment (dev ou prod)
+    private apiUrl = environment.apiUrl;
 
     constructor(private http: HttpClient) {}
 
