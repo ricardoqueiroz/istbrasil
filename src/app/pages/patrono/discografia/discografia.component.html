@@ -28,6 +28,7 @@
                     <button type="button" pButton pRipple [pRowToggler]="release"
                             class="p-button-text p-button-rounded p-button-plain"
                             [icon]="expanded ? 'pi pi-chevron-down' : 'pi pi-chevron-right'"
+                            [attr.aria-label]="expanded ? 'Recolher detalhes' : 'Expandir detalhes'"
                             [title]="expanded ? 'Recolher detalhes' : 'Expandir detalhes'">
                     </button>
                 </td>
@@ -48,7 +49,7 @@
             </tr>
         </ng-template>
 
-        <ng-template pTemplate="rowexpansion" let-release>
+        <ng-template pTemplate="expandedrow" let-release>
             <tr>
                 <td colspan="5">
                     <div class="p-3">
@@ -62,8 +63,8 @@
                             </ng-template>
                             <ng-template pTemplate="body" let-track>
                                 <tr>
-                                    <td>{{track.track_num}}</td>
-                                    <td>{{track.title}}</td>
+                                    <td>{{track.position}}</td>
+                                    <td>{{track.titulo}}</td>
                                     <td>{{track.duration}}</td>
                                 </tr>
                             </ng-template>

@@ -1,4 +1,4 @@
-import { Component, OnInit } from '@angular/core';
+import { Component, OnInit, ChangeDetectorRef } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { TableModule } from 'primeng/table';
 import { ButtonModule } from 'primeng/button';
@@ -20,7 +20,7 @@ export class DiscografiaComponent implements OnInit {
 
     loading: boolean = true;
 
-    constructor(private releasesService: ReleasesService) {}
+    constructor(private releasesService: ReleasesService, private cd: ChangeDetectorRef) {}
 
     ngOnInit() {
         this.releasesService.getAllReleases().subscribe((data) => {
@@ -48,6 +48,7 @@ export class DiscografiaComponent implements OnInit {
 
         this.releasesService.getTracks(release.release_num).subscribe(tracks => {
             release.tracks = tracks;
+            this.cd.markForCheck();
         });
     }
 }
