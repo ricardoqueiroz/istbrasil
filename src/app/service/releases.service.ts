@@ -16,6 +16,16 @@ export interface Release {
     type_: string;
     own_collection: number;
     for_sale: number;
+    
+    // Propriedade opcional para armazenar faixas no frontend
+    tracks?: Track[];
+}
+
+export interface Track {
+    id: number;
+    position: string;
+    duration: string;
+    titulo: string;
 }
 
 @Injectable({
@@ -28,5 +38,9 @@ export class ReleasesService {
 
     getAllReleases(): Observable<Release[]> {
         return this.http.get<Release[]>(this.apiUrl);
+    }
+
+    getTracks(releaseNum: number): Observable<Track[]> {
+        return this.http.get<Track[]>(`${this.apiUrl}/${releaseNum}/tracks`);
     }
 }

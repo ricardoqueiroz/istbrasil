@@ -1,30 +1,78 @@
 <div class="card">
     <h1 class="text-3xl font-bold mb-4">Discografia</h1>
-    <p-table [value]="releases" [paginator]="true" [rows]="10" [rowsPerPageOptions]="[10, 20, 50]" responsiveLayout="scroll">
+    <p-table 
+        [value]="releases" 
+        dataKey="id" 
+        [expandedRowKeys]="expandedRows"
+        (onRowExpand)="onRowExpand($event)"
+        (onRowCollapse)="onRowCollapse($event)"
+        [loading]="loading"
+        [paginator]="true" 
+        [rows]="10" 
+        [rowsPerPageOptions]="[10, 20, 50]" 
+        responsiveLayout="scroll">
+
         <ng-template pTemplate="header">
             <tr>
+                <th style="width: 5rem"></th>
                 <th style="width: 120px">Capa</th>
                 <th>Título / Ano</th>
                 <th>Artista</th>
                 <th>Detalhes</th>
             </tr>
         </ng-template>
-        <ng-template pTemplate="body" let-release>
+
+        <ng-template pTemplate="body" let-release let-expanded="expanded">
             <tr>
                 <td>
-                    <img [src]="'assets/releases/' + release.thumb" [alt]="release.title" width="100" class="shadow-2 border-round" />
+                    <button type="button" pButton pRipple [pRowToggler]="release"
+                            class="p-button-text p-button-rounded p-button-plain"
+                            [icon]="expanded ? 'pi pi-chevron-down' : 'pi pi-chevron-right'"
+                            [title]="expanded ? 'Recolher detalhes' : 'Expandir detalhes'">
+                    </button>
+                </td>
+                <td>
+                    <img [src]="'assets/releases/' + release.thumb" [alt]="release.title || 'Capa do álbum'" width="100" class="shadow-2 border-round" />
                 </td>
                 <td>
                     <div class="text-xl font-bold">{{release.title}}</div>
                     <div class="text-500">{{release.year}}</div>
                 </td>
-                <td>
-                    {{release.artist}}
-                </td>
+                <td>{{release.artist}}</td>
                 <td>
                     <div class="text-sm">
                         <span class="font-semibold">País:</span> {{release.country}}<br>
                         <span class="font-semibold">Gravadora:</span> {{release.label_}}
+                    </div>
+                </td>
+            </tr>
+        </ng-template>
+
+        <ng-template pTemplate="rowexpansion" let-release>
+            <tr>
+                <td colspan="5">
+                    <div class="p-3">
+                        <p-table [value]="release.tracks" dataKey="track_num">
+                            <ng-template pTemplate="header">
+                                <tr>
+                                    <th>Nº</th>
+                                    <th>Título da Faixa</th>
+                                    <th>Duração</th>
+                                </tr>
+                            </ng-template>
+                            <ng-template pTemplate="body" let-track>
+                                <tr>
+                                    <td>{{track.track_num}}</td>
+                                    <td>{{track.title}}</td>
+                                    <td>{{track.duration}}</td>
+                                </tr>
+                            </ng-template>
+                            <ng-template pTemplate="emptymessage">
+                                <tr>
+                                    <td colspan="3">Carregando faixas ou não há faixas disponíveis.</td>
+                                </tr>
+                            </ng-template>
+                        </p-table>
                     </div>
                 </td>
             </tr>
