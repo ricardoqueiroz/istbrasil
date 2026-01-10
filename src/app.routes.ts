@@ -19,7 +19,8 @@ export const appRoutes: Routes = [
         path: 'patrono',
         component: AppLayout,
         children: [
-            { path: 'biografia', loadComponent: () => import('./app/pages/patrono/biografia/biografia').then(m => m.BiografiaComponent) }
+            { path: 'biografia', loadComponent: () => import('./app/pages/patrono/biografia/biografia').then(m => m.BiografiaComponent) },
+            { path: 'discografia', loadComponent: () => import('./app/pages/patrono/discografia/discografia.component').then(m => m.DiscografiaComponent) }
         ]
     },
     { path: 'notfound', component: Notfound },

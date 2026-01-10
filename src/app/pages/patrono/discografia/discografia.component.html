@@ -1,0 +1,33 @@
+<div class="card">
+    <h1 class="text-3xl font-bold mb-4">Discografia</h1>
+    <p-table [value]="releases" [paginator]="true" [rows]="10" [rowsPerPageOptions]="[10, 20, 50]" responsiveLayout="scroll">
+        <ng-template pTemplate="header">
+            <tr>
+                <th style="width: 120px">Capa</th>
+                <th>Título / Ano</th>
+                <th>Artista</th>
+                <th>Detalhes</th>
+            </tr>
+        </ng-template>
+        <ng-template pTemplate="body" let-release>
+            <tr>
+                <td>
+                    <img [src]="'assets/releases/' + release.thumb" [alt]="release.title" width="100" class="shadow-2 border-round" />
+                </td>
+                <td>
+                    <div class="text-xl font-bold">{{release.title}}</div>
+                    <div class="text-500">{{release.year}}</div>
+                </td>
+                <td>
+                    {{release.artist}}
+                </td>
+                <td>
+                    <div class="text-sm">
+                        <span class="font-semibold">País:</span> {{release.country}}<br>
+                        <span class="font-semibold">Gravadora:</span> {{release.label_}}
+                    </div>
+                </td>
+            </tr>
+        </ng-template>
+    </p-table>
+</div>

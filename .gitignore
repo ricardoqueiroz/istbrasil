@@ -44,3 +44,6 @@ Thumbs.db
 
 # Database
 database/
+
+# Development files
+development/
