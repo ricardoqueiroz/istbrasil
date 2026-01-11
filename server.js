@@ -1,8 +1,8 @@
 const express = require('express');
 const cors = require('cors');
 const bodyParser = require('body-parser');
-const timelineRoutes = require('./src/routes/timelineRoutes');
-const releasesRoutes = require('./src/routes/releasesRoutes');
+const timelineRoutes = require('./src/routes/timeline.routes.js');
+const releasesRoutes = require('./src/routes/releases.routes.js');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
