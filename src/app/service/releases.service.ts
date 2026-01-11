@@ -32,7 +32,7 @@ export interface Track {
     providedIn: 'root'
 })
 export class ReleasesService {
-    private apiUrl = `${environment.apiBaseUrl}/releases`;
+    private apiUrl = `${environment.apiUrl}/releases`;
 
     constructor(private http: HttpClient) {}
 
