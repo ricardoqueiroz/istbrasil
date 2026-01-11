@@ -18,7 +18,7 @@ export interface TimelineEvent {
 })
 export class TimelineService {
     // URL definida automaticamente pelo environment (dev ou prod)
-    private apiUrl = environment.apiUrl;
+    private apiUrl = `${environment.apiUrl}/timeline`;
 
     constructor(private http: HttpClient) {}
 
