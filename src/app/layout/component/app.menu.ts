@@ -29,24 +29,25 @@ export class AppMenu {
                 ]
             },
             {
-                label: 'O PATRONO',
+                label: 'Sebastião Tapajós',
                 items: [
                     { label: 'Biografia', icon: 'pi pi-fw pi-info-circle', routerLink: ['/patrono/biografia'] },
                     { label: 'Obra Musical', icon: 'pi pi-fw pi-volume-up', routerLink: ['/patrono/obra'] },
-                    { label: 'Museu Virtual', icon: 'pi pi-fw pi-camera', routerLink: ['/patrono/museu'] }
+                    { label: 'Discografia', icon: 'pi pi-fw pi-headphones', routerLink: ['/patrono/discografia'] }
                 ]
             },
             {
                 label: 'PROJETOS E TURISMO',
                 items: [
                     { label: 'Cidade de Santarém', icon: 'pi pi-fw pi-map-marker', routerLink: ['/turismo/santarem'] },
-                    { label: 'Centro de Convenções', icon: 'pi pi-fw pi-building', routerLink: ['/turismo/centro-convencoes'] }
+                    { label: 'Centro de Convenções', icon: 'pi pi-fw pi-building', routerLink: ['/turismo/centro-convencoes'] },
+                    { label: 'Ecoturismo', icon: 'pi pi-fw pi-camera', routerLink: ['/turismo/ecoturismo'] }
                 ]
             },
             {
                 label: 'LOJA',
                 items: [
-                    { label: 'IST Editora', icon: 'pi pi-fw pi-shopping-cart', routerLink: ['/loja'] }
+                    { label: 'IST Editora', icon: 'pi pi-fw pi-shopping-cart', routerLink: ['/editora'] }
                 ]
             }
         ];

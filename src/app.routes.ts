@@ -20,7 +20,8 @@ export const appRoutes: Routes = [
         component: AppLayout,
         children: [
             { path: 'biografia', loadComponent: () => import('./app/pages/patrono/biografia/biografia').then(m => m.BiografiaComponent) },
-            { path: 'discografia', loadComponent: () => import('./app/pages/patrono/discografia/discografia.component').then(m => m.DiscografiaComponent) }
+            { path: 'discografia', loadComponent: () => import('./app/pages/patrono/discografia/discografia.component').then(m => m.DiscografiaComponent) },
+            { path: 'obra', loadComponent: () => import('./app/pages/patrono/obra/obra.component').then(m => m.ObraComponent) }
         ]
     },
     { path: 'notfound', component: Notfound },

@@ -3,6 +3,7 @@ const cors = require('cors');
 const bodyParser = require('body-parser');
 const timelineRoutes = require('./src/routes/timeline.routes.js');
 const releasesRoutes = require('./src/routes/releases.routes.js');
+const obraRoutes = require('./src/routes/obra.routes.js');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -14,6 +15,7 @@ app.use(bodyParser.json());
 // Rotas
 app.use('/api/timeline', timelineRoutes);
 app.use('/api/releases', releasesRoutes);
+app.use('/api/obra', obraRoutes);
 
 // Rota padrão para teste
 app.get('/', (req, res) => {

@@ -117,7 +117,7 @@ import { RouterModule } from '@angular/router';
                         <div class="mt-8 flex flex-col md:flex-row gap-8 justify-center">
                             <a routerLink="/patrono/biografia" class="px-6 py-3 bg-primary text-white font-semibold rounded-lg hover:bg-primary-dark transition-colors w-full md:w-56 text-center"><i class="layout-menuitem-icon pi pi-fw pi-info-circle mr-2"></i><span class="layout-menuitem-text ng-tns-c207508854-18">Biografia</span></a> 
                             <a routerLink="/patrono/obra" class="px-6 py-3 bg-primary text-white font-semibold rounded-lg hover:bg-primary-dark transition-colors w-full md:w-56 text-center"><i class="layout-menuitem-icon pi-fw  pi pi-volume-up mr-2"></i><span class="layout-menuitem-text ng-tns-c207508854-18">Obra Musical</span></a> 
-                            <a routerLink="/patrono/museu" class="px-6 py-3 bg-primary text-white font-semibold rounded-lg hover:bg-primary-dark transition-colors w-full md:w-56 text-center"><i class="layout-menuitem-icon pi pi-fw pi-fw pi-camera mr-2"></i><span class="layout-menuitem-text ng-tns-c207508854-18">Museu Virtual</span></a>
+                            <a routerLink="/patrono/discografia" class="px-6 py-3 bg-primary text-white font-semibold rounded-lg hover:bg-primary-dark transition-colors w-full md:w-56 text-center"><i class="layout-menuitem-icon pi pi-fw pi-fw pi-headphones mr-2"></i><span class="layout-menuitem-text ng-tns-c207508854-18">Discografia</span></a>
                         </div>
                     </div>
                 </div>

@@ -1,0 +1,52 @@
+<div class="card">
+    <h5>Obras Musicais</h5>
+    <p-table #dt [value]="obras" [rows]="rows" [paginator]="true" [totalRecords]="totalRecords"
+             [loading]="loading" (onLazyLoad)="loadObras($event)" [lazy]="true"
+             responsiveLayout="scroll" [showCurrentPageReport]="true"
+             currentPageReportTemplate="Mostrando {first} a {last} de {totalRecords} obras"
+             [globalFilterFields]="['titulo']">
+        <ng-template pTemplate="caption">
+            <div class="flex align-items-center justify-content-between">
+                <!--h5 class="m-0">Gerenciar Obras</h5-->
+                <span class="p-input-icon-left">
+                    <i class="pi pi-search"></i>&nbsp;&nbsp;
+                    <input id="search-input" pInputText type="text" (input)="onFilter($event)" placeholder="Buscar por título..." />
+                </span>
+            </div>
+        </ng-template>
+
+        <ng-template pTemplate="header">
+            <tr>
+                <th style="width: 35%;" pSortableColumn="titulo">Título <p-sortIcon field="titulo"></p-sortIcon></th>
+                <th style="width: 20%;">ISWC</th>
+                <th style="width: 15%;" pSortableColumn="data">Data <p-sortIcon field="data"></p-sortIcon></th>
+                <th style="width: 15%; text-align: center;">Partitura</th>
+                <th style="width: 15%; text-align: center;">Ouvir</th>
+            </tr>
+        </ng-template>
+        <ng-template pTemplate="body" let-obra>
+            <tr>
+                <td>{{ obra.titulo }}</td>
+                <td>{{ obra.iswc || '---' }}</td>
+                <td>{{ obra.data || '---' }}</td>
+                <td style="text-align: center;">
+                    <a *ngIf="obra.partitura" [href]="'assets/partituras/' + obra.partitura" target="_blank">
+                        <i class="pi pi-file-pdf" style="font-size: 1.5rem; color: #D32F2F;"></i>
+                    </a>
+                    <i *ngIf="!obra.partitura" class="pi pi-file-pdf" style="font-size: 1.5rem; color: #BDBDBD;"></i>
+                </td>
+                <td style="text-align: center;">
+                    <a *ngIf="obra.link" [href]="obra.link" target="_blank">
+                        <i class="pi pi-volume-up" style="font-size: 1.5rem; color: #1976D2;"></i>
+                    </a>
+                    <i *ngIf="!obra.link" class="pi pi-volume-up" style="font-size: 1.5rem; color: #BDBDBD;"></i>
+                </td>
+            </tr>
+        </ng-template>
+        <ng-template pTemplate="emptymessage">
+            <tr>
+                <td colspan="5">Nenhuma obra encontrada.</td>
+            </tr>
+        </ng-template>
+    </p-table>
+</div>
