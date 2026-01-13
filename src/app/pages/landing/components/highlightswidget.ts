@@ -4,68 +4,65 @@ import { Component } from '@angular/core';
     selector: 'highlights-widget',
     template: `
         <div id="highlights" class="py-6 px-6 lg:px-20 mx-0 my-12 lg:mx-20">
-            <div class="text-center">
-                <div class="text-surface-900 dark:text-surface-0 font-normal mb-2 text-4xl">Reconhecimento da Obra</div>
-                <span class="text-muted-color text-2xl">Patrimônio Cultural</span>
+            <div class="text-center mb-8">
+                <div class="text-surface-900 dark:text-surface-0 font-normal mb-2 text-4xl">Divulgação da Obra</div>
+                <span class="text-muted-color text-2xl">Sebastião Tapajós</span>
+            </div>
+
+            <div class="grid grid-cols-12 gap-4 mb-10 p-6 md:p-10 items-center bg-surface-0 dark:bg-surface-900 shadow-lg rounded-3xl border border-surface-200 dark:border-surface-700">
+                <div class="col-span-12 lg:col-span-8 text-left">
+                    <div class="leading-none text-surface-900 dark:text-surface-0 text-3xl font-bold mb-4" style="color: var(--color-yellow-500)">Livro Partituras Sebastião Tapajós</div>
+                    <div class="text-surface-700 dark:text-surface-100 text-2xl leading-normal">
+                        <div class="mb-4">
+                            <strong style="color: var(--p-gray-400)">E-book em formato PDF, A4 , 424 páginas.</strong>
+                        </div>
+                        <div>
+                            <p class="text-base"><strong>Título:</strong>&nbsp;<em>Catálogo de Partituras, Sebastião Tapajós</em><br><strong>Conteúdo:</strong>&nbsp;<em>105 partituras, biografia &amp; discografia</em><br><strong>Formato:</strong>&nbsp;<em>PDF-XA, A4, 426 págs.</em><br><strong>Dimensões (pol):</strong>&nbsp;<em>8.27 × 11.69 (A4)</em><br><strong>Dimension (cm):</strong>&nbsp;<em>21.0 × 29.7 (A4)</em><br><strong>Editor:</strong>&nbsp;<em>Agência Brasileira ISBN</em><br><strong>Idioma:</strong>&nbsp;<em>Português ou Inglês</em><br><strong>Prefixo Ed.:</strong>&nbsp;<em>52911</em><br><strong>ISBN-10:</strong>&nbsp;<em>8552911036</em><br><strong>ISBN-13:</strong>&nbsp;<em>978-8552911036</em><br></p>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-span-12 lg:col-span-4 flex justify-center">
+                    <img src="/assets/images/capa-01.png" class="!max-w-[195px] h-fit" alt="Brasão Estadual" />
+                </div>
             </div>
 
             <div class="grid grid-cols-12 gap-4 mt-10 mb-10 p-6 md:p-10 items-center bg-surface-0 dark:bg-surface-900 shadow-lg rounded-3xl border border-surface-200 dark:border-surface-700">
                 <div class="col-span-12 lg:col-span-8 text-left">
-                    <div class="leading-none text-surface-900 dark:text-surface-0 text-3xl font-normal mb-4">Manifestação da Cultura Nacional</div>
+                    <div class="leading-none text-surface-900 dark:text-surface-0 text-3xl font-bold mb-4" style="color: var(--color-yellow-500)">Camerata Amazônica Tapajós</div>
                     <div class="text-surface-700 dark:text-surface-100 text-2xl leading-normal">
                         <div class="mb-4">
-                            <strong>Legislação:</strong> Lei Federal nº 15.319, de 29 de dezembro de 2025.
+                            <strong>A Música de Sebastião Tapajós</strong>
                         </div>
                         <div class="mb-4">
-                            <strong>Autoria:</strong> Deputado Federal Airton Luiz Faleiro
+                            <strong style="color: var(--p-gray-400)">Regional, Jazz amazônico e clássicos de Sebastião Tapajós</strong>
                         </div>
                         <div>
-                            <strong>Sobre o reconhecimento:</strong> Esta lei eleva a obra de Sebastião Tapajós ao mais alto patamar da cultura brasileira, assegurando sua proteção e difusão em todo o território nacional. É o reconhecimento definitivo de que seus acordes são fundamentais para a identidade musical do Brasil.
+                            Grupo oficial de divulgação da obra do violonista, reconhecido pelas três instâncias do Estado Brasileiro. A <strong>Camerata Amazônica Tapajós</strong> tem a missão de preservar e promover o legado musical de Sebastião Tapajós, levando sua arte para palcos nacionais e internacionais, fortalecendo a cultura brasileira.
                         </div>
                     </div>
                 </div>
                 <div class="col-span-12 lg:col-span-4 flex justify-center">
-                    <img src="/assets/images/brasao-federal.png" class="!max-w-[195px] h-fit" alt="Brasão Federal" />
+                    <img src="/assets/images/cat.png" class="!max-w-[195px] h-fit" alt="Brasão Federal" />
                 </div>
             </div>
 
             <div class="grid grid-cols-12 gap-4 mb-10 p-6 md:p-10 items-center bg-surface-0 dark:bg-surface-900 shadow-lg rounded-3xl border border-surface-200 dark:border-surface-700">
                 <div class="col-span-12 lg:col-span-8 text-left">
-                    <div class="leading-none text-surface-900 dark:text-surface-0 text-3xl font-normal mb-4">Patrimônio Cultural Imaterial do Estado do Pará</div>
+                    <div class="leading-none text-surface-900 dark:text-surface-0 text-3xl font-bold mb-4" style="color: var(--color-yellow-500)">2º Festival de Violões Sebastião Tapajós</div>
                     <div class="text-surface-700 dark:text-surface-100 text-2xl leading-normal">
                         <div class="mb-4">
-                            <strong>Legislação:</strong> Lei Estadual nº 9.652, de 1º de julho de 2022.
+                            <strong style="color: var(--p-gray-400)">Santarém - Pará - Brasil - 2026</strong>
                         </div>
                         <div class="mb-4">
-                            <strong>Autoria:</strong> Deputada Estadual Dilvanda Faro.
+                            <strong>Em Breve</strong>
                         </div>
                         <div>
-                            <strong>Sobre o reconhecimento:</strong> Consagra o legado artístico de Tapajós como um bem de natureza imaterial essencial para a memória do povo paraense. A lei garante a preservação de sua técnica violonística única como um tesouro do Estado do Pará.
+                            A ser realizado no segundo semestre de 2026, o <em><strong>2º Festival de Violão Amazônico Sebastião Tapajós</strong></em> visa celebrar e perpetuar o legado do renomado violonista. O evento reunirá músicos, estudantes e entusiastas do violão para uma série de apresentações, workshops e competições, promovendo a cultura amazônica e a música brasileira em um cenário internacional.
                         </div>
                     </div>
                 </div>
                 <div class="col-span-12 lg:col-span-4 flex justify-center">
-                    <img src="/assets/images/brasao-estadual.png" class="!max-w-[195px] h-fit" alt="Brasão Estadual" />
-                </div>
-            </div>
-
-            <div class="grid grid-cols-12 gap-4 mb-10 p-6 md:p-10 items-center bg-surface-0 dark:bg-surface-900 shadow-lg rounded-3xl border border-surface-200 dark:border-surface-700">
-                <div class="col-span-12 lg:col-span-8 text-left">
-                    <div class="leading-none text-surface-900 dark:text-surface-0 text-3xl font-normal mb-4">Patrimônio Cultural Imaterial do Município de Santarém</div>
-                    <div class="text-surface-700 dark:text-surface-100 text-2xl leading-normal">
-                        <div class="mb-4">
-                            <strong>Legislação:</strong> Lei Municipal nº 21.444, de 13 de dezembro de 2021.
-                        </div>
-                        <div class="mb-4">
-                            <strong>Autoria:</strong> Vereador Carlos Martins.
-                        </div>
-                        <div>
-                            <strong>Sobre o reconhecimento:</strong> Oficializa o orgulho da terra natal do artista, reconhecendo sua obra como pilar da cultura santarena. Este ato fortalece as raízes amazônicas de sua música e incentiva as novas gerações de músicos da Pérola do Tapajós.
-                        </div>
-                    </div>
-                </div>
-                <div class="col-span-12 lg:col-span-4 flex justify-center">
-                    <img src="/assets/images/brasao-municipal.png" class="!max-w-[195px] h-fit" alt="Brasão Municipal" />
+                    <img src="/assets/images/2-festival.png" class="!max-w-[195px] h-fit" alt="Festival de Violões" />
                 </div>
             </div>
         </div>

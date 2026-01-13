@@ -16,7 +16,7 @@ import { RippleModule } from 'primeng/ripple';
             <div class="grid grid-cols-12 gap-4 justify-between mt-20 md:mt-0">
                 <div class="col-span-12 lg:col-span-4 p-0 md:p-4">
                     <div class="p-4 flex flex-col border-surface-200 dark:border-surface-600 pricing-card cursor-pointer border-2 hover:border-primary duration-300 transition-all" style="border-radius: 10px">
-                        <div class="text-surface-900 dark:text-surface-0 text-center my-8 text-3xl">Alter do Chão</div>
+                        <div class="text-surface-900 dark:text-surface-0 text-center my-8 text-3xl">Santarém</div>
                         <img src="/assets/images/alter.png" class="w-10/12 mx-auto" alt="Alter do Chão" />
                         <div class="my-8 flex flex-col items-center gap-4"></div>
                         <p-divider class="w-full bg-surface-200"></p-divider>

@@ -1,11 +1,13 @@
 import { Component } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { RouterModule } from '@angular/router';
+import { AccordionModule } from 'primeng/accordion';
+
 
 @Component({
     selector: 'features-widget',
     standalone: true,
-    imports: [CommonModule, RouterModule],
+    imports: [CommonModule, RouterModule, AccordionModule],
     template: ` <div id="features" class="py-6 px-6 lg:px-20 mt-8 mx-0 lg:mx-20">
         <div class="grid grid-cols-12 gap-4 justify-center">
             <div class="col-span-12 text-center mt-20 mb-6">
@@ -97,10 +99,6 @@ import { RouterModule } from '@angular/router';
                 </a>
             </div>
 
-            <div class="col-span-12 text-center mt-20 mb-6">
-                <div class="text-surface-900 dark:text-surface-0 font-normal mb-2 text-4xl">Sebastião Tapajós</div>
-                <span class="text-muted-color text-2xl">Exemplo de dedicação e talento</span>
-            </div>
             <!-- link para a página /patrono/info -->
             <div
                 class="col-span-12 mt-6 mb-20 p-2 md:p-20"
@@ -108,16 +106,93 @@ import { RouterModule } from '@angular/router';
             >
                 <div class="block h-full">
                     <div class="flex flex-col justify-center items-center text-center px-4 py-4 md:py-0">
+                        <div class="text-surface-900 dark:text-surface-0 font-normal mb-2 text-4xl">Sebastião Tapajós</div>
+                        <span class="text-muted-color text-2xl">Exemplo de dedicação e talento</span>
                         <img src="/assets/images/st-banner.jpg" class="mt-6 mb-6 rounded-2xl shadow-xl !max-w-full h-auto" alt="Sebastião Tapajós" />
                         <div class="text-gray-900 mb-2 text-3xl font-semibold">Vida & Obra</div>
                         <p class="text-gray-900 sm:line-height-2 md:line-height-4 text-2xl mt-6" style="max-width: 800px">
                             O encontro perfeito entre a alma brasileira e a técnica universal. Em mais de 50 anos de carreira, levou a cultura amazônica para dialogar com o Jazz e a música erudita mundial. Descubra a história, as lutas e as glórias deste ícone que carregou o nome de um rio e a força de um povo.
                         </p>
                         <!-- Links para as páginas /patrono/biografia, /patrono/obra, /patrono/museu -->
-                        <div class="mt-8 flex flex-col md:flex-row gap-8 justify-center">
+                        <div class="mt-8 flex flex-col md:flex-row gap-8 justify-center" style="max-width: 800px; width: 100%;">
                             <a routerLink="/patrono/biografia" class="px-6 py-3 bg-primary text-white font-semibold rounded-lg hover:bg-primary-dark transition-colors w-full md:w-56 text-center"><i class="layout-menuitem-icon pi pi-fw pi-info-circle mr-2"></i><span class="layout-menuitem-text ng-tns-c207508854-18">Biografia</span></a> 
                             <a routerLink="/patrono/obra" class="px-6 py-3 bg-primary text-white font-semibold rounded-lg hover:bg-primary-dark transition-colors w-full md:w-56 text-center"><i class="layout-menuitem-icon pi-fw  pi pi-volume-up mr-2"></i><span class="layout-menuitem-text ng-tns-c207508854-18">Obra Musical</span></a> 
                             <a routerLink="/patrono/discografia" class="px-6 py-3 bg-primary text-white font-semibold rounded-lg hover:bg-primary-dark transition-colors w-full md:w-56 text-center"><i class="layout-menuitem-icon pi pi-fw pi-fw pi-headphones mr-2"></i><span class="layout-menuitem-text ng-tns-c207508854-18">Discografia</span></a>
+                        </div>
+
+                        <div class="text-center mt-8">
+                            <div class="text-surface-900 dark:text-surface-0 font-normal mb-2 text-4xl">Reconhecimento da Obra</div>
+                            <span class="text-muted-color text-2xl">Patrimônio Cultural</span>
+                        </div>
+
+                        <div class="mt-8 flex flex-col md:flex-row gap-8 justify-center" style="max-width: 800px; width: 100%;">
+                            <p-accordion value="0">
+                                <p-accordion-panel value="0">
+                                    <p-accordion-header>
+                                        <div  class="flex items-center text-left">
+                                            <img src="/assets/images/brasao-federal.png" class="!max-w-[50px] h-fit mr-4" alt="Brasão Federal" />
+                                            <div class="leading-none text-surface-900 dark:text-surface-0 text-2xl font-normal mb-4 text-left">Manifestação da Cultura Nacional</div>
+                                        </div>
+                                    </p-accordion-header>
+                                    <p-accordion-content>
+                                        <div class="text-surface-700 dark:text-surface-100 text-xl leading-normal text-left">
+                                            <div class="mb-4">
+                                                <strong>Legislação:</strong> Lei Federal nº 15.319, de 29 de dezembro de 2025.
+                                            </div>
+                                            <div class="mb-4">
+                                                <strong>Autoria:</strong> Deputado Federal Airton Luiz Faleiro
+                                            </div>
+                                            <div>
+                                                <strong>Sobre o reconhecimento:</strong> Esta lei eleva a obra de Sebastião Tapajós ao mais alto patamar da cultura brasileira, assegurando sua proteção e difusão em todo o território nacional. É o reconhecimento definitivo de que seus acordes são fundamentais para a identidade musical do Brasil.
+                                            </div>
+                                        </div>
+                                    </p-accordion-content>
+                                </p-accordion-panel>
+
+                                <p-accordion-panel value="1">
+                                    <p-accordion-header>
+                                        <div  class="flex items-center text-left">
+                                            <img src="/assets/images/brasao-estadual.png" class="!max-w-[50px] h-fit mr-4" alt="Brasão Estadual" />
+                                            <div class="leading-none text-surface-900 dark:text-surface-0 text-2xl font-normal mb-4">Patrimônio Cultural Imaterial do Estado do Pará</div>
+                                        </div>
+                                    </p-accordion-header>
+                                    <p-accordion-content>
+                                        <div class="text-surface-700 dark:text-surface-100 text-xl leading-normal text-left">
+                                            <div class="mb-4">
+                                                <strong>Legislação:</strong> Lei Estadual nº 9.652, de 1º de julho de 2022.
+                                            </div>
+                                            <div class="mb-4">
+                                                <strong>Autoria:</strong> Deputada Estadual Dilvanda Faro.
+                                            </div>
+                                            <div>
+                                                <strong>Sobre o reconhecimento:</strong> Consagra o legado artístico de Tapajós como um bem de natureza imaterial essencial para a memória do povo paraense. A lei garante a preservação de sua técnica violonística única como um tesouro do Estado do Pará.
+                                            </div>
+                                        </div>
+                                    </p-accordion-content>
+                                </p-accordion-panel>
+
+                                <p-accordion-panel value="2">
+                                    <p-accordion-header>
+                                        <div  class="flex items-center text-left">
+                                            <img src="/assets/images/brasao-municipal.png" class="!max-w-[50px] h-fit mr-4" alt="Brasão Municipal" />
+                                            <div class="leading-none text-surface-900 dark:text-surface-0 text-2xl font-normal mb-4 text-left">Patrimônio Cultural Imaterial do Município de Santarém</div>
+                                        </div>
+                                    </p-accordion-header>
+                                    <p-accordion-content>
+                                        <div class="text-surface-700 dark:text-surface-100 text-xl leading-normal text-left">
+                                            <div class="mb-4">
+                                                <strong>Legislação:</strong> Lei Municipal nº 21.444, de 13 de dezembro de 2021.
+                                            </div>
+                                            <div class="mb-4">
+                                                <strong>Autoria:</strong> Vereador Carlos Martins.
+                                            </div>
+                                            <div>
+                                                <strong>Sobre o reconhecimento:</strong> Oficializa o orgulho da terra natal do artista, reconhecendo sua obra como pilar da cultura santarena. Este ato fortalece as raízes amazônicas de sua música e incentiva as novas gerações de músicos da Pérola do Tapajós.
+                                            </div>
+                                        </div>
+                                    </p-accordion-content>
+                                </p-accordion-panel>
+                            </p-accordion>
                         </div>
                     </div>
                 </div>
