@@ -1,0 +1,11 @@
+/* Estilos complementares ao Tailwind.
+      Em produção, isso estaria em styles.scss ou no componente específico.
+    */
+    :host {
+      display: block;
+    }
+    /* Exemplo de classe utilitária se precisarmos forçar cores do PrimeNG sem carregar o tema */
+    .p-card-title {
+      font-weight: 700;
+      margin-bottom: 0.5rem;
+    }

@@ -25,7 +25,7 @@ import {AppFloatingConfigurator} from "@/layout/component/app.floatingconfigurat
                     </a>
                 </li>
                 <li>
-                    <a (click)="router.navigate(['/landing'], { fragment: 'instituto' })" pRipple class="px-0 py-4 text-surface-900 dark:text-surface-0 font-medium text-xl">
+                    <a (click)="router.navigate(['/instituto'], { fragment: 'instituto' })" pRipple class="px-0 py-4 text-surface-900 dark:text-surface-0 font-medium text-xl">
                         <span>Instituto</span>
                     </a>
                 </li>

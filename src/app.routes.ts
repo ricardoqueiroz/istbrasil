@@ -4,9 +4,33 @@ import { Dashboard } from './app/pages/dashboard/dashboard';
 import { Documentation } from './app/pages/documentation/documentation';
 import { Landing } from './app/pages/landing/landing';
 import { Notfound } from './app/pages/notfound/notfound';
+import { InstitutoComponent } from './app/pages/instituto/instituto.component';
+import { TransparenciaComponent } from './app/pages/transparencia/transparencia.component';
+import { LocalizacaoComponent } from './app/pages/localizacao/localizacao.component';
 
 export const appRoutes: Routes = [
     { path: '', component: Landing },
+    {
+        path: 'instituto',
+        component: AppLayout,
+        children: [
+            { path: '', component: InstitutoComponent }
+        ]
+    },
+    {
+        path: 'transparencia',
+        component: AppLayout,
+        children: [
+            { path: '', component: TransparenciaComponent }
+        ]
+    },
+    {
+        path: 'localizacao',
+        component: AppLayout,
+        children: [
+            { path: '', component: LocalizacaoComponent }
+        ]
+    },
     {
         path: 'admin',
         component: AppLayout,

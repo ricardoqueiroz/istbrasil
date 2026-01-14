@@ -24,8 +24,9 @@ export class AppMenu {
                 label: 'INSTITUTO IST',
                 items: [
                     { label: 'Home', icon: 'pi pi-fw pi-home', routerLink: ['/'] },
-                    { label: 'Quem Somos', icon: 'pi pi-fw pi-users', routerLink: ['/instituto/quem-somos'] },
-                    { label: 'Transparência', icon: 'pi pi-fw pi-file-pdf', routerLink: ['/instituto/transparencia'] }
+                    { label: 'Quem Somos', icon: 'pi pi-fw pi-users', routerLink: ['/instituto'] },
+                    { label: 'Transparência', icon: 'pi pi-fw pi-file-pdf', routerLink: ['/transparencia'] },
+                    { label: 'Localização', icon: 'pi pi-fw pi-map-marker', routerLink: ['/localizacao'] }
                 ]
             },
             {
@@ -39,9 +40,9 @@ export class AppMenu {
             {
                 label: 'PROJETOS E TURISMO',
                 items: [
-                    { label: 'Cidade de Santarém', icon: 'pi pi-fw pi-map-marker', routerLink: ['/turismo/santarem'] },
-                    { label: 'Centro de Convenções', icon: 'pi pi-fw pi-building', routerLink: ['/turismo/centro-convencoes'] },
-                    { label: 'Ecoturismo', icon: 'pi pi-fw pi-camera', routerLink: ['/turismo/ecoturismo'] }
+                    { label: 'Cidade de Santarém', icon: 'pi pi-fw pi-map-marker', url: 'https://turismo.santarem.pa.gov.br/', target: '_blank' },
+                    { label: 'Centro de Convenções', icon: 'pi pi-fw pi-building', url: 'https://www.facebook.com/p/Centro-de-Conven%C3%A7%C3%B5es-de-Santar%C3%A9m-Sebasti%C3%A3o-Tapaj%C3%B3s-61565020076617/', target: '_blank' },
+                    { label: 'Ecoturismo', icon: 'pi pi-fw pi-camera', url: 'https://www.gov.br/icmbio/pt-br/assuntos/biodiversidade/unidade-de-conservacao/unidades-de-biomas/amazonia/lista-de-ucs/flona-do-tapajos', target: '_blank' }
                 ]
             },
             {

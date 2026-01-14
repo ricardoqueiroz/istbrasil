@@ -1,0 +1,82 @@
+import { Component, OnInit } from '@angular/core';
+import { CommonModule } from '@angular/common';
+
+// Interfaces para tipagem dos dados
+interface TeamMember {
+  name: string;
+  role: string;
+  image?: string;
+}
+
+interface Objective {
+  title: string;
+  description: string;
+  icon: string;
+}
+
+@Component({
+  selector: 'app-instituto',
+  standalone: true,
+  imports: [CommonModule],
+  templateUrl: './instituto.component.html',
+  styleUrls: ['./instituto.component.css']
+})
+export class InstitutoComponent implements OnInit {
+  // Dados atualizados conforme arquivo "Informações de contato.csv"
+  team: TeamMember[] = [
+    {
+      name: 'Vanessa Barros Ataíde',
+      role: 'Presidente',
+      image: 'assets/images/team/vanessa-ataide.jpg'
+    },
+    {
+      name: 'Anderson Lucas da Costa Pereira',
+      role: 'Vice-presidente',
+      image: 'assets/images/team/anderson-pereira.jpg'  
+    },
+    {
+      name: 'Elizangila Eleutério Dezincourt',
+      role: '1º Secretária',
+      image: 'assets/images/team/elizangila-dezincourt.jpg'
+    },
+    {
+      name: 'Ricardo Queiroz e Silva',
+      role: 'Diretor de Planejamento e Projetos',
+      image: 'assets/images/team/ricardo-queiroz.jpg'
+    },
+    {
+      name: 'Jamile Fernandes dos Santos',
+      role: 'Diretor de Eventos',
+      image: 'assets/images/team/jamile-santos.jpg'
+    },
+    {
+      name: 'Mourrambert Guimarães Flexa',
+      role: 'Diretor de Patrimônio',
+      image: 'assets/images/team/mourrambert-flexa.jpg'
+    }
+  ];
+
+  objectives: Objective[] = [
+    {
+      title: 'Educação Musical',
+      description: 'Projetos de ensino para jovens de baixa renda da região.',
+      icon: 'pi pi-user'
+    },
+    {
+      title: 'Acervo Digital',
+      description: 'Digitalização e disponibilização das obras para o mundo.',
+      icon: 'pi pi-cloud'
+    },
+    {
+      title: 'Museu IST',
+      description: 'Construção do espaço físico para memória do artista.',
+      icon: 'pi pi-building'
+    }
+  ];
+
+  constructor() {}
+
+  ngOnInit(): void {
+    console.log('Página Sobre Nós carregada.');
+  }
+}

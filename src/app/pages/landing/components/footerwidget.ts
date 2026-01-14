@@ -8,7 +8,7 @@ import { Router, RouterModule } from '@angular/router';
         <div class="py-12 px-12 mx-0 mt-20 lg:mx-20">
             <div class="grid grid-cols-12 gap-4">
                 <div class="col-span-12 md:col-span-2">
-                    <a (click)="router.navigate(['/pages/landing'], { fragment: 'home' })" class="flex flex-wrap items-center justify-center md:justify-start md:mb-0 mb-6 cursor-pointer">
+                    <a (click)="router.navigate(['/landing'], { fragment: 'home' })" class="flex flex-wrap items-center justify-center md:justify-start md:mb-0 mb-6 cursor-pointer">
                         <img src="assets/images/selo-small.png" alt="Logo IST" class="h-14 mr-2">
                         <h4 class="font-medium text-3xl text-surface-900 dark:text-surface-0">IST</h4>
                     </a>
@@ -18,31 +18,31 @@ import { Router, RouterModule } from '@angular/router';
                     <div class="grid grid-cols-12 gap-8 text-center md:text-left">
                         <div class="col-span-12 md:col-span-3">
                             <h4 class="font-medium text-2xl leading-normal mb-6 text-surface-900 dark:text-surface-0">Institucional</h4>
-                            <a class="leading-normal text-xl block cursor-pointer mb-2 text-surface-700 dark:text-surface-100">Sobre Nós</a>
-                            <a class="leading-normal text-xl block cursor-pointer mb-2 text-surface-700 dark:text-surface-100">Diretoria</a>
-                            <a class="leading-normal text-xl block cursor-pointer text-surface-700 dark:text-surface-100">Estatuto</a>
+                            <a (click)="router.navigate(['/instituto'], { fragment: 'Quem Somos' })" class="leading-normal text-xl block cursor-pointer mb-2 text-surface-700 dark:text-surface-100">Sobre Nós</a>
+                            <a (click)="router.navigate(['/transparencia'], { fragment: 'Transparência' })" class="leading-normal text-xl block cursor-pointer mb-2 text-surface-700 dark:text-surface-100">Transparência</a>
+                            <a (click)="router.navigate(['/localizacao'], { fragment: 'Localização' })" class="leading-normal text-xl block cursor-pointer text-surface-700 dark:text-surface-100">Localização</a>
                         </div>
 
                         <div class="col-span-12 md:col-span-3">
                             <h4 class="font-medium text-2xl leading-normal mb-6 text-surface-900 dark:text-surface-0">Sebastião Tapajós</h4>
-                            <a class="leading-normal text-xl block cursor-pointer mb-2 text-surface-700 dark:text-surface-100">Autorizações musicais</a>
-                            <a class="leading-normal text-xl block cursor-pointer mb-2 text-surface-700 dark:text-surface-100">Livros e partituras</a>
-                            <a class="leading-normal text-xl block cursor-pointer text-surface-700 dark:text-surface-100">Imagens</a>
+                            <a (click)="router.navigate(['/autorizacao'], { fragment: 'Autorizações musicais' })" class="leading-normal text-xl block cursor-pointer mb-2 text-surface-700 dark:text-surface-100">Autorizações musicais</a>
+                            <a (click)="router.navigate(['/editora'], { fragment: 'Livros e partituras' })" class="leading-normal text-xl block cursor-pointer mb-2 text-surface-700 dark:text-surface-100">Livros e partituras</a>
+                            <a (click)="router.navigate(['/patrono/biografia'], { fragment: 'Biografia' })" class="leading-normal text-xl block cursor-pointer text-surface-700 dark:text-surface-100">Imagens</a>
                         </div>
 
                         <div class="col-span-12 md:col-span-3">
                             <h4 class="font-medium text-2xl leading-normal mb-6 text-surface-900 dark:text-surface-0">Contato</h4>
-                            <a class="leading-normal text-xl block cursor-pointer mb-2 text-surface-700 dark:text-surface-100">WhatsApp</a>
-                            <a class="leading-normal text-xl block cursor-pointer mb-2 text-surface-700 dark:text-surface-100">IST Editora</a>
-                            <a class="leading-normal text-xl block cursor-pointer mb-2 text-surface-700 dark:text-surface-100">Fale Conosco</a>
-                            <a class="leading-normal text-xl block cursor-pointer text-surface-700 dark:text-surface-100">Imprensa</a>
+                            <a href="https://wa.me/5521966083752" target="_blank" class="leading-normal text-xl block cursor-pointer mb-2 text-surface-700 dark:text-surface-100">WhatsApp</a>
+                            <a (click)="router.navigate(['/editora'], { fragment: 'IST Editora' })"class="leading-normal text-xl block cursor-pointer mb-2 text-surface-700 dark:text-surface-100">IST Editora</a>
+                            <a (click)="router.navigate(['/contato'], { fragment: 'Contato' })"class="leading-normal text-xl block cursor-pointer mb-2 text-surface-700 dark:text-surface-100">Fale Conosco</a>
+                            <a (click)="router.navigate(['/imprensa'], { fragment: 'Imprensa' })"class="leading-normal text-xl block cursor-pointer text-surface-700 dark:text-surface-100">Imprensa</a>
                         </div>
 
                         <div class="col-span-12 md:col-span-3">
                             <h4 class="font-medium text-2xl leading-normal mb-6 text-surface-900 dark:text-surface-0">Legal</h4>
-                            <a class="leading-normal text-xl block cursor-pointer mb-2 text-surface-700 dark:text-surface-100">Política de marca</a>
-                            <a class="leading-normal text-xl block cursor-pointer mb-2 text-surface-700 dark:text-surface-100">Política de privacidade</a>
-                            <a class="leading-normal text-xl block cursor-pointer text-surface-700 dark:text-surface-100">Termos de Serviço</a>
+                            <a (click)="router.navigate(['/marca'], { fragment: 'Política de Marca' })" class="leading-normal text-xl block cursor-pointer mb-2 text-surface-700 dark:text-surface-100">Política de marca</a>
+                            <a (click)="router.navigate(['/privacidade'], { fragment: 'Política de Privacidade' })" class="leading-normal text-xl block cursor-pointer mb-2 text-surface-700 dark:text-surface-100">Política de privacidade</a>
+                            <a (click)="router.navigate(['/termos'], { fragment: 'Termos de Serviço' })" class="leading-normal text-xl block cursor-pointer text-surface-700 dark:text-surface-100">Termos de Serviço</a>
                         </div>
                     </div>
                 </div>
@@ -52,16 +52,16 @@ import { Router, RouterModule } from '@angular/router';
                 <div class="col-span-12">
                     <h4 class="font-medium text-2xl leading-normal mb-4 text-surface-900 dark:text-surface-0">Redes Sociais</h4>
                     <div class="flex justify-center gap-4">
-                        <a class="cursor-pointer text-surface-700 dark:text-surface-100 hover:text-primary transition-colors">
+                        <a href="https://www.youtube.com/@institutosebastiaotapajos" target="_blank" class="cursor-pointer text-surface-700 dark:text-surface-100 hover:text-primary transition-colors">
                             <i class="pi pi-youtube !text-3xl"></i>
                         </a>
-                        <a class="cursor-pointer text-surface-700 dark:text-surface-100 hover:text-primary transition-colors">
+                        <a href="https://www.facebook.com/institutosebastiaotapajos" target="_blank" class="cursor-pointer text-surface-700 dark:text-surface-100 hover:text-primary transition-colors">
                             <i class="pi pi-facebook !text-3xl"></i>
                         </a>
-                        <a class="cursor-pointer text-surface-700 dark:text-surface-100 hover:text-primary transition-colors">
+                        <a href="https://open.spotify.com/intl-pt/artist/2WFZ8Nkgao0Wf9LNztudDW?si=lQAqSQyqR4aup4jvlnI8Xg" target="_blank" class="cursor-pointer text-surface-700 dark:text-surface-100 hover:text-primary transition-colors">
                             <i class="fa-brands fa-spotify !text-3xl"></i>
                         </a>
-                        <a class="cursor-pointer text-surface-700 dark:text-surface-100 hover:text-primary transition-colors">
+                        <a href="https://www.instagram.com/institutosebastiaotapajos_ist/" target="_blank" class="cursor-pointer text-surface-700 dark:text-surface-100 hover:text-primary transition-colors">
                             <i class="pi pi-instagram !text-3xl"></i>
                         </a>
                     </div>
