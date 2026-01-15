@@ -7,6 +7,7 @@ import { Notfound } from './app/pages/notfound/notfound';
 import { InstitutoComponent } from './app/pages/instituto/instituto.component';
 import { TransparenciaComponent } from './app/pages/transparencia/transparencia.component';
 import { LocalizacaoComponent } from './app/pages/localizacao/localizacao.component';
+import { EditoraComponent } from './app/pages/editora/editora.component';
 
 export const appRoutes: Routes = [
     { path: '', component: Landing },
@@ -29,6 +30,13 @@ export const appRoutes: Routes = [
         component: AppLayout,
         children: [
             { path: '', component: LocalizacaoComponent }
+        ]
+    },
+    {
+        path: 'editora',
+        component: AppLayout,
+        children: [
+            { path: '', component: EditoraComponent }
         ]
     },
     {

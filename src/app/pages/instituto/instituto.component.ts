@@ -25,32 +25,32 @@ export class InstitutoComponent implements OnInit {
   // Dados atualizados conforme arquivo "Informações de contato.csv"
   team: TeamMember[] = [
     {
-      name: 'Vanessa Barros Ataíde',
+      name: 'Vanessa Barros',
       role: 'Presidente',
       image: 'assets/images/team/vanessa-ataide.jpg'
     },
     {
-      name: 'Anderson Lucas da Costa Pereira',
+      name: 'Anderson Pereira',
       role: 'Vice-presidente',
       image: 'assets/images/team/anderson-pereira.jpg'  
     },
     {
-      name: 'Elizangila Eleutério Dezincourt',
+      name: 'Elizangila Dezincourt',
       role: '1º Secretária',
       image: 'assets/images/team/elizangila-dezincourt.jpg'
     },
     {
-      name: 'Ricardo Queiroz e Silva',
+      name: 'Ricardo Queiroz',
       role: 'Diretor de Planejamento e Projetos',
       image: 'assets/images/team/ricardo-queiroz.jpg'
     },
     {
-      name: 'Jamile Fernandes dos Santos',
+      name: 'Jamile Fernandes',
       role: 'Diretor de Eventos',
       image: 'assets/images/team/jamile-santos.jpg'
     },
     {
-      name: 'Mourrambert Guimarães Flexa',
+      name: 'Mourrambert Flexa',
       role: 'Diretor de Patrimônio',
       image: 'assets/images/team/mourrambert-flexa.jpg'
     }
