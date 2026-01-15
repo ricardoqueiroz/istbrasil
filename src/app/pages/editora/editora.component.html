@@ -1,16 +1,9 @@
-	<!-- 
-      Página: IST Editora
-      Arquivo: /src/app/pages/editora/editora.html
-    -->
-    <div class="bg-slate-50 min-h-screen pb-20 font-sans text-slate-800">
+<div class="bg-slate-50 min-h-screen pb-20 font-sans text-slate-800">
       
-      <!-- HERO SECTION DA PÁGINA -->
       <header class="relative ist-background rounded-b-[2.5rem] overflow-hidden mb-12">
-        <!-- Elementos decorativos de fundo -->
         <div class="absolute inset-0 opacity-10 pointer-events-none bg-[radial-gradient(circle_at_top_right,_var(--tw-gradient-stops))] from-white via-transparent to-transparent"></div>
         
         <div class="container mx-auto px-6 py-12 flex flex-col items-center text-center relative z-10">
-          <!-- Imagem de Topo Solicitada -->
           <div class="mb-6 p-4 bg-white rounded-full border border-white/20 shadow-lg inline-block">
             <img src="assets/images/logo-ist.png" alt="Hero Image" class="w-9/12 md:w-auto max-h-32 object-contain mx-auto">
           </div>
@@ -24,12 +17,9 @@
         </div>
       </header>
 
-      <!-- CONTEÚDO PRINCIPAL -->
       <main class="container mx-auto px-4 md:px-6 lg:px-8">
-	  
-		<!-- SEÇÃO: A EDITORA -->
+      
         <section class="max-w-4xl mx-auto bg-white rounded-2xl shadow-sm border border-slate-100 p-8 md:p-10 mb-10 relative overflow-hidden">
-          <!-- Detalhe lateral -->
           <div class="absolute top-0 left-0 h-full w-1 bg-emerald-500"></div>
 
           <h2 class="text-2xl font-bold text-slate-800 mb-6 flex items-center">
@@ -72,37 +62,103 @@
           </div>
         </section>
 
-        <!-- SEÇÃO: CATÁLOGO DE LIVROS -->
-        <section class="max-w-4xl mx-auto">
+        <section class="max-w-6xl mx-auto">
             <div class="flex items-center justify-between mb-6">
-                <h3 class="text-xl font-bold text-slate-800">Nosso Catálogo</h3>
+                <h3 class="text-2xl font-bold text-slate-800">Nosso Catálogo</h3>
                 <span class="text-xs font-semibold text-slate-400 uppercase tracking-wider bg-slate-100 px-3 py-1 rounded-full">
-                    Livros Disponíveis
+                    {{ books.length }} Livros Disponíveis
                 </span>
             </div>
     
-            <div class="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-                <!-- Loop através dos livros usando p-card -->
-                <p-card *ngFor="let book of books" [header]="book.title" styleClass="shadow-md border border-slate-100">
-                    <ng-template pTemplate="header">
-                        <img [alt]="book.title" [src]="book.imageUrl" class="w-full h-48 object-cover"/>
-                    </ng-template>
-                    <div class="text-sm text-slate-600 mb-4">
-                        <p><strong>Autor:</strong>&nbsp;<em>{{ book.author }}</em></p>
-                        <p><strong>Conteúdo:</strong>&nbsp;<em>{{ book.content }}</em></p>
-                        <p><strong>Formato:</strong>&nbsp;<em>{{ book.format }}</em></p>
-                        <p><strong>Dimensões (pol):</strong>&nbsp;<em>{{ book.dimensionsIn }}</em></p>
-                        <p><strong>Dimensões (cm):</strong>&nbsp;<em>{{ book.dimensionsCm }}</em></p>
-                        <p><strong>Editor:</strong>&nbsp;<em>{{ book.publisher }}</em></p>
-                        <p><strong>Idioma:</strong>&nbsp;<em>{{ book.language }}</em></p>
+            <p-dataView [value]="books" [layout]="layout">
+                <ng-template #header>
+                    <div class="flex justify-end">
+                        <p-selectButton 
+                            [(ngModel)]="layout" 
+                            [options]="options" 
+                            optionLabel="label" 
+                            optionValue="value"
+                            [allowEmpty]="false">
+                            <ng-template let-item>
+                                <i class="pi" [ngClass]="{ 'pi-bars': item.value === 'list', 'pi-th-large': item.value === 'grid' }"></i>
+                            </ng-template>
+                        </p-selectButton>
                     </div>
-                    <ng-template pTemplate="footer">
-                        <a [href]="book.learnMoreUrl" target="_blank" rel="noopener noreferrer" class="no-underline">
-                            <p-button label="Saiba Mais" icon="pi pi-info-circle" styleClass="p-button-link"></p-button>
-                        </a>
-                    </ng-template>
-                </p-card>
-            </div>
+                </ng-template>
+
+                <ng-template #list let-items>
+                    <div class="flex flex-col">
+                        <div *ngFor="let book of items">
+                            <div class="flex flex-col sm:flex-row sm:items-center p-6 gap-4 border-b border-slate-200">
+                                <div class="md:w-40 relative">
+                                    <img class="block xl:block mx-auto rounded w-full shadow-md hover:shadow-lg transition-shadow duration-300" [src]="book.img" [alt]="book.title" />
+                                    <p-tag [value]="book.inventoryStatus" [severity]="getSeverity(book)" class="absolute top-2 left-2"></p-tag>
+                                </div>
+                                <div class="flex flex-col md:flex-row justify-between md:items-center flex-1 gap-6">
+                                    <div class="flex flex-col md:flex-row justify-between items-start gap-4 flex-1">
+                                        <div>
+                                            <div class="text-lg font-medium text-slate-900 mt-2">{{ book.title }}</div>
+                                            <span class="font-medium text-slate-500 text-sm">{{ book.category }}</span>
+                                            <div class="mt-2 text-slate-600 text-sm line-clamp-2 md:line-clamp-none" [innerHTML]="book.descriptionDisplay"></div>
+                                        </div>
+                                        <div class="bg-slate-100 p-1 rounded">
+                                            <div class="surface-100 p-1" style="border-radius: 30px">
+                                                <div class="surface-0 flex items-center gap-2 justify-center py-1 px-2" style="border-radius: 30px; box-shadow: 0px 1px 2px 0px rgba(0, 0, 0, 0.04), 0px 1px 2px 0px rgba(0, 0, 0, 0.06)">
+                                                    <span class="text-surface-900 font-medium text-sm">{{ book.sku }}</span>
+                                                    <i class="pi pi-star-fill text-yellow-500"></i>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="flex flex-col md:items-end gap-5">
+                                        <span class="text-xl font-bold text-emerald-600">{{ 'R$ ' + book.price }}</span>
+                                        <div class="flex gap-2">
+                                            <p-button icon="pi pi-heart" [outlined]="true"></p-button>
+                                            <p-button 
+                                                icon="pi pi-shopping-cart" 
+                                                class="flex-auto md:flex-initial whitespace-nowrap" 
+                                                [label]="book.inventoryStatus === 'OUTOFSTOCK' ? 'Sold Out' : 'Comprar'" 
+                                                [disabled]="book.inventoryStatus === 'OUTOFSTOCK'"
+                                                [routerLink]="['/editora/livro']"></p-button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </ng-template>
+
+                <ng-template #grid let-items>
+                    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+                        <div *ngFor="let book of items" class="col-span-1">
+                            <div class="bg-white border border-slate-200 rounded-xl p-6 h-full flex flex-col hover:shadow-lg transition-shadow duration-300">
+                                <div class="flex flex-wrap items-center justify-between gap-2 mb-4">
+                                    <div class="flex items-center gap-2 text-slate-500">
+                                        <i class="pi pi-tag"></i>
+                                        <span class="font-semibold text-sm">{{ book.category }}</span>
+                                    </div>
+                                    <p-tag [value]="book.inventoryStatus" [severity]="getSeverity(book)"></p-tag>
+                                </div>
+                                <div class="flex flex-col items-center gap-4 py-4 flex-grow">
+                                    <img class="w-8/12 shadow-md rounded object-cover" [src]="book.img" [alt]="book.title" />
+                                    <div class="text-center">
+                                        <div class="text-lg font-bold text-slate-800">{{ book.title }}</div>
+                                        <div class="text-sm text-slate-500 mt-1 text-left" [innerHTML]="book.descriptionDisplay"></div>
+                                    </div>
+                                </div>
+                                <div class="flex items-center justify-between mt-auto pt-4 border-t border-slate-100">
+                                    <span class="text-2xl font-bold text-emerald-600">{{ 'R$ ' + book.price }}</span>
+                                    <div class="flex gap-2">
+                                        <p-button icon="pi pi-heart" severity="secondary" [outlined]="true"></p-button>
+                                        <p-button icon="pi pi-shopping-cart" class="flex-auto whitespace-nowrap" [disabled]="book.inventoryStatus === 'OUTOFSTOCK'"
+                                        [routerLink]="['/editora/livro']"></p-button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </ng-template>
+            </p-dataView>
       </section>
   
     </main>

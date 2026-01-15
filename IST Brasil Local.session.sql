@@ -1,0 +1,1 @@
+SELECT * FROM ist_livros WHERE onsale = 1;

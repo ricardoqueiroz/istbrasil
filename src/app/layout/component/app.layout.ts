@@ -10,7 +10,15 @@ import { LayoutService } from '../service/layout.service';
 @Component({
     selector: 'app-layout',
     standalone: true,
-    imports: [CommonModule, AppTopbar, AppSidebar, RouterModule, AppFooter],
+    imports: [
+        CommonModule,
+        RouterModule,
+        // Ensure these are standalone components; if not, import their NgModules instead
+        // If any of these are not standalone, import their NgModules (e.g., AppTopbarModule) instead
+        AppTopbar,
+        AppSidebar,
+        AppFooter
+    ],
     template: `<div class="layout-wrapper" [ngClass]="containerClass">
         <app-topbar></app-topbar>
         <app-sidebar></app-sidebar>

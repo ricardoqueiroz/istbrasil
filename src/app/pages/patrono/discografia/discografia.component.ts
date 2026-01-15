@@ -2,7 +2,7 @@ import { Component, OnInit, ChangeDetectorRef } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { TableModule } from 'primeng/table';
 import { ButtonModule } from 'primeng/button';
-import { Release, ReleasesService } from '../../../service/releases.service';
+import { Release, ReleasesService } from '../../../services/releases.service';
 import { HttpClientModule } from '@angular/common/http';
 
 @Component({

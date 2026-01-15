@@ -5,7 +5,7 @@ import { TimelineModule } from 'primeng/timeline';
 import { CardModule } from 'primeng/card';
 import { ButtonModule } from 'primeng/button';
 import { AnimateOnScrollModule } from 'primeng/animateonscroll'; // Para animações suaves
-import { TimelineService, TimelineEvent } from 'src/app/service/timeline.service';
+import { TimelineService, TimelineEvent } from '@/services/timeline.service';
 
 @Component({
     selector: 'app-biografia',

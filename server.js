@@ -1,28 +1,31 @@
 const express = require('express');
 const cors = require('cors');
-const bodyParser = require('body-parser');
-const timelineRoutes = require('./src/routes/timeline.routes.js');
-const releasesRoutes = require('./src/routes/releases.routes.js');
-const obraRoutes = require('./src/routes/obra.routes.js');
-
 const app = express();
-const PORT = process.env.PORT || 3000;
 
-// Middlewares
+// Configurações
 app.use(cors());
-app.use(bodyParser.json());
+app.use(express.json());
 
-// Rotas
+// --- Seção de IMPORTAÇÃO de Rotas ---
+const bookRoutes = require('./src/routes/book.routes'); 
+const releaseRoutes = require('./src/routes/releases.routes'); 
+const timelineRoutes = require('./src/routes/timeline.routes');
+const obraRoutes = require('./src/routes/obra.routes');
+
+
+// --- Seção de CONEXÃO de Rotas (app.use) ---
+app.use('/api/books', bookRoutes);
+app.use('/api/releases', releaseRoutes);
 app.use('/api/timeline', timelineRoutes);
-app.use('/api/releases', releasesRoutes);
 app.use('/api/obra', obraRoutes);
 
-// Rota padrão para teste
+// Rota de teste na raiz
 app.get('/', (req, res) => {
-    res.send('API do Instituto Sebastião Tapajós está rodando!');
+    res.send('API IST Brasil rodando!');
 });
 
-// Iniciar servidor
+const PORT = 3000;
 app.listen(PORT, () => {
-    console.log(`Servidor rodando na porta ${PORT}`);
+    console.log(`Server running on port ${PORT}`);
+    console.log(`Teste a rota aqui: http://localhost:3000/api/books`);
 });

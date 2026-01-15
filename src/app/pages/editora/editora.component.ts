@@ -1,48 +1,108 @@
 import { Component, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { CardModule } from 'primeng/card';
+import { DataViewModule } from 'primeng/dataview';
 import { ButtonModule } from 'primeng/button';
-
-interface Book {
-  title: string;
-  author: string;
-  content: string;
-  format: string;
-  dimensionsIn: string;
-  dimensionsCm: string;
-  publisher: string;
-  language: string;
-  imageUrl: string;
-  learnMoreUrl: string;
-}
+import { TagModule } from 'primeng/tag';
+import { SelectButtonModule } from 'primeng/selectbutton';
+import { FormsModule } from '@angular/forms';
+import { RouterModule } from '@angular/router';
+import { HttpClientModule } from '@angular/common/http'; // Importante para o Service funcionar no Standalone
+import { BookService, Book } from '../../services/book.service'; // Ajuste o caminho conforme necessário
 
 @Component({
   selector: 'app-editora',
   standalone: true,
-  imports: [CommonModule, CardModule, ButtonModule],
+  imports: [
+    CommonModule, 
+    DataViewModule, 
+    ButtonModule, 
+    TagModule,
+    SelectButtonModule,
+    FormsModule,
+    RouterModule,
+    HttpClientModule 
+  ],
+  providers: [BookService], // Opcional se providedIn: 'root'
   templateUrl: './editora.component.html',
   styleUrls: ['./editora.component.css']
 })
 export class EditoraComponent implements OnInit {
 
-  books: Book[] = [
-    {
-      title: 'Catálogo de Partituras, Sebastião Tapajós',
-      author: 'Ricardo Queiroz',
-      content: '105 partituras, biografia & discografia',
-      format: 'Ebook PDF-XA, A4, 426 págs.',
-      dimensionsIn: '8.27 × 11.69 (A4)',
-      dimensionsCm: '21.0 × 29.7 (A4)',
-      publisher: 'BRMUSIC',
-      language: 'Português ou Inglês',
-      imageUrl: 'assets/images/livros/partituras-sebastiao-tapajos-pt.png',
-      learnMoreUrl: '#'
-    }
+  layout: 'list' | 'grid' = 'grid';
+
+  options: any[] = [
+    { label: 'List', value: 'list' },
+    { label: 'Grid', value: 'grid' }
   ];
 
-  constructor() { }
+  // A lista começa vazia e será preenchida pela API
+  books: Book[] = [];
+
+  private apiUrl = 'http://localhost:3000/api/books';
+
+  constructor(private bookService: BookService) { }
 
   ngOnInit(): void {
+    this.loadBooks();
   }
 
+  loadBooks() {
+    this.bookService.getBooks().subscribe({
+      next: (data) => {
+        this.books = data.map(book => {
+          const description = (book as any)["description"];
+          return {
+            ...book,
+            inventoryStatus: book.inventory,
+            descriptionDisplay: this.convertDescriptionToHtml(description)
+          };
+        });
+        console.log('Books loaded from DB:', this.books);
+      },
+      error: (err) => {
+        console.error('Error loading books:', err);
+      }
+    });
+  }
+
+  /**
+   * Converte o campo description (JSON ou string) em HTML formatado para exibição.
+   */
+  convertDescriptionToHtml(description: any): string {
+    if (!description) {
+      return '<div><strong>Descrição:</strong> Não disponível.</div>';
+    }
+    let obj: any;
+    if (typeof description === 'object') {
+      obj = description;
+    } else {
+      try {
+        obj = JSON.parse(description);
+      } catch (e) {
+        // Não é JSON válido, retorna como texto simples
+        return `<div><strong>Descrição:</strong> ${description}</div>`;
+      }
+    }
+    let html = '<div>';
+    for (const key of Object.keys(obj)) {
+      html += `<span class="font-bold">${key}:</span> <span>${obj[key]}</span><br/>`;
+    }
+    html += '</div>';
+    return html;
+  }
+
+  getSeverity(book: Book): 'success' | 'warning' | 'danger' | 'info' | 'secondary' | 'contrast' | undefined {
+    // Verifica inventory ou inventoryStatus
+    const status = book.inventory || book.inventoryStatus;
+    switch (status) {
+        case 'Em estoque':
+            return 'success';
+        case 'Poucas unidades':
+            return 'warning';
+        case 'Esgotado':
+            return 'danger';
+        default:
+            return 'info';
+    }
+  }
 }
