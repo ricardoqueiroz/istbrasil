@@ -26,6 +26,7 @@ app.get('/', (req, res) => {
     res.send('API IST Brasil rodando!');
 });
 
+// Porta do banco de dados e inicialização do servidor
 const PORT = 3000;
 app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);

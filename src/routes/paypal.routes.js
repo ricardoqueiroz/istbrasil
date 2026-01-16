@@ -4,5 +4,6 @@ const paypalController = require('../controllers/paypalController');
 
 router.post('/create-order', paypalController.createOrder);
 router.post('/capture-order', paypalController.captureOrder);
+router.post('/webhook', paypalController.handleWebhook);
 
 module.exports = router;

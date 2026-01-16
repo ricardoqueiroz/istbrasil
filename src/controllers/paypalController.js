@@ -80,3 +80,38 @@ exports.captureOrder = async (req, res) => {
         res.status(500).json({ error: "Erro ao capturar pagamento" });
     }
 };
+
+exports.handleWebhook = async (req, res) => {
+    // 1. O PayPal envia os dados do evento no corpo da requisição (req.body)
+    const evento = req.body;
+
+    console.log(`Evento Webhook Recebido: ${evento.event_type}`);
+
+    // 2. Verifique o tipo de evento que você quer tratar
+    try {
+        if (evento.event_type === 'PAYMENT.CAPTURE.COMPLETED') {
+            const resource = evento.resource;
+            const paypalOrderId = resource.supplementary_data.related_ids.order_id;
+            
+            console.log(`Pagamento confirmado via Webhook para a Ordem: ${paypalOrderId}`);
+
+            // AQUI: Você pode atualizar o status no banco de dados para 'APROVADO'
+            // caso a captura via frontend tenha falhado por queda de internet do usuário, por exemplo.
+            // const sql = "UPDATE vendas SET status = 'APROVADO' WHERE paypal_order_id = ?";
+            // await db.execute(sql, [paypalOrderId]);
+        }
+        
+        // Outros eventos úteis: 'PAYMENT.CAPTURE.DENIED', 'PAYMENT.CAPTURE.REFUNDED'
+    } catch (error) {
+        console.error("Erro ao processar webhook:", error);
+    }
+
+    // 3. Importante: Sempre responda com 200 OK para o PayPal saber que você recebeu
+    res.status(200).send();
+};
+
+module.exports = {
+    createOrder: exports.createOrder,
+    captureOrder: exports.captureOrder,
+    handleWebhook: exports.handleWebhook    
+};
