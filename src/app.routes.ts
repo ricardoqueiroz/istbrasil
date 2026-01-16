@@ -8,6 +8,7 @@ import { InstitutoComponent } from './app/pages/instituto/instituto.component';
 import { TransparenciaComponent } from './app/pages/transparencia/transparencia.component';
 import { LocalizacaoComponent } from './app/pages/localizacao/localizacao.component';
 import { EditoraComponent } from './app/pages/editora/editora.component';
+// import { LivroComponent } from './app/pages/editora/livro/livro.component';
 
 export const appRoutes: Routes = [
     { path: '', component: Landing },
@@ -54,6 +55,17 @@ export const appRoutes: Routes = [
             { path: 'biografia', loadComponent: () => import('./app/pages/patrono/biografia/biografia').then(m => m.BiografiaComponent) },
             { path: 'discografia', loadComponent: () => import('./app/pages/patrono/discografia/discografia.component').then(m => m.DiscografiaComponent) },
             { path: 'obra', loadComponent: () => import('./app/pages/patrono/obra/obra.component').then(m => m.ObraComponent) }
+        ]
+    },
+    {
+        path: 'editora',
+        component: AppLayout,
+        children: [
+            { path: '', component: EditoraComponent },
+            { 
+                path: 'livro/:id', 
+                loadComponent: () => import('./app/pages/editora/livro/livro.component').then(m => m.LivroComponent) 
+            }
         ]
     },
     { path: 'notfound', component: Notfound },

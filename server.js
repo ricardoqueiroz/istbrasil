@@ -7,10 +7,11 @@ app.use(cors());
 app.use(express.json());
 
 // --- Seção de IMPORTAÇÃO de Rotas ---
-const bookRoutes = require('./src/routes/book.routes'); 
+const bookRoutes = require('./src/routes/book.routes');
 const releaseRoutes = require('./src/routes/releases.routes'); 
 const timelineRoutes = require('./src/routes/timeline.routes');
 const obraRoutes = require('./src/routes/obra.routes');
+const paypalRoutes = require('./src/routes/paypal.routes'); 
 
 
 // --- Seção de CONEXÃO de Rotas (app.use) ---
@@ -18,6 +19,7 @@ app.use('/api/books', bookRoutes);
 app.use('/api/releases', releaseRoutes);
 app.use('/api/timeline', timelineRoutes);
 app.use('/api/obra', obraRoutes);
+app.use('/api/paypal', paypalRoutes);
 
 // Rota de teste na raiz
 app.get('/', (req, res) => {

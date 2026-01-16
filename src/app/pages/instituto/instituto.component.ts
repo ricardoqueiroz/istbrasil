@@ -17,7 +17,10 @@ interface Objective {
 @Component({
   selector: 'app-instituto',
   standalone: true,
-  imports: [CommonModule],
+  imports: [
+    CommonModule,
+    // ...other imports if any...
+  ],
   templateUrl: './instituto.component.html',
   styleUrls: ['./instituto.component.css']
 })

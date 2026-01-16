@@ -151,7 +151,7 @@
                                     <div class="flex gap-2">
                                         <p-button icon="pi pi-heart" severity="secondary" [outlined]="true"></p-button>
                                         <p-button icon="pi pi-shopping-cart" class="flex-auto whitespace-nowrap" [disabled]="book.inventoryStatus === 'OUTOFSTOCK'"
-                                        [routerLink]="['/editora/livro']"></p-button>
+                                        [routerLink]="['/editora/livro', book.id]"></p-button>
                                     </div>
                                 </div>
                             </div>

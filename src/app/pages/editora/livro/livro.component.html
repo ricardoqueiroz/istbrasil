@@ -1,0 +1,31 @@
+
+    <!-- COMPRA DE LIVRO -->
+    <div class="container max-w-4xl mx-auto px-6 pb-12">
+        <p-card class="p-6 card">
+            <ng-template pTemplate="header">
+                <div class="flex justify-between items-center w-full">
+                    <span class="text-2xl font-bold">Detalhes do Livro</span>
+					<p-button label="" [raised]="true" severity="contrast">
+						<a href="../editora" title="Voltar">
+							<i  class="pi pi-arrow-left mr-2"></i>
+                            <span class="font-bold">Voltar</span>
+						</a>
+					</p-button>
+                </div>
+            </ng-template>
+            <div class="flex flex-col md:flex-row gap-8">
+                <div class="w-full md:w-1/2">
+                    <img *ngIf="livro" [src]="livro.img" alt="Capa" class="w-full h-auto rounded shadow-lg">
+                </div>
+                <div class="w-full md:w-1/2 flex flex-col gap-4">
+                    <h2 class="text-2xl font-bold mb-1" style="line-height: 1.1">{{ livro?.title }}</h2>
+                    <h3 class="text-lg text-gray-700" style="margin-top: 0px">Formato: {{ livro?.format }}</h3>
+                    <p class="text-xl text-primary font-semibold">R$ {{ livro?.price }}</p>
+                    <div class="text-gray-600" [innerHTML]="convertDescriptionToHtml(livro?.description)"></div>
+                    <div class="mt-6 w-full max-w-md">
+                        <div #paypalRef></div>
+                    </div>
+                </div>
+            </div>
+        </p-card>
+</div>
