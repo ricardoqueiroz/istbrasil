@@ -8,6 +8,7 @@ import { InstitutoComponent } from './app/pages/instituto/instituto.component';
 import { TransparenciaComponent } from './app/pages/transparencia/transparencia.component';
 import { LocalizacaoComponent } from './app/pages/localizacao/localizacao.component';
 import { EditoraComponent } from './app/pages/editora/editora.component';
+import { CheckoutComponent } from './app/pages/editora/checkout/checkout.component';
 // import { LivroComponent } from './app/pages/editora/livro/livro.component';
 
 export const appRoutes: Routes = [
@@ -65,7 +66,8 @@ export const appRoutes: Routes = [
             { 
                 path: 'livro/:id', 
                 loadComponent: () => import('./app/pages/editora/livro/livro.component').then(m => m.LivroComponent) 
-            }
+            },
+            { path: 'checkout', component: CheckoutComponent }
         ]
     },
     { path: 'notfound', component: Notfound },

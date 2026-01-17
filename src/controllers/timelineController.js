@@ -1,13 +1,12 @@
-// Importe sua conexão com o banco de dados (ex: config/db.js)
-// Estou assumindo o uso do mysql2 com promises, que é o padrão moderno.
-const db = require('../config/db'); 
+// Biografia do Patrono Sebastião Tapajós - Linha do Tempo - Controller 
+const { pool: db } = require('../config/db');
 
 exports.getTimelineEvents = async (req, res) => {
     try {
         // 1. Recebe parâmetros de paginação (com valores padrão de segurança)
         // Se o usuário não enviar nada, assume página 1 e limite 10.
-        const page = parseInt(req.query.page) || 1;
-        const limit = parseInt(req.query.limit) || 10;
+        const page = parseInt(req.query.page, 10) || 1;
+        const limit = parseInt(req.query.limit, 10) || 10;
         
         // 2. Calcula o OFFSET (quantos registros pular)
         const offset = (page - 1) * limit;

@@ -1,4 +1,5 @@
-const db = require('../config/db');
+// Relação de Obras Musicais do Patrono Sebastião Tapajós - Controller
+const { pool: db } = require('../config/db');
 
 exports.getAllObras = async (req, res) => {
     try {

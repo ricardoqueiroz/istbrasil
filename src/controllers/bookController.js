@@ -1,4 +1,5 @@
-const db = require('../config/db');
+// const db = require('../config/db');
+const { pool: db } = require('../config/db');
 
 exports.getAllBooks = async (req, res) => {
     console.log('getAllBooks chamado!');

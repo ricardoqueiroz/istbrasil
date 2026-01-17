@@ -1,10 +1,9 @@
+// Controller para Integração com PayPal - Salvando Dados Completos no Banco
 const axios = require('axios');
-const db = require('../config/db'); // Supondo que sua conexão MySQL esteja aqui
-require('dotenv').config();
+const { pool: db, PAYPAL_CLIENT_ID, PAYPAL_CLIENT_SECRET, PAYPAL_API_URL } = require('../config/db');
 
-const { PAYPAL_CLIENT_ID, PAYPAL_CLIENT_SECRET, PAYPAL_API_URL } = process.env;
+// --- Funções Auxiliares ---
 
-// Função auxiliar para gerar Access Token
 async function generateAccessToken() {
     const auth = Buffer.from(PAYPAL_CLIENT_ID + ":" + PAYPAL_CLIENT_SECRET).toString("base64");
     const response = await axios.post(`${PAYPAL_API_URL}/v1/oauth2/token`, "grant_type=client_credentials", {
@@ -16,102 +15,239 @@ async function generateAccessToken() {
     return response.data.access_token;
 }
 
-exports.createOrder = async (req, res) => {
-    const { livroId, preco } = req.body; // Recebe dados do front
+// Busca dados completos da API do PayPal (Garante que SKU e detalhes venham sempre)
+async function getOrderDetails(orderId) {
+    const accessToken = await generateAccessToken();
+    const response = await axios.get(`${PAYPAL_API_URL}/v2/checkout/orders/${orderId}`, {
+        headers: {
+            Authorization: `Bearer ${accessToken}`,
+        },
+    });
+    return response.data;
+}
 
+const safeGet = (val) => (val === undefined ? null : val);
+
+function extractOrderData(resource) {
+    const unit = resource.purchase_units && resource.purchase_units[0] ? resource.purchase_units[0] : {};
+    
+    // Tenta extrair dados do Item (SKU)
+    const item = unit.items && unit.items[0] ? unit.items[0] : {};
+    
+    // Dados de Envio e Endereço
+    const shipping = unit.shipping || {};
+    const address = shipping.address || {};
+    const payer = resource.payer || {};
+    const payerName = payer.name || {};
+    const payerAddress = payer.address || {};
+    
+    // Dados Financeiros
+    const payments = unit.payments || {};
+    // Verifica se a captura está dentro de payments ou se o próprio resource é uma captura
+    const capture = (payments.captures && payments.captures[0]) ? payments.captures[0] : (resource.status === 'COMPLETED' ? resource : {});
+    const grossAmount = resource.gross_amount || unit.amount || {};
+    const captureAmount = capture.amount || {};
+    const payee = unit.payee || {};
+    const sellerProt = capture.seller_protection || {};
+
+    return {
+        // Identificação
+        order_id: safeGet(resource.id),
+        product_id: safeGet(unit.custom_id),
+        sku: safeGet(item.sku),
+        intent: safeGet(resource.intent),
+        status_: safeGet(resource.status),
+        
+        // Valores e Datas
+        purchase_value: safeGet(grossAmount.value),
+        purchase_currency_code: safeGet(grossAmount.currency_code),
+        create_time: safeGet(resource.create_time),
+        update_time: safeGet(resource.update_time),
+        
+        // Dados do Pagador (Payer)
+        payer_id: safeGet(payer.payer_id),
+        payer_email: safeGet(payer.email_address),
+        payer_name_given: safeGet(payerName.given_name),
+        payer_name_surname: safeGet(payerName.surname),
+        payer_country_code: safeGet(payerAddress.country_code),
+
+        // Dados de Envio (Shipping)
+        shipping_name_full: shipping.name ? safeGet(shipping.name.full_name) : null,
+        shipping_address_line_1: safeGet(address.address_line_1),
+        shipping_address_line_2: safeGet(address.address_line_2),
+        shipping_admin_area_1: safeGet(address.admin_area_1), // Estado
+        shipping_admin_area_2: safeGet(address.admin_area_2), // Cidade
+        shipping_postal_code: safeGet(address.postal_code),
+        shipping_country_code: safeGet(address.country_code),
+
+        // Dados do Recebedor (Payee)
+        payee_email: safeGet(payee.email_address),
+        payee_merchant_id: safeGet(payee.merchant_id),
+
+        // Referências e Pagamento
+        reference_id: safeGet(unit.reference_id),
+        payment_id: safeGet(capture.id),
+        payment_status: safeGet(capture.status),
+        payment_value: safeGet(captureAmount.value),
+        payment_currency_code: safeGet(captureAmount.currency_code),
+        payment_create_time: safeGet(capture.create_time),
+        payment_final_capture: capture.final_capture ? 'true' : 'false',
+        
+        // Proteção e Links
+        seller_prot_status: safeGet(sellerProt.status),
+        seller_prot_dispute_cat: sellerProt.dispute_categories ? JSON.stringify(sellerProt.dispute_categories) : null,
+        links: resource.links ? JSON.stringify(resource.links) : null
+    };
+}
+
+async function upsertOrder(orderData) {
+    console.log(`📝 Salvando Completo - ID: ${orderData.product_id} | SKU: ${orderData.sku} | Cliente: ${orderData.payer_name_given}`);
+
+    const sql = `
+        INSERT INTO ist_orders (
+            order_id, product_id, sku, intent, status_, create_time, update_time, 
+            purchase_value, purchase_currency_code, 
+            payer_id, payer_email, payer_name_given, payer_name_surname, payer_country_code,
+            shipping_name_full, shipping_address_line_1, shipping_address_line_2, 
+            shipping_admin_area_1, shipping_admin_area_2, shipping_postal_code, shipping_country_code,
+            payee_email, payee_merchant_id, payment_status, reference_id,
+            payment_id, payment_value, payment_currency_code, payment_create_time, payment_final_capture,
+            seller_prot_status, seller_prot_dispute_cat, links
+        ) VALUES (
+            ?, ?, ?, ?, ?, ?, ?, 
+            ?, ?, 
+            ?, ?, ?, ?, ?, 
+            ?, ?, ?, 
+            ?, ?, ?, ?, 
+            ?, ?, ?, ?, 
+            ?, ?, ?, ?, ?, 
+            ?, ?, ?
+        )
+        ON DUPLICATE KEY UPDATE 
+            status_ = VALUES(status_), 
+            update_time = VALUES(update_time),
+            payment_status = VALUES(payment_status),
+            payment_id = VALUES(payment_id),
+            sku = VALUES(sku),
+            product_id = VALUES(product_id),
+            shipping_address_line_1 = VALUES(shipping_address_line_1),
+            shipping_address_line_2 = VALUES(shipping_address_line_2),
+            shipping_admin_area_1 = VALUES(shipping_admin_area_1),
+            shipping_admin_area_2 = VALUES(shipping_admin_area_2),
+            shipping_postal_code = VALUES(shipping_postal_code)
+    `;
+
+    const values = [
+        orderData.order_id, orderData.product_id, orderData.sku, orderData.intent, orderData.status_, orderData.create_time, orderData.update_time,
+        orderData.purchase_value, orderData.purchase_currency_code,
+        orderData.payer_id, orderData.payer_email, orderData.payer_name_given, orderData.payer_name_surname, orderData.payer_country_code,
+        orderData.shipping_name_full, orderData.shipping_address_line_1, orderData.shipping_address_line_2,
+        orderData.shipping_admin_area_1, orderData.shipping_admin_area_2, orderData.shipping_postal_code, orderData.shipping_country_code,
+        orderData.payee_email, orderData.payee_merchant_id, orderData.payment_status, orderData.reference_id,
+        orderData.payment_id, orderData.payment_value, orderData.payment_currency_code, orderData.payment_create_time, orderData.payment_final_capture,
+        orderData.seller_prot_status, orderData.seller_prot_dispute_cat, orderData.links
+    ];
+
+    try {
+        await db.execute(sql, values);
+        console.log(`✅ Pedido ${orderData.order_id} salvo com TODOS os detalhes.`);
+    } catch (error) {
+        console.error(`❌ Erro SQL ao salvar pedido ${orderData.order_id}:`, error.message);
+        throw error;
+    }
+}
+
+// --- Métodos do Controller ---
+
+exports.createOrder = async (req, res) => {
+    const { livroId, sku, preco, titulo } = req.body;
+    
     try {
         const accessToken = await generateAccessToken();
         
-        const response = await axios.post(`${PAYPAL_API_URL}/v2/checkout/orders`, {
+        const payload = {
             intent: "CAPTURE",
             purchase_units: [{
+                custom_id: String(livroId), 
+                description: titulo,
                 amount: {
                     currency_code: "BRL",
-                    value: preco 
+                    value: preco,
+                    breakdown: { item_total: { currency_code: "BRL", value: preco } }
                 },
-                description: `Livro ID: ${livroId}`
+                items: [{
+                    name: titulo,
+                    sku: sku, 
+                    unit_amount: { currency_code: "BRL", value: preco },
+                    quantity: "1"
+                }]
             }],
-        }, {
-            headers: {
-                Authorization: `Bearer ${accessToken}`,
-                "Content-Type": "application/json",
-            },
+        };
+
+        const response = await axios.post(`${PAYPAL_API_URL}/v2/checkout/orders`, payload, {
+            headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
         });
-
-        // Opcional: Salvar pré-venda no MySQL como 'PENDENTE' aqui
-
         res.json(response.data);
     } catch (error) {
-        console.error("Erro ao criar pedido:", error.response ? error.response.data : error.message);
-        res.status(500).json({ error: "Erro ao criar pedido no PayPal" });
+        console.error("Erro CreateOrder:", error.message);
+        res.status(500).json({ error: "Erro ao criar pedido", code: "CREATE_ERROR" });
     }
 };
 
 exports.captureOrder = async (req, res) => {
-    const { orderID, livroId } = req.body;
-
+    const { orderID } = req.body;
     try {
         const accessToken = await generateAccessToken();
         
-        const response = await axios.post(`${PAYPAL_API_URL}/v2/checkout/orders/${orderID}/capture`, {}, {
-            headers: {
-                Authorization: `Bearer ${accessToken}`,
-                "Content-Type": "application/json",
-            },
+        // 1. Captura o Pagamento
+        await axios.post(`${PAYPAL_API_URL}/v2/checkout/orders/${orderID}/capture`, {}, {
+            headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
         });
 
-        const transaction = response.data;
-
-        if (transaction.status === 'COMPLETED') {
-            // SALVAR NO MYSQL
-            const valor = transaction.purchase_units[0].payments.captures[0].amount.value;
-            const email = transaction.payer.email_address;
-
-            const sql = "INSERT INTO vendas (paypal_order_id, livro_id, valor, status, cliente_email) VALUES (?, ?, ?, ?, ?)";
-            // Atenção: Ajuste a chamada do db conforme sua implementação atual do mysql2
-            // db.execute(sql, [orderID, livroId, valor, 'APROVADO', email]); 
+        // 2. Busca dados completos
+        const fullOrder = await getOrderDetails(orderID);
+        
+        // 3. Salva no banco
+        try {
+            const orderData = extractOrderData(fullOrder);
+            await upsertOrder(orderData);
             
-            console.log("Venda salva com sucesso!");
+            // TUDO CERTO
+            res.json(fullOrder); 
+        } catch (sqlError) {
+            console.error("Erro SQL no captureOrder:", sqlError.message);
+            
+            // IMPORTANTE: Se o PayPal cobrou, mas o SQL falhou, 
+            // não podemos dizer que a venda falhou totalmente.
+            // Retornamos erro 500, mas com um código específico 'SQL_ERROR'
+            // O frontend vai exibir a mensagem "Pagamento Aprovado com Aviso"
+            res.status(500).json({ 
+                error: "Erro ao salvar no banco", 
+                errorType: "SQL_ERROR", 
+                paypalData: fullOrder 
+            });
         }
-
-        res.json(transaction);
-    } catch (error) {
-        console.error("Erro ao capturar pagamento:", error.response ? error.response.data : error.message);
-        res.status(500).json({ error: "Erro ao capturar pagamento" });
+    } catch (paypalError) {
+        console.error("Erro CaptureOrder (PayPal):", paypalError.message);
+        // Erro real de pagamento (não cobrou)
+        res.status(500).json({ error: "Erro na captura", errorType: "CAPTURE_ERROR" });
     }
 };
 
 exports.handleWebhook = async (req, res) => {
-    // 1. O PayPal envia os dados do evento no corpo da requisição (req.body)
     const evento = req.body;
+    console.log(`🪝 Webhook: ${evento.event_type}`);
 
-    console.log(`Evento Webhook Recebido: ${evento.event_type}`);
-
-    // 2. Verifique o tipo de evento que você quer tratar
     try {
-        if (evento.event_type === 'PAYMENT.CAPTURE.COMPLETED') {
-            const resource = evento.resource;
-            const paypalOrderId = resource.supplementary_data.related_ids.order_id;
-            
-            console.log(`Pagamento confirmado via Webhook para a Ordem: ${paypalOrderId}`);
-
-            // AQUI: Você pode atualizar o status no banco de dados para 'APROVADO'
-            // caso a captura via frontend tenha falhado por queda de internet do usuário, por exemplo.
-            // const sql = "UPDATE vendas SET status = 'APROVADO' WHERE paypal_order_id = ?";
-            // await db.execute(sql, [paypalOrderId]);
+        if (evento.event_type === 'CHECKOUT.ORDER.COMPLETED') {
+            // O Webhook também traz dados bons, mas às vezes menos completos que o GET direto
+            // Por segurança, podemos até buscar o GET aqui também se necessário, 
+            // mas o resource do webhook costuma ser suficiente para backup.
+            const orderData = extractOrderData(evento.resource);
+            await upsertOrder(orderData);
         }
-        
-        // Outros eventos úteis: 'PAYMENT.CAPTURE.DENIED', 'PAYMENT.CAPTURE.REFUNDED'
     } catch (error) {
-        console.error("Erro ao processar webhook:", error);
+        console.error("❌ Erro no Webhook:", error.message);
     }
-
-    // 3. Importante: Sempre responda com 200 OK para o PayPal saber que você recebeu
     res.status(200).send();
-};
-
-module.exports = {
-    createOrder: exports.createOrder,
-    captureOrder: exports.captureOrder,
-    handleWebhook: exports.handleWebhook    
 };

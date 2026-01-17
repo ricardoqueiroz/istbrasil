@@ -1,4 +1,5 @@
-const db = require('../config/db');
+// Relação de Releases e Faixas do Patrono Sebastião Tapajós - Controller
+const { pool: db } = require('../config/db');
 
 exports.getAllReleases = async (req, res) => {
     try {

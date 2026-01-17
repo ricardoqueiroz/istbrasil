@@ -1,7 +1,7 @@
 import { Component, ElementRef, OnInit, ViewChild, Input } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { CardModule } from 'primeng/card';
-import { ActivatedRoute } from '@angular/router';
+import { ActivatedRoute, Router } from '@angular/router';
 import { BookService } from '../../../services/book.service'; // Seu serviço de livros
 import { HttpClient } from '@angular/common/http';
 import { ButtonModule } from 'primeng/button';
@@ -47,7 +47,8 @@ export class LivroComponent implements OnInit {
   constructor(
     private route: ActivatedRoute,
     private bookService: BookService,
-    private http: HttpClient 
+    private http: HttpClient,
+    private router: Router
   ) {}
 
   ngOnInit() {
@@ -68,42 +69,68 @@ export class LivroComponent implements OnInit {
   }
 
   renderPaypalButton() {
+    if (!this.livro) return;
+
     paypal.Buttons({
-      // 1. Configura a transação
       createOrder: (data: any, actions: any) => {
         return fetch('http://localhost:3000/api/paypal/create-order', {
           method: 'post',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({
-            livroId: this.livro.id,
-            preco: this.livro.preco
+            livroId: this.livro.id,     // ID do banco (vai virar custom_id)
+            sku: this.livro.sku,        // SKU do livro
+            titulo: this.livro.title,   // Título do livro
+            preco: this.livro.price     // Preço (ex: "50.00")
           })
-        }).then((res) => res.json())
-          .then((order) => order.id); // Retorna o ID da ordem criada no backend
+        })
+        .then((res) => {
+          if (!res.ok) throw new Error('CREATE_ERROR'); // Lança erro se não for 200
+          return res.json();
+        })
+        .then((order) => order.id)
+        .catch((err) => {
+          console.error(err);
+          // Redireciona para página de erro de criação
+          this.router.navigate(['/editora/checkout'], { queryParams: { code: 'CREATE_ERROR' } });
+        });
       },
 
-      // 2. Finaliza a transação
       onApprove: (data: any, actions: any) => {
         return fetch('http://localhost:3000/api/paypal/capture-order', {
           method: 'post',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({
-            orderID: data.orderID,
-            livroId: this.livro.id
-          })
-        }).then((res) => res.json())
-          .then((details) => {
-            if (details.status === 'COMPLETED') {
-                alert('Transação concluída por ' + details.payer.name.given_name);
-                // Redirecionar para uma página de sucesso
-            } else {
-                alert('Ocorreu um erro na transação.');
-            }
-          });
+          body: JSON.stringify({ orderID: data.orderID })
+        })
+        .then((res) => {
+          // Aqui testamos se o backend retornou erro (ex: 500)
+          if (!res.ok) {
+              // Tenta ler o JSON de erro para ver se foi erro SQL ou erro PayPal
+              return res.json().then(errData => {
+                  throw { type: errData.errorType || 'CAPTURE_ERROR' }; 
+              });
+          }
+          return res.json();
+        })
+        .then((details) => {
+            // SUCESSO: Redireciona para página de sucesso
+            this.router.navigate(['/editora/checkout'], { 
+                queryParams: { 
+                    code: 'SUCCESS', 
+                    orderId: details.id // Passa o ID para o usuário ver
+                } 
+            });
+        })
+        .catch((err) => {
+            console.error("Erro no fluxo:", err);
+            // Redireciona baseada no tipo de erro lançado acima
+            const code = err.type || 'CAPTURE_ERROR';
+            this.router.navigate(['/editora/checkout'], { queryParams: { code: code } });
+        });
       },
 
       onError: (err: any) => {
-        console.error('Erro no PayPal:', err);
+        console.error('Erro genérico PayPal:', err);
+        this.router.navigate(['/editora/checkout'], { queryParams: { code: 'CREATE_ERROR' } });
       }
     }).render(this.paypalRef.nativeElement);
   }
