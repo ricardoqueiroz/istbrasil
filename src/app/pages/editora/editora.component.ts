@@ -8,6 +8,7 @@ import { FormsModule } from '@angular/forms';
 import { RouterModule } from '@angular/router';
 import { HttpClientModule } from '@angular/common/http'; // Importante para o Service funcionar no Standalone
 import { BookService, Book } from '../../services/book.service'; // Ajuste o caminho conforme necessário
+import { JsonDescriptionPipe } from '../../pipes/json-description.pipe';
 
 @Component({
   selector: 'app-editora',
@@ -20,7 +21,8 @@ import { BookService, Book } from '../../services/book.service'; // Ajuste o cam
     SelectButtonModule,
     FormsModule,
     RouterModule,
-    HttpClientModule 
+    HttpClientModule,
+    JsonDescriptionPipe
   ],
   providers: [BookService], // Opcional se providedIn: 'root'
   templateUrl: './editora.component.html',
@@ -38,8 +40,6 @@ export class EditoraComponent implements OnInit {
   // A lista começa vazia e será preenchida pela API
   books: Book[] = [];
 
-  private apiUrl = 'http://localhost:3000/api/books';
-
   constructor(private bookService: BookService) { }
 
   ngOnInit(): void {
@@ -50,11 +50,9 @@ export class EditoraComponent implements OnInit {
     this.bookService.getBooks().subscribe({
       next: (data) => {
         this.books = data.map(book => {
-          const description = (book as any)["description"];
           return {
             ...book,
-            inventoryStatus: book.inventory,
-            descriptionDisplay: this.convertDescriptionToHtml(description)
+            inventoryStatus: book.inventory
           };
         });
         console.log('Books loaded from DB:', this.books);

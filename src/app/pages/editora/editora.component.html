@@ -99,7 +99,7 @@
                                         <div>
                                             <div class="text-lg font-medium text-slate-900 mt-2">{{ book.title }}</div>
                                             <span class="font-medium text-slate-500 text-sm">{{ book.category }}</span>
-                                            <div class="mt-2 text-slate-600 text-sm line-clamp-2 md:line-clamp-none" [innerHTML]="book.descriptionDisplay"></div>
+                                            <div class="mt-2 text-slate-600 text-sm line-clamp-2 md:line-clamp-none" [innerHTML]="book.description | jsonDescription"></div>
                                         </div>
                                         <div class="bg-slate-100 p-1 rounded">
                                             <div class="surface-100 p-1" style="border-radius: 30px">
@@ -143,7 +143,7 @@
                                     <img class="w-8/12 shadow-md rounded object-cover" [src]="book.img" [alt]="book.title" />
                                     <div class="text-center">
                                         <div class="text-lg font-bold text-slate-800">{{ book.title }}</div>
-                                        <div class="text-sm text-slate-500 mt-1 text-left" [innerHTML]="book.descriptionDisplay"></div>
+                                        <div class="text-sm text-slate-500 mt-1 text-left" [innerHTML]="book.description | jsonDescription"></div>
                                     </div>
                                 </div>
                                 <div class="flex items-center justify-between mt-auto pt-4 border-t border-slate-100">

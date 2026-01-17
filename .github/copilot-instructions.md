@@ -1,33 +1,53 @@
+
 # AI Coding Instructions for istbrasil.org.br
 
-## Architecture Overview
-This is a hybrid web application with a modern Angular frontend and a lightweight Node.js/Express backend, co-existing with legacy PHP components.
-- **Frontend**: Angular 20 (Sakai NG template) with PrimeNG and Tailwind CSS. Located in `src/app`. It uses standalone components and lazy loading for routing.
-- **Backend (Node)**: Express.js server entry point is `server.js` at root. API routes are in `src/routes/` which delegate business logic to controllers in `src/controllers/`.
-- **Backend (Legacy PHP)**: Existing PHP admin and support scripts in `development/` and `html/`. Maintain if requested but prefer Node/Angular for new features.
-- **Database**: MySQL. Connection logic in `src/config/db.js`.
+## Project Architecture
 
-## Codebase Patterns & Conventions
-- **Backend Location**: Unlike standard practices, Node.js backend routes, controllers, and config currently reside in `src/` alongside Angular source. Be careful to distinguish `.js` (backend) from `.ts` (frontend) files in `src/`.
-- **Angular Stack**: Uses Standalone Components (Angular 19+ style). PrimeNG is the primary UI library; Tailwind is used for utility classes.
-- **Data Access**: `mysql2` with promise support is used for database interactions within the controller files.
+- **Frontend**: Angular 20 (Sakai NG template) using standalone components, PrimeNG, and Tailwind CSS. Source in `src/app/`. Routing is lazy-loaded; UI is built with PrimeNG and utility classes from Tailwind. See `src/app/routes/` and `src/app/pages/` for feature modules and page components.
+- **Backend (Node.js/Express)**: API server entry is `server.js` at project root. API routes are in `src/routes/` (JavaScript), delegating to controllers in `src/controllers/`. Database access uses `mysql2/promise` via `src/config/db.js`.
+- **Legacy PHP**: Admin and support scripts in `development/` and `html/` (notably `istdbadmin/`). Maintain only if required; new features should use Node/Angular.
+- **Database**: MySQL, with schema and view definitions in `database/`. Use `src/config/db.js` for connection pooling.
+
+## Key Patterns & Conventions
+
+- **Mixed Source Roots**: Both backend (`.js`) and frontend (`.ts`) code live under `src/`. Always check file extensions and directory context.
+- **Angular**: Uses Angular 19+ standalone components. Prefer `@Component({standalone: true})` and direct imports. UI composition is via PrimeNG modules and Tailwind classes. See `src/app/pages/` for examples.
+- **Routing**: Angular routes are defined in `src/app.routes.ts` and feature route files. Use lazy loading for large modules.
+- **Backend**: API endpoints are defined in `src/routes/`, with business logic in `src/controllers/`. Use async/await and `mysql2/promise` for DB access.
+- **Legacy**: PHP code in `development/` and `html/` is only updated for bugfixes or admin needs. Prefer Node/Angular for all new work.
+
+## Developer Workflows
+
+- **Frontend Dev**: `ng serve` (Angular dev server, port 4200). Hot reload is enabled.
+- **Backend Dev**: `node server.js` (Express API, port 3000).
+- **Database Test**: `node test-db.js` to verify DB connectivity.
+- **Build**: `ng build` (output in `dist/`).
+- **Unit Tests**: `ng test` (Karma runner).
+- **E2E Tests**: `ng e2e` (choose your own framework).
+
+## Project-Specific Notes
+
+- **Linting/Formatting**: ESLint config in `eslint.config.js` enforces Angular and Prettier rules. Component selectors use `p-` prefix by convention.
+- **Styling**: Tailwind is used for utility classes, but core layout uses custom CSS. See `src/assets/layout/variables` for theme variables.
+- **Environment**: Windows/IIS. Use absolute paths (e.g., `c:\inetpub\wwwroot\istbrasil.org.br`).
+- **Admin Interface**: Legacy admin is in `html/istdbadmin/` and `development/admin/`. Only update if explicitly requested.
+- **Data Flow**: Angular frontend calls Node API (`/api/*`), which queries MySQL. Avoid direct DB access from frontend.
 
 ## Key Files & Directories
-- `server.js`: Main Express server entry point.
-- `src/app/`: Angular frontend application code.
-- `src/routes/`: Express API route definitions (Javascript).
-- `src/controllers/`: Express controller files with business logic.
-- `src/config/db.js`: Database configuration and connection pool.
-- `database/`: SQL schemas and views.
-- `istdbadmin/`: Legacy PHP admin interface.
 
-## Development Workflow
-- **Frontend**: Run `ng serve` to start the Angular dev server (default port 4200).
-- **Backend**: Run `node server.js` to start the API server (default port 3000).
-- **Database Testing**: Run `node test-db.js` to verify connectivity.
-- **Building**: Run `ng build` to build the project for production.
-- **Testing**: Run `ng test` to run unit tests.
+- `server.js`: Express server entry
+- `src/app/`: Angular app source
+- `src/routes/`: Express API routes (JS)
+- `src/controllers/`: Express controllers (JS)
+- `src/config/db.js`: MySQL connection
+- `database/`: SQL schemas/views
+- `development/`, `html/`: Legacy PHP
 
-## Environment
-- **OS**: Windows (IIS environment).
-- **Paths**: Project root is `c:\inetpub\wwwroot\istbrasil.org.br`. Use absolute paths or standard node module resolution.
+## Examples
+
+- **Angular Standalone Component**: See `src/app/pages/editora/editora.component.ts` for a typical standalone component using PrimeNG and Tailwind.
+- **API Route**: See `src/routes/` and `src/controllers/` for Express route/controller pattern.
+- **Theme Customization**: See `src/assets/layout/variables` and `src/app/layout/` for theming.
+
+---
+Keep instructions concise and focused on actual project practices. Update this file if major structure or workflow changes.

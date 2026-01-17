@@ -1,4 +1,6 @@
 // Controller para Integração com PayPal - Salvando Dados Completos no Banco
+// const paypal = require('@paypal/checkout-server-sdk'); // Ou sua lib de preferência
+// const environment = require('../config/environment'); // Se houver config de ambiente
 const axios = require('axios');
 const { pool: db, PAYPAL_CLIENT_ID, PAYPAL_CLIENT_SECRET, PAYPAL_API_URL } = require('../config/db');
 
@@ -196,41 +198,62 @@ exports.createOrder = async (req, res) => {
 
 exports.captureOrder = async (req, res) => {
     const { orderID } = req.body;
+
     try {
+        // 1. TENTA CAPTURAR NO PAYPAL (Usando Axios em vez do SDK)
         const accessToken = await generateAccessToken();
         
-        // 1. Captura o Pagamento
-        await axios.post(`${PAYPAL_API_URL}/v2/checkout/orders/${orderID}/capture`, {}, {
-            headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
-        });
+        const response = await axios.post(
+            `${PAYPAL_API_URL}/v2/checkout/orders/${orderID}/capture`,
+            {}, // Corpo vazio
+            {
+                headers: {
+                    Authorization: `Bearer ${accessToken}`,
+                    "Content-Type": "application/json",
+                },
+            }
+        );
 
-        // 2. Busca dados completos
-        const fullOrder = await getOrderDetails(orderID);
+        const capturedOrder = response.data; // Dados completos do pedido capturado
+
+        // Se chegou aqui, o dinheiro foi capturado no PayPal.
+        // Agora salvamos no banco usando sua função robusta existente.
         
-        // 3. Salva no banco
         try {
-            const orderData = extractOrderData(fullOrder);
+            // 2. TENTA SALVAR NO BANCO DE DADOS
+            // Extrai os dados no formato que sua tabela espera
+            const orderData = extractOrderData(capturedOrder);
+            
+            // Usa a função upsertOrder que já existe no seu arquivo
             await upsertOrder(orderData);
-            
-            // TUDO CERTO
-            res.json(fullOrder); 
+
+            // SUCESSO TOTAL
+            return res.json(capturedOrder);
+
         } catch (sqlError) {
-            console.error("Erro SQL no captureOrder:", sqlError.message);
+            console.error("ERRO CRÍTICO SQL: Pagamento efetuado, mas erro ao salvar pedido:", sqlError.message);
             
-            // IMPORTANTE: Se o PayPal cobrou, mas o SQL falhou, 
-            // não podemos dizer que a venda falhou totalmente.
-            // Retornamos erro 500, mas com um código específico 'SQL_ERROR'
-            // O frontend vai exibir a mensagem "Pagamento Aprovado com Aviso"
-            res.status(500).json({ 
-                error: "Erro ao salvar no banco", 
-                errorType: "SQL_ERROR", 
-                paypalData: fullOrder 
+            // 3. RETORNO DE ERRO DE SQL (Dinheiro saiu, mas sem pedido no sistema)
+            // Retorna o ID da captura para facilitar o suporte manual se necessário
+            const captureId = capturedOrder.purchase_units[0]?.payments?.captures[0]?.id;
+            
+            return res.status(500).json({
+                errorType: 'SQL_ERROR', 
+                message: 'Pagamento capturado, erro ao salvar no banco.',
+                captureId: captureId 
             });
         }
-    } catch (paypalError) {
-        console.error("Erro CaptureOrder (PayPal):", paypalError.message);
-        // Erro real de pagamento (não cobrou)
-        res.status(500).json({ error: "Erro na captura", errorType: "CAPTURE_ERROR" });
+
+    } catch (error) {
+        // 4. RETORNO DE ERRO DE CAPTURA (Dinheiro não saiu)
+        // O Axios joga o erro no catch se o status não for 2xx
+        console.error("ERRO PAYPAL: Não foi possível capturar o pagamento:", error.response ? error.response.data : error.message);
+        
+        return res.status(500).json({
+            errorType: 'CAPTURE_ERROR',
+            message: 'Falha na captura do pagamento junto ao PayPal.',
+            details: error.response ? error.response.data : null
+        });
     }
 };
 

@@ -3,6 +3,9 @@ import { CommonModule } from '@angular/common';
 import { ActivatedRoute, Router, RouterModule } from '@angular/router';
 import { CardModule } from 'primeng/card';
 import { ButtonModule } from 'primeng/button';
+import { HttpClient, HttpHeaders } from '@angular/common/http'; // Importante para o download
+import { BookService } from '../../../services/book.service';
+import { environment } from '../../../../environments/environment';
 
 @Component({
   selector: 'app-checkout',
@@ -14,10 +17,15 @@ import { ButtonModule } from 'primeng/button';
 export class CheckoutComponent implements OnInit {
   title: string = '';
   message: string = '';
-  statusType: string = ''; // 'success' | 'error' | 'warning'
+  statusType: string = ''; 
   orderId: string | null = null;
+  
+  // [1] Variáveis expostas para o HTML
+  bookImg: string = '';
+  bookTitle: string = '';
+  bookCategory: string = '';
+  sku: string = ''; // Necessário para o download
 
-  // Dicionário de Mensagens (Conforme sua especificação A)
   checkoutStatus: any = {
     'SUCCESS': {
       title: "Obrigado por sua compra",
@@ -46,29 +54,80 @@ export class CheckoutComponent implements OnInit {
     }
   };
 
-  constructor(private route: ActivatedRoute, private router: Router) {}
+  constructor(
+    private route: ActivatedRoute, 
+    private router: Router,
+    private bookService: BookService, // Injetar serviço
+    private http: HttpClient // Injetar HTTP
+  ) {}
 
   ngOnInit() {
-    // Lê os parâmetros da URL (ex: /editora/checkout?code=SUCCESS&orderId=123)
     this.route.queryParams.subscribe(params => {
       const code = params['code'] || 'DEFAULT';
       this.orderId = params['orderId'] || null;
-      
-      // B) Rotina para testar o tipo de mensagem
+      // Supondo que o redirecionamento anterior envie o ID do livro ou SKU
+      const bookId = params['bookId']; 
+
       const statusData = this.checkoutStatus[code] || this.checkoutStatus['DEFAULT'];
       
       this.title = statusData.title;
       this.message = statusData.message;
       this.statusType = statusData.type;
+
+      // Se tivermos o ID do livro, buscamos os detalhes para preencher as variáveis [1]
+      if (bookId) {
+        this.loadBookDetails(bookId);
+      }
     });
+  }
+
+  loadBookDetails(id: string) {
+    this.bookService.getById(id).subscribe({
+      next: (book) => {
+        // [1] Preenchimento das variáveis
+        this.bookImg = book.img;
+        this.bookTitle = book.title;
+        this.bookCategory = book.category;
+        this.sku = book.sku; 
+      },
+      error: (err) => console.error('Erro ao carregar detalhes do livro na tela de sucesso', err)
+    });
+  }
+
+  // [2] Função de Download
+  downloadBook() {
+      if (!this.sku) {
+          alert('Erro: SKU do produto não identificado.');
+          return;
+      }
+
+      // [2.1] e [2.2] Chama o backend para buscar o arquivo e fazer download
+      // O endpoint deve ser: environment.apiUrl + '/books/download/' + this.sku
+      const url = `${environment.apiUrl}/books/download/${this.sku}`;
+
+      this.http.get(url, { responseType: 'blob' }).subscribe({
+          next: (blob: Blob) => {
+              // Cria um link temporário no navegador para baixar o arquivo
+              const downloadUrl = window.URL.createObjectURL(blob);
+              const link = document.createElement('a');
+              link.href = downloadUrl;
+              link.download = `${this.bookTitle}.pdf`; // Ou detecte a extensão do blob
+              link.click();
+              window.URL.revokeObjectURL(downloadUrl);
+
+              // [2.3] Redirecionar para home após o sucesso
+              setTimeout(() => {
+                  this.router.navigate(['/']);
+              }, 2000); // Pequeno delay para garantir que o download iniciou
+          },
+          error: (err) => {
+              console.error('Erro no download:', err);
+              alert('Não foi possível baixar o arquivo. Entre em contato com o suporte.');
+          }
+      });
   }
 
   goHome() {
     this.router.navigate(['/']);
-  }
-  
-  downloadBook() {
-      // Lógica futura de download
-      alert('Iniciando download para o pedido: ' + this.orderId);
   }
 }
