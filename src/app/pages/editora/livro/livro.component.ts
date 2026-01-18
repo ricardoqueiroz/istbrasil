@@ -52,6 +52,7 @@ export class LivroComponent implements OnInit {
     paypal.Buttons({
       createOrder: (data: any, actions: any) => {
         // [2] Correção: Uso de environment.apiUrl
+        const descr = new JsonDescriptionPipe().transform(this.livro.description); 
         return fetch(`${environment.apiUrl}/paypal/create-order`, {
           method: 'post',
           headers: { 'content-type': 'application/json' },
@@ -59,7 +60,10 @@ export class LivroComponent implements OnInit {
             livroId: this.livro.id,     
             sku: this.livro.sku,        
             titulo: this.livro.title,   
-            preco: this.livro.price     
+            preco: this.livro.price,
+            imagem: this.livro.img,
+            filename: this.livro.file,
+            descricao: descr
           })
         })
         .then((res) => {
@@ -94,11 +98,17 @@ export class LivroComponent implements OnInit {
           return res.json();
         })
         .then((details) => {
+
             this.router.navigate(['/editora/checkout'], { 
                 queryParams: { 
                     code: 'SUCCESS', 
-                    orderId: details.id 
-                } 
+                    orderId: details.id,
+                    bookTitle: this.livro.title,
+                    bookCategory: this.livro.description.Conteúdo + ' - ' + this.livro.description.Formato,
+                    bookImg: this.livro.img,
+                    bookSku: this.livro.sku,
+                    bookFile: this.livro.file
+              } 
             });
         })
         .catch((err) => {

@@ -14,7 +14,7 @@ const pool = mysql.createPool({
 // Configuração Paypal SandBox
 const PAYPAL_CLIENT_ID = "ARW8yGawDLNIBlNh-nUztnLcrW5ApnDF06DKfa1c_HOi-Ho6MQqH4CopEu8waaH0BkMdRkWHSmLQxKIw";
 const PAYPAL_CLIENT_SECRET = "EHOitsjbF7lq-r5BPowDHrbkcneOnRJKzkC9FSYiz8GDPT1NjgLmoWkKBJMt3fuBZo3mdXuSBhP7aVDb";
-const PAYPAL_API_URL = "https://sandbox.paypal.com";
+const PAYPAL_API_URL = "https://api-m.sandbox.paypal.com";
 
 /* Paypal Live -----
 PAYPAL_CLIENT_ID 

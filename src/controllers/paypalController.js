@@ -1,6 +1,3 @@
-// Controller para Integração com PayPal - Salvando Dados Completos no Banco
-// const paypal = require('@paypal/checkout-server-sdk'); // Ou sua lib de preferência
-// const environment = require('../config/environment'); // Se houver config de ambiente
 const axios = require('axios');
 const { pool: db, PAYPAL_CLIENT_ID, PAYPAL_CLIENT_SECRET, PAYPAL_API_URL } = require('../config/db');
 
@@ -162,7 +159,7 @@ async function upsertOrder(orderData) {
 // --- Métodos do Controller ---
 
 exports.createOrder = async (req, res) => {
-    const { livroId, sku, preco, titulo } = req.body;
+    const { livroId, sku, preco, titulo, imagem, descricao } = req.body;
     
     try {
         const accessToken = await generateAccessToken();
@@ -171,7 +168,6 @@ exports.createOrder = async (req, res) => {
             intent: "CAPTURE",
             purchase_units: [{
                 custom_id: String(livroId), 
-                description: titulo,
                 amount: {
                     currency_code: "BRL",
                     value: preco,
@@ -179,9 +175,11 @@ exports.createOrder = async (req, res) => {
                 },
                 items: [{
                     name: titulo,
+                    description: descricao,
                     sku: sku, 
                     unit_amount: { currency_code: "BRL", value: preco },
-                    quantity: "1"
+                    quantity: "1",
+                    image_url: 'https://istbrasil.org.br/' + imagem
                 }]
             }],
         };
@@ -192,68 +190,31 @@ exports.createOrder = async (req, res) => {
         res.json(response.data);
     } catch (error) {
         console.error("Erro CreateOrder:", error.message);
-        res.status(500).json({ error: "Erro ao criar pedido", code: "CREATE_ERROR" });
+        res.status(500).json({ error: "Erro ao criar pedido" });
     }
 };
 
 exports.captureOrder = async (req, res) => {
     const { orderID } = req.body;
-
     try {
-        // 1. TENTA CAPTURAR NO PAYPAL (Usando Axios em vez do SDK)
         const accessToken = await generateAccessToken();
         
-        const response = await axios.post(
-            `${PAYPAL_API_URL}/v2/checkout/orders/${orderID}/capture`,
-            {}, // Corpo vazio
-            {
-                headers: {
-                    Authorization: `Bearer ${accessToken}`,
-                    "Content-Type": "application/json",
-                },
-            }
-        );
-
-        const capturedOrder = response.data; // Dados completos do pedido capturado
-
-        // Se chegou aqui, o dinheiro foi capturado no PayPal.
-        // Agora salvamos no banco usando sua função robusta existente.
-        
-        try {
-            // 2. TENTA SALVAR NO BANCO DE DADOS
-            // Extrai os dados no formato que sua tabela espera
-            const orderData = extractOrderData(capturedOrder);
-            
-            // Usa a função upsertOrder que já existe no seu arquivo
-            await upsertOrder(orderData);
-
-            // SUCESSO TOTAL
-            return res.json(capturedOrder);
-
-        } catch (sqlError) {
-            console.error("ERRO CRÍTICO SQL: Pagamento efetuado, mas erro ao salvar pedido:", sqlError.message);
-            
-            // 3. RETORNO DE ERRO DE SQL (Dinheiro saiu, mas sem pedido no sistema)
-            // Retorna o ID da captura para facilitar o suporte manual se necessário
-            const captureId = capturedOrder.purchase_units[0]?.payments?.captures[0]?.id;
-            
-            return res.status(500).json({
-                errorType: 'SQL_ERROR', 
-                message: 'Pagamento capturado, erro ao salvar no banco.',
-                captureId: captureId 
-            });
-        }
-
-    } catch (error) {
-        // 4. RETORNO DE ERRO DE CAPTURA (Dinheiro não saiu)
-        // O Axios joga o erro no catch se o status não for 2xx
-        console.error("ERRO PAYPAL: Não foi possível capturar o pagamento:", error.response ? error.response.data : error.message);
-        
-        return res.status(500).json({
-            errorType: 'CAPTURE_ERROR',
-            message: 'Falha na captura do pagamento junto ao PayPal.',
-            details: error.response ? error.response.data : null
+        // 1. Captura o Pagamento
+        await axios.post(`${PAYPAL_API_URL}/v2/checkout/orders/${orderID}/capture`, {}, {
+            headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
         });
+
+        // 2. Busca dados completos
+        const fullOrder = await getOrderDetails(orderID);
+        
+        // 3. Salva no banco
+        const orderData = extractOrderData(fullOrder);
+        await upsertOrder(orderData);
+
+        res.json(fullOrder);
+    } catch (error) {
+        console.error("Erro CaptureOrder:", error.message);
+        res.status(500).json({ error: "Erro na captura" });
     }
 };
 

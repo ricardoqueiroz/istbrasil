@@ -21,9 +21,9 @@ app.use('/api/istbrasil.private/products/livros/', express.static(livrosPath));
 console.log('Acessando arquivos privados em: ' + livrosPath);
 
 // SERVE ARQUIVOS PUBLICOS - documentos (somente leitura)
-const documentosPath = path.join(__dirname, '/istbrasil.public/documents/');
-app.use('/istbrasil.public/documents/', express.static(documentosPath));
-app.use('/api/istbrasil.public/documents/', express.static(documentosPath));
+const documentosPath = path.join(__dirname, '/istbrasil.private/documents/');
+app.use('/istbrasil.private/documents/', express.static(documentosPath));
+app.use('/api/istbrasil.private/documents/', express.static(documentosPath));
 console.log('Acessando arquivos públicos em: ' + documentosPath);
 
 // --- Seção de CONEXÃO de Rotas (app.use) ---

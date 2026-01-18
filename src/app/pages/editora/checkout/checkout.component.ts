@@ -24,6 +24,7 @@ export class CheckoutComponent implements OnInit {
   bookImg: string = '';
   bookTitle: string = '';
   bookCategory: string = '';
+  bookFile: string = '';
   sku: string = ''; // Necessário para o download
 
   checkoutStatus: any = {
@@ -65,6 +66,12 @@ export class CheckoutComponent implements OnInit {
     this.route.queryParams.subscribe(params => {
       const code = params['code'] || 'DEFAULT';
       this.orderId = params['orderId'] || null;
+      this.bookImg = params['bookImg'] || null;
+      this.bookTitle = params['bookTitle'] || null;
+      this.bookCategory = params['bookCategory'] || null;
+      this.sku = params['bookSku'] || null;
+      this.bookFile = params['bookFile'] || null;
+
       // Supondo que o redirecionamento anterior envie o ID do livro ou SKU
       const bookId = params['bookId']; 
 
@@ -74,36 +81,20 @@ export class CheckoutComponent implements OnInit {
       this.message = statusData.message;
       this.statusType = statusData.type;
 
-      // Se tivermos o ID do livro, buscamos os detalhes para preencher as variáveis [1]
-      if (bookId) {
-        this.loadBookDetails(bookId);
-      }
     });
   }
 
-  loadBookDetails(id: string) {
-    this.bookService.getById(id).subscribe({
-      next: (book) => {
-        // [1] Preenchimento das variáveis
-        this.bookImg = book.img;
-        this.bookTitle = book.title;
-        this.bookCategory = book.category;
-        this.sku = book.sku; 
-      },
-      error: (err) => console.error('Erro ao carregar detalhes do livro na tela de sucesso', err)
-    });
-  }
 
   // [2] Função de Download
   downloadBook() {
-      if (!this.sku) {
-          alert('Erro: SKU do produto não identificado.');
-          return;
+      if (!this.bookFile) {
+          alert('Erro: Arquivo do produto não identificado.');
+            return;
       }
 
       // [2.1] e [2.2] Chama o backend para buscar o arquivo e fazer download
-      // O endpoint deve ser: environment.apiUrl + '/books/download/' + this.sku
-      const url = `${environment.apiUrl}/books/download/${this.sku}`;
+      // O endpoint correto é: environment.apiUrl + '/istbrasil.private/products/livros/' + this.bookFile
+      const url = `${environment.apiUrl}/istbrasil.private/products/livros/${this.bookFile}`;
 
       this.http.get(url, { responseType: 'blob' }).subscribe({
           next: (blob: Blob) => {
@@ -111,7 +102,7 @@ export class CheckoutComponent implements OnInit {
               const downloadUrl = window.URL.createObjectURL(blob);
               const link = document.createElement('a');
               link.href = downloadUrl;
-              link.download = `${this.bookTitle}.pdf`; // Ou detecte a extensão do blob
+              link.download = `${this.bookFile}`; // Ou detecte a extensão do blob
               link.click();
               window.URL.revokeObjectURL(downloadUrl);
 

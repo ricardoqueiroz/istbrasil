@@ -1,6 +1,7 @@
 import { Component } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { HttpClient } from '@angular/common/http';
+import { environment } from '../../../environments/environment';
 
 @Component({
   selector: 'app-transparencia',
@@ -21,7 +22,7 @@ export class TransparenciaComponent {
     },
     {
       name: 'CNPJ',
-      file: 'ist_cnpj.pdf'
+      file: 'is‌t_cnpj.pdf'
     },
     {
       name: 'Utilidade Pública Municipal',
@@ -36,11 +37,15 @@ export class TransparenciaComponent {
   constructor(public http: HttpClient) {}
 
   openDocument(doc: any) {
-    const url = `/istbrasil.private/documents/${doc.file}`;
+    // Usa o environment.apiUrl importado corretamente
+    let apiUrl = environment.apiUrl;
+    if (apiUrl.endsWith('/api')) {
+      apiUrl = apiUrl.slice(0, -4);
+    }
+    const url = `${apiUrl}/istbrasil.private/documents/${doc.file}`;
     this.http.get(url, { responseType: 'blob' }).subscribe(blob => {
       const fileURL = URL.createObjectURL(blob);
       window.open(fileURL, '_blank');
-      // Opcional: revogar URL depois de um tempo
       setTimeout(() => URL.revokeObjectURL(fileURL), 60000);
     });
   }
