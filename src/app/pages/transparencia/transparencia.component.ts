@@ -1,5 +1,6 @@
 import { Component } from '@angular/core';
 import { CommonModule } from '@angular/common';
+import { HttpClient } from '@angular/common/http';
 
 @Component({
   selector: 'app-transparencia',
@@ -12,23 +13,35 @@ export class TransparenciaComponent {
   documents = [
     {
       name: 'Ata de Eleição da Diretoria',
-      link: '/downloads/ist_ata_eleicao.pdf'
+      file: 'ist_ata_eleicao.pdf'
     },
     {
       name: 'Estatuto Social',
-      link: '/downloads/ist_estatuto_social.pdf'
+      file: 'ist_estatuto_social.pdf'
     },
     {
       name: 'CNPJ',
-      link: '/downloads/ist_cnpj.pdf'
+      file: 'ist_cnpj.pdf'
     },
     {
       name: 'Utilidade Pública Municipal',
-      link: '/downloads/ist_utilidade_publ_municipal.pdf'
+      file: 'ist_utilidade_publ_municipal.pdf'
     },
     {
       name: 'Utilidade Pública Estadual',
-      link: '/downloads/ist_utilidade_publ_estadual.pdf'
+      file: 'ist_utilidade_publ_estadual.pdf'
     }
   ];
+
+  constructor(public http: HttpClient) {}
+
+  openDocument(doc: any) {
+    const url = `/istbrasil.private/documents/${doc.file}`;
+    this.http.get(url, { responseType: 'blob' }).subscribe(blob => {
+      const fileURL = URL.createObjectURL(blob);
+      window.open(fileURL, '_blank');
+      // Opcional: revogar URL depois de um tempo
+      setTimeout(() => URL.revokeObjectURL(fileURL), 60000);
+    });
+  }
 }

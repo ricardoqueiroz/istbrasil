@@ -1,5 +1,6 @@
 const express = require('express');
 const cors = require('cors');
+const path = require('path');
 const app = express();
 
 // Configurações
@@ -13,6 +14,17 @@ const timelineRoutes = require('./src/routes/timeline.routes');
 const obraRoutes = require('./src/routes/obra.routes');
 const paypalRoutes = require('./src/routes/paypal.routes'); 
 
+// SERVE ARQUIVOS PRIVADOS - LIVROS (somente leitura)
+const livrosPath = path.join(__dirname, '/istbrasil.private/products/livros/');
+app.use('/istbrasil.private/products/livros/', express.static(livrosPath));
+app.use('/api/istbrasil.private/products/livros/', express.static(livrosPath));
+console.log('Acessando arquivos privados em: ' + livrosPath);
+
+// SERVE ARQUIVOS PUBLICOS - documentos (somente leitura)
+const documentosPath = path.join(__dirname, '/istbrasil.public/documents/');
+app.use('/istbrasil.public/documents/', express.static(documentosPath));
+app.use('/api/istbrasil.public/documents/', express.static(documentosPath));
+console.log('Acessando arquivos públicos em: ' + documentosPath);
 
 // --- Seção de CONEXÃO de Rotas (app.use) ---
 app.use('/api/books', bookRoutes);
