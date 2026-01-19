@@ -36,7 +36,7 @@ export class TransparenciaComponent {
 
   constructor(public http: HttpClient) {}
 
-openDocument(doc: any) {
+  openDocument(doc: any) {
     let apiUrl = environment.apiUrl;
     
     // Remove o /api se existir, pois seus arquivos estáticos 
