@@ -22,7 +22,7 @@ export class TransparenciaComponent {
     },
     {
       name: 'CNPJ',
-      file: 'is‌t_cnpj.pdf'
+      file: 'ist_cnpj.pdf'
     },
     {
       name: 'Utilidade Pública Municipal',
@@ -36,17 +36,22 @@ export class TransparenciaComponent {
 
   constructor(public http: HttpClient) {}
 
-  openDocument(doc: any) {
-    // Usa o environment.apiUrl importado corretamente
+openDocument(doc: any) {
     let apiUrl = environment.apiUrl;
+    
+    // Remove o /api se existir, pois seus arquivos estáticos 
+    // também estão mapeados na raiz conforme seu server.js
     if (apiUrl.endsWith('/api')) {
       apiUrl = apiUrl.slice(0, -4);
     }
-    const url = `${apiUrl}/istbrasil.private/documents/${doc.file}`;
-    this.http.get(url, { responseType: 'blob' }).subscribe(blob => {
-      const fileURL = URL.createObjectURL(blob);
-      window.open(fileURL, '_blank');
-      setTimeout(() => URL.revokeObjectURL(fileURL), 60000);
-    });
+
+    // Remove barras duplicadas caso existam para garantir uma URL limpa
+    const baseUrl = apiUrl.replace(/\/$/, '');
+    
+    // Monta a URL direta
+    const url = `${baseUrl}/istbrasil.private/documents/${doc.file}`;
+    
+    // Abre diretamente em nova aba. O navegador cuida do PDF.
+    window.open(url, '_blank');
   }
 }
