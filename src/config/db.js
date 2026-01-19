@@ -17,8 +17,8 @@ const pool = mysql.createPool({
 // const PAYPAL_API_URL = "https://api-m.sandbox.paypal.com";
 
 // Configuração Paypal Produção
-PAYPAL_CLIENT_ID = "AWIY7zKNlVKtB2RYEO-A7RGgXucL0n9lH_OjKouYNttukLOhmoY5tbKAgBjwWbstV1oQCfPKwcJIVDWS";
-PAYPAL_CLIENT_SECRET = "EN1c-tO8_lTbQzmQYRcNGigaADQILz8SKySzncONtuAvbGCrfLhacn6O-vIqe1nf9QDCZbq_GzfP7T3t"; 
+PAYPAL_CLIENT_ID = "Af1_adBle8ZCZk850g8lARgATT4CqTuFwzf5AM0jfO0moS2AteqNb18HjXGna_9oRSCUEsTOdinfhjYb";
+PAYPAL_CLIENT_SECRET = "EPnZYdwPcdkrrp5r68gzJQGScJKF5i95SVX5DVMqHTEmw5nZRF41NSpWhhMKJ7OS26mi2YRmie_4ne8L"; 
 PAYPAL_API_URL = "https://api-m.paypal.com";
 
 module.exports = {
