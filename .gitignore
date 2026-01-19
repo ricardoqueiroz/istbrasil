@@ -47,3 +47,7 @@ database/
 
 # Development files
 development/
+
+# Environment files
+src/environments/environment.ts
+.env

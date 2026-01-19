@@ -1,4 +1,5 @@
 const mysql = require('mysql2/promise');
+require('dotenv').config(); // Adiciona suporte ao .env
 
 // Configuração do banco de dados
 const pool = mysql.createPool({
@@ -11,15 +12,10 @@ const pool = mysql.createPool({
     queueLimit: 0
 });
 
-// Configuração Paypal SandBox
-// const PAYPAL_CLIENT_ID = "ARW8yGawDLNIBlNh-nUztnLcrW5ApnDF06DKfa1c_HOi-Ho6MQqH4CopEu8waaH0BkMdRkWHSmLQxKIw";
-// const PAYPAL_CLIENT_SECRET = "EHOitsjbF7lq-r5BPowDHrbkcneOnRJKzkC9FSYiz8GDPT1NjgLmoWkKBJMt3fuBZo3mdXuSBhP7aVDb";
-// const PAYPAL_API_URL = "https://api-m.sandbox.paypal.com";
-
-// Configuração Paypal Produção
-PAYPAL_CLIENT_ID = "Af1_adBle8ZCZk850g8lARgATT4CqTuFwzf5AM0jfO0moS2AteqNb18HjXGna_9oRSCUEsTOdinfhjYb";
-PAYPAL_CLIENT_SECRET = "EPnZYdwPcdkrrp5r68gzJQGScJKF5i95SVX5DVMqHTEmw5nZRF41NSpWhhMKJ7OS26mi2YRmie_4ne8L"; 
-PAYPAL_API_URL = "https://api-m.paypal.com";
+// Variáveis do Paypal agora vêm do .env
+const PAYPAL_CLIENT_ID = process.env.PAYPAL_CLIENT_ID;
+const PAYPAL_CLIENT_SECRET = process.env.PAYPAL_CLIENT_SECRET;
+const PAYPAL_API_URL = process.env.PAYPAL_API_URL;
 
 module.exports = {
     pool,

@@ -3,6 +3,8 @@ const cors = require('cors');
 const path = require('path');
 const app = express();
 
+require('dotenv').config();
+
 // Configurações
 app.use(cors());
 app.use(express.json());
@@ -40,8 +42,8 @@ app.get('/', (req, res) => {
 });
 
 // Porta do banco de dados e inicialização do servidor
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
-    console.log(`Teste a rota aqui: http://localhost:3000/api/books`);
+    console.log(`Teste a rota aqui: http://localhost:${PORT}/api/books`);
 });

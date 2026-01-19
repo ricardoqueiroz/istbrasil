@@ -7,13 +7,31 @@ import { HttpClient } from '@angular/common/http';
 import { ButtonModule } from 'primeng/button';
 import { environment } from '../../../../environments/environment'; 
 import { JsonDescriptionPipe } from '../../../pipes/json-description.pipe';
+import express from "express";
+// import "dotenv/config";
+import {
+    ApiError,
+    CheckoutPaymentIntent,
+    Client,
+    Environment,
+    LogLevel,
+    OrdersController,
+    PaymentsController,
+    PaypalExperienceLandingPage,
+    PaypalExperienceUserAction
+} from "@paypal/paypal-server-sdk";
 
 declare var paypal: any; 
 
 @Component({
-  selector: 'app-livro',
   standalone: true,
-  imports: [CommonModule, CardModule, ButtonModule, JsonDescriptionPipe],
+  selector: 'p-livro',
+  imports: [
+    CommonModule,
+    CardModule,
+    ButtonModule,
+    JsonDescriptionPipe
+  ],
   templateUrl: './livro.component.html',
   styleUrls: ['./livro.component.css']
 })
