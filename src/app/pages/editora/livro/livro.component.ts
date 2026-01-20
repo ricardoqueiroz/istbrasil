@@ -52,23 +52,45 @@ export class LivroComponent implements OnInit {
     this.livroId = this.route.snapshot.paramMap.get('id');
 
     if (this.livroId) {
-        this.bookService.getById(this.livroId).subscribe({
-            next: (data) => {
-                this.livro = data;
-                this.renderPaypalButton();
-            },
-            error: (err) => {
-                console.error('Erro ao buscar livro:', err);
-            }
-        });
+      this.bookService.getById(this.livroId).subscribe({
+        next: (data) => {
+          this.livro = data;
+          console.log('[PayPal] Livro carregado:', this.livro);
+          this.waitForPaypalScript().then(() => {
+            console.log('[PayPal] SDK carregado, renderizando botão...');
+            this.renderPaypalButton();
+          });
+        },
+        error: (err) => {
+          console.error('[PayPal] Erro ao buscar livro:', err);
+        }
+      });
     }
   }
 
+    /** Aguarda o carregamento do script do PayPal antes de renderizar o botão */
+    waitForPaypalScript(): Promise<void> {
+      return new Promise((resolve) => {
+        if (typeof window !== 'undefined' && (window as any).paypal) {
+          resolve();
+        } else {
+          const interval = setInterval(() => {
+            if (typeof window !== 'undefined' && (window as any).paypal) {
+              clearInterval(interval);
+              resolve();
+            }
+          }, 50);
+        }
+      });
+    }
+
   renderPaypalButton() {
     if (!this.livro) return;
+    console.log('[PayPal] Iniciando renderização do botão...');
 
     paypal.Buttons({
       createOrder: (data: any, actions: any) => {
+        console.log('[PayPal] Criando ordem...');
         // [2] Correção: Uso de environment.apiUrl
         const descr = new JsonDescriptionPipe().transform(this.livro.description); 
         return fetch(`${environment.apiUrl}/paypal/create-order`, {
@@ -85,17 +107,21 @@ export class LivroComponent implements OnInit {
           })
         })
         .then((res) => {
+            console.log('[PayPal] Resposta da criação de ordem:', res);
             if (!res.ok) throw new Error('CREATE_ERROR');
             return res.json();
         })
         .then((order) => order.id)
+                    console.log('[PayPal] Ordem criada:', order);
         .catch((err) => {
+                        console.error('[PayPal] Erro ao criar ordem:', err);
             console.error(err);
             this.router.navigate(['/editora/checkout'], { queryParams: { code: 'CREATE_ERROR' } });
         });
       },
 
       onApprove: (data: any, actions: any) => {
+          console.log('[PayPal] Ordem aprovada, capturando pagamento...', data);
         // [3] Correção: Uso de environment.apiUrl
         return fetch(`${environment.apiUrl}/paypal/capture-order`, {
           method: 'post',
@@ -103,6 +129,7 @@ export class LivroComponent implements OnInit {
           body: JSON.stringify({ orderID: data.orderID })
         })
         .then((res) => {
+           console.log('[PayPal] Resposta da captura:', res);
           if (!res.ok) {
               return res.json().then(errJson => {
                   // Lança um objeto de erro com o tipo retornado pelo backend
@@ -116,6 +143,8 @@ export class LivroComponent implements OnInit {
           return res.json();
         })
         .then((details) => {
+            console.log('[PayPal] Pagamento capturado com sucesso:', details);
+            console.error('[PayPal] Erro no fluxo de aprovação:', err);
 
             this.router.navigate(['/editora/checkout'], { 
                 queryParams: { 
@@ -140,9 +169,11 @@ export class LivroComponent implements OnInit {
       },
 
       onError: (err: any) => {
+          console.error('[PayPal] Erro genérico PayPal:', err);
         console.error('Erro genérico PayPal:', err);
         this.router.navigate(['/editora/checkout'], { queryParams: { code: 'CREATE_ERROR' } });
       }
     }).render(this.paypalRef.nativeElement);
+    console.log('[PayPal] Botão renderizado.');
   }
 }
