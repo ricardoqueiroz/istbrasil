@@ -1,7 +1,7 @@
 // Relação de Releases e Faixas do Patrono Sebastião Tapajós - Controller
-const { pool: db } = require('../config/db');
+import { pool as db } from '../config/db.js';
 
-exports.getAllReleases = async (req, res) => {
+const getAllReleases = async (req, res) => {
     try {
         const query = `SELECT * FROM ist_releases ORDER BY year ASC`;
         const [rows] = await db.execute(query);
@@ -15,10 +15,9 @@ exports.getAllReleases = async (req, res) => {
     }
 };
 
-exports.getReleaseTracks = async (req, res) => {
+const getReleaseTracks = async (req, res) => {
     try {
         const releaseNum = req.params.releaseNum;
-        
         // Buscamos as faixas ordenadas pela posição (A1, A2, B1...) ou id
         const query = `
             SELECT id, position, duration, titulo 
@@ -26,7 +25,6 @@ exports.getReleaseTracks = async (req, res) => {
             WHERE release_num = ? 
             ORDER BY position ASC, id ASC
         `;
-        
         const [rows] = await db.execute(query, [releaseNum]);
         res.status(200).json(rows);
     } catch (error) {
@@ -36,4 +34,9 @@ exports.getReleaseTracks = async (req, res) => {
             error: error.message
         });
     }
+};
+
+export default {
+    getAllReleases,
+    getReleaseTracks
 };

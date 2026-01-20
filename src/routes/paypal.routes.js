@@ -1,9 +1,9 @@
-const express = require('express');
+import express from 'express';
+import paypalController from '../controllers/paypalController.js';
 const router = express.Router();
-const paypalController = require('../controllers/paypalController');
 
 router.post('/create-order', paypalController.createOrder);
 router.post('/capture-order', paypalController.captureOrder);
 router.post('/webhook', paypalController.handleWebhook);
 
-module.exports = router;
+export default router;

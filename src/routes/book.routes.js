@@ -1,6 +1,6 @@
-const express = require('express');
+import express from 'express';
+import bookController from '../controllers/bookController.js';
 const router = express.Router();
-const bookController = require('../controllers/bookController');
 
 // GET /api/books
 router.get('/', bookController.getAllBooks);
@@ -11,4 +11,4 @@ router.get('/:id', bookController.getBookById);
 // GET /api/books/download/:sku (Nova rota)
 router.get('/download/:sku', bookController.downloadBook);
 
-module.exports = router;
+export default router;

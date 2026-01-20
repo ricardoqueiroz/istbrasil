@@ -36,6 +36,26 @@ declare var paypal: any;
   styleUrls: ['./livro.component.css']
 })
 export class LivroComponent implements OnInit {
+    /** Carrega dinamicamente o script do PayPal com client-id fixo */
+    loadPaypalScript(): Promise<void> {
+      return new Promise((resolve, reject) => {
+        if (typeof window !== 'undefined' && (window as any).paypal) {
+          resolve();
+          return;
+        }
+        const script = document.createElement('script');
+        script.src = 'https://www.paypal.com/sdk/js?client-id=AWIY7zKNlVKtB2RYEO-A7RGgXucL0n9lH_OjKouYNttukLOhmoY5tbKAgBjwWbstV1oQCfPKwcJIVDWS&buyer-country=BR&currency=BRL&components=buttons&enable-funding=venmo,card&disable-funding=paylater';
+        script.onload = () => {
+          console.log('[PayPal] Script PayPal carregado dinamicamente.');
+          resolve();
+        };
+        script.onerror = (err) => {
+          console.error('[PayPal] Falha ao carregar script PayPal:', err);
+          reject(err);
+        };
+        document.body.appendChild(script);
+      });
+    }
   @ViewChild('paypalRef', { static: true }) private paypalRef!: ElementRef;
   
   livro: any;
@@ -56,7 +76,7 @@ export class LivroComponent implements OnInit {
         next: (data) => {
           this.livro = data;
           console.log('[PayPal] Livro carregado:', this.livro);
-          this.waitForPaypalScript().then(() => {
+          this.loadPaypalScript().then(() => {
             console.log('[PayPal] SDK carregado, renderizando botão...');
             this.renderPaypalButton();
           });
@@ -68,21 +88,6 @@ export class LivroComponent implements OnInit {
     }
   }
 
-    /** Aguarda o carregamento do script do PayPal antes de renderizar o botão */
-    waitForPaypalScript(): Promise<void> {
-      return new Promise((resolve) => {
-        if (typeof window !== 'undefined' && (window as any).paypal) {
-          resolve();
-        } else {
-          const interval = setInterval(() => {
-            if (typeof window !== 'undefined' && (window as any).paypal) {
-              clearInterval(interval);
-              resolve();
-            }
-          }, 50);
-        }
-      });
-    }
 
   renderPaypalButton() {
     if (!this.livro) return;

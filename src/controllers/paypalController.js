@@ -1,17 +1,15 @@
-require('dotenv').config(); // Adiciona suporte ao .env
-const axios = require('axios');
-const { pool: db } = require('../config/db');
+import 'dotenv/config';
+import axios from 'axios';
+import { pool as db } from '../config/db.js';
 
-// Carrega variáveis do .env diretamente
 const PAYPAL_CLIENT_ID = process.env.PAYPAL_CLIENT_ID;
 const PAYPAL_CLIENT_SECRET = process.env.PAYPAL_CLIENT_SECRET;
-const PAYPAL_API_URL = process.env.PAYPAL_API_URL;
+const PAYPAL_API_URL = 'https://api-m.paypal.com/?';
 
 // --- Funções Auxiliares ---
-
 async function generateAccessToken() {
     const auth = Buffer.from(PAYPAL_CLIENT_ID + ":" + PAYPAL_CLIENT_SECRET).toString("base64");
-    const response = await axios.post(`${PAYPAL_API_URL}/v1/oauth2/token`, "grant_type=client_credentials", {
+    const response = await axios.post(`${PAYPAL_API_URL}/v2/oauth2/token`, "grant_type=client_credentials", {
         headers: {
             Authorization: `Basic ${auth}`,
             "Content-Type": "application/x-www-form-urlencoded",
@@ -20,7 +18,6 @@ async function generateAccessToken() {
     return response.data.access_token;
 }
 
-// Busca dados completos da API do PayPal (Garante que SKU e detalhes venham sempre)
 async function getOrderDetails(orderId) {
     const accessToken = await generateAccessToken();
     const response = await axios.get(`${PAYPAL_API_URL}/v2/checkout/orders/${orderId}`, {
@@ -35,8 +32,6 @@ const safeGet = (val) => (val === undefined ? null : val);
 
 function extractOrderData(resource) {
     const unit = resource.purchase_units && resource.purchase_units[0] ? resource.purchase_units[0] : {};
-    
-    // Tenta extrair dados do Item (SKU)
     const item = unit.items && unit.items[0] ? unit.items[0] : {};
     
     // Dados de Envio e Endereço
@@ -164,12 +159,11 @@ async function upsertOrder(orderData) {
 
 // --- Métodos do Controller ---
 
-exports.createOrder = async (req, res) => {
+
+const createOrder = async (req, res) => {
     const { livroId, sku, preco, titulo, imagem, descricao } = req.body;
-    
     try {
         const accessToken = await generateAccessToken();
-        
         const payload = {
             intent: "CAPTURE",
             purchase_units: [{
@@ -189,7 +183,6 @@ exports.createOrder = async (req, res) => {
                 }]
             }],
         };
-
         const response = await axios.post(`${PAYPAL_API_URL}/v2/checkout/orders`, payload, {
             headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
         });
@@ -200,23 +193,16 @@ exports.createOrder = async (req, res) => {
     }
 };
 
-exports.captureOrder = async (req, res) => {
+const captureOrder = async (req, res) => {
     const { orderID } = req.body;
     try {
         const accessToken = await generateAccessToken();
-        
-        // 1. Captura o Pagamento
         await axios.post(`${PAYPAL_API_URL}/v2/checkout/orders/${orderID}/capture`, {}, {
             headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
         });
-
-        // 2. Busca dados completos
         const fullOrder = await getOrderDetails(orderID);
-        
-        // 3. Salva no banco
         const orderData = extractOrderData(fullOrder);
         await upsertOrder(orderData);
-
         res.json(fullOrder);
     } catch (error) {
         console.error("Erro CaptureOrder:", error.message);
@@ -224,15 +210,11 @@ exports.captureOrder = async (req, res) => {
     }
 };
 
-exports.handleWebhook = async (req, res) => {
+const handleWebhook = async (req, res) => {
     const evento = req.body;
     console.log(`🪝 Webhook: ${evento.event_type}`);
-
     try {
         if (evento.event_type === 'CHECKOUT.ORDER.COMPLETED') {
-            // O Webhook também traz dados bons, mas às vezes menos completos que o GET direto
-            // Por segurança, podemos até buscar o GET aqui também se necessário, 
-            // mas o resource do webhook costuma ser suficiente para backup.
             const orderData = extractOrderData(evento.resource);
             await upsertOrder(orderData);
         }
@@ -240,4 +222,10 @@ exports.handleWebhook = async (req, res) => {
         console.error("❌ Erro no Webhook:", error.message);
     }
     res.status(200).send();
+};
+
+export default {
+    createOrder,
+    captureOrder,
+    handleWebhook
 };

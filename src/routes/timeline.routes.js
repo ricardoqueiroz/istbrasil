@@ -1,9 +1,8 @@
-const express = require('express');
+import express from 'express';
+import timelineController from '../controllers/timelineController.js';
 const router = express.Router();
-const timelineController = require('../controllers/timelineController');
-// Atualizado para refletir a nova estrutura de rotas no server.js
 // Rota GET: /api/timeline
 // Exemplo de uso: /api/timeline?page=1&limit=10
 router.get('/', timelineController.getTimelineEvents);
 
-module.exports = router;
+export default router;

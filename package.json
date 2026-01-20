@@ -1,4 +1,5 @@
 {
+    "type": "module",
     "name": "sakai-ng",
     "version": "20.0.0",
     "scripts": {

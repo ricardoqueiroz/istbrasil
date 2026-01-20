@@ -1,8 +1,8 @@
-const express = require('express');
+import express from 'express';
+import obraController from '../controllers/obraController.js';
 const router = express.Router();
-const obraController = require('../controllers/obraController');
 
 // GET /api/obra
 router.get('/', obraController.getAllObras);
 
-module.exports = router;
+export default router;

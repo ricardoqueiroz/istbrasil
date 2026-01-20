@@ -1,4 +1,4 @@
-const mysql = require('mysql2/promise');
+import mysql from 'mysql2/promise';
 
 // Configuração do banco de dados
 const pool = mysql.createPool({
@@ -11,7 +11,4 @@ const pool = mysql.createPool({
     queueLimit: 0
 });
 
-
-module.exports = {
-    pool
-};
+export { pool };
