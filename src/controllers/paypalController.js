@@ -1,5 +1,11 @@
+require('dotenv').config(); // Adiciona suporte ao .env
 const axios = require('axios');
-const { pool: db, PAYPAL_CLIENT_ID, PAYPAL_CLIENT_SECRET, PAYPAL_API_URL } = require('../config/db');
+const { pool: db } = require('../config/db');
+
+// Carrega variáveis do .env diretamente
+const PAYPAL_CLIENT_ID = process.env.PAYPAL_CLIENT_ID;
+const PAYPAL_CLIENT_SECRET = process.env.PAYPAL_CLIENT_SECRET;
+const PAYPAL_API_URL = process.env.PAYPAL_API_URL;
 
 // --- Funções Auxiliares ---
 

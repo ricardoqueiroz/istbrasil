@@ -1,5 +1,4 @@
 const mysql = require('mysql2/promise');
-require('dotenv').config(); // Adiciona suporte ao .env
 
 // Configuração do banco de dados
 const pool = mysql.createPool({
@@ -12,14 +11,7 @@ const pool = mysql.createPool({
     queueLimit: 0
 });
 
-// Variáveis do Paypal agora vêm do .env
-const PAYPAL_CLIENT_ID = process.env.PAYPAL_CLIENT_ID;
-const PAYPAL_CLIENT_SECRET = process.env.PAYPAL_CLIENT_SECRET;
-const PAYPAL_API_URL = process.env.PAYPAL_API_URL;
 
 module.exports = {
-    pool,
-    PAYPAL_CLIENT_ID,
-    PAYPAL_CLIENT_SECRET,
-    PAYPAL_API_URL
+    pool
 };
