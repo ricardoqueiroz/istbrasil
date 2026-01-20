@@ -7,19 +7,6 @@ import { HttpClient } from '@angular/common/http';
 import { ButtonModule } from 'primeng/button';
 import { environment } from '../../../../environments/environment'; 
 import { JsonDescriptionPipe } from '../../../pipes/json-description.pipe';
-import express from "express";
-// import "dotenv/config";
-import {
-    ApiError,
-    CheckoutPaymentIntent,
-    Client,
-    Environment,
-    LogLevel,
-    OrdersController,
-    PaymentsController,
-    PaypalExperienceLandingPage,
-    PaypalExperienceUserAction
-} from "@paypal/paypal-server-sdk";
 
 declare var paypal: any; 
 
@@ -167,3 +154,5 @@ export class LivroComponent implements OnInit {
     console.log('[PayPal] Botão renderizado.');
   }
 }
+
+<script src="https://www.paypal.com/sdk/js?client-id=AWIY7zKNlVKtB2RYEO-A7RGgXucL0n9lH_OjKouYNttukLOhmoY5tbKAgBjwWbstV1oQCfPKwcJIVDWS&currency=BRL"></script>
