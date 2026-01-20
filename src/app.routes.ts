@@ -38,8 +38,7 @@ export const appRoutes: Routes = [
         path: 'editora',
         component: AppLayout,
         children: [
-            { path: '', component: EditoraComponent },
-            { path: 'test', loadComponent: () => import('./app/pages/editora/test/test.component').then(m => m.TestComponent) }
+            { path: '', component: EditoraComponent }
         ]
     },
     {
@@ -64,7 +63,6 @@ export const appRoutes: Routes = [
         component: AppLayout,
         children: [
             { path: '', component: EditoraComponent },
-            { path: 'test', loadComponent: () => import('./app/pages/editora/test/test.component').then(m => m.TestComponent) },
             { 
                 path: 'livro/:id', 
                 loadComponent: () => import('./app/pages/editora/livro/livro.component').then(m => m.LivroComponent) 
