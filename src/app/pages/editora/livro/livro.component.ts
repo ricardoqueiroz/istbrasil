@@ -111,11 +111,12 @@ export class LivroComponent implements OnInit {
             if (!res.ok) throw new Error('CREATE_ERROR');
             return res.json();
         })
-        .then((order) => order.id)
-                    console.log('[PayPal] Ordem criada:', order);
+        .then((order) => {
+            console.log('[PayPal] Ordem criada:', order);
+            return order.id;
+        })
         .catch((err) => {
-                        console.error('[PayPal] Erro ao criar ordem:', err);
-            console.error(err);
+            console.error('[PayPal] Erro ao criar ordem:', err);
             this.router.navigate(['/editora/checkout'], { queryParams: { code: 'CREATE_ERROR' } });
         });
       },
@@ -144,8 +145,6 @@ export class LivroComponent implements OnInit {
         })
         .then((details) => {
             console.log('[PayPal] Pagamento capturado com sucesso:', details);
-            console.error('[PayPal] Erro no fluxo de aprovação:', err);
-
             this.router.navigate(['/editora/checkout'], { 
                 queryParams: { 
                     code: 'SUCCESS', 
