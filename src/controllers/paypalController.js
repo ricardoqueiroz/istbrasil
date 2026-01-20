@@ -2,20 +2,42 @@ import 'dotenv/config';
 import axios from 'axios';
 import { pool as db } from '../config/db.js';
 
-const PAYPAL_CLIENT_ID = process.env.PAYPAL_CLIENT_ID;
-const PAYPAL_CLIENT_SECRET = process.env.PAYPAL_CLIENT_SECRET;
-const PAYPAL_API_URL = 'https://api-m.paypal.com/?';
+// Captura as variáveis de ambiente
+const { 
+    PAYPAL_CLIENT_ID, 
+    PAYPAL_CLIENT_SECRET, 
+    NODE_ENV 
+} = process.env;
+
+// [CORREÇÃO 1] Definição correta da URL base (Sandbox vs Production)
+// Se NODE_ENV for 'production', usa a URL live. Caso contrário, usa sandbox.
+const PAYPAL_API_URL = (NODE_ENV === 'production')
+    ? 'https://api-m.paypal.com'
+    : 'https://api-m.sandbox.paypal.com';
+
+console.log(`[PayPal Controller] Ambiente: ${NODE_ENV || 'development'} | URL: ${PAYPAL_API_URL}`);
 
 // --- Funções Auxiliares ---
+
 async function generateAccessToken() {
+    if (!PAYPAL_CLIENT_ID || !PAYPAL_CLIENT_SECRET) {
+        throw new Error("Credenciais do PayPal não encontradas no .env");
+    }
+
     const auth = Buffer.from(PAYPAL_CLIENT_ID + ":" + PAYPAL_CLIENT_SECRET).toString("base64");
-    const response = await axios.post(`${PAYPAL_API_URL}/v2/oauth2/token`, "grant_type=client_credentials", {
-        headers: {
-            Authorization: `Basic ${auth}`,
-            "Content-Type": "application/x-www-form-urlencoded",
-        },
-    });
-    return response.data.access_token;
+    
+    try {
+        const response = await axios.post(`${PAYPAL_API_URL}/v2/oauth2/token`, "grant_type=client_credentials", {
+            headers: {
+                Authorization: `Basic ${auth}`,
+                "Content-Type": "application/x-www-form-urlencoded",
+            },
+        });
+        return response.data.access_token;
+    } catch (error) {
+        console.error("❌ Erro ao gerar token PayPal:", error.response ? error.response.data : error.message);
+        throw new Error("Falha na autenticação com PayPal");
+    }
 }
 
 async function getOrderDetails(orderId) {
@@ -159,37 +181,63 @@ async function upsertOrder(orderData) {
 
 // --- Métodos do Controller ---
 
-
 const createOrder = async (req, res) => {
+    // [CORREÇÃO 2] Garantia de valores seguros
     const { livroId, sku, preco, titulo, imagem, descricao } = req.body;
+    
+    // Formata o preço para string com 2 casas decimais (Ex: "10.00")
+    const valorFormatado = Number(preco).toFixed(2);
+    
+    // Limita descrição para evitar erros (PayPal aceita max 127 chars em description de item)
+    const descricaoSafe = descricao ? String(descricao).substring(0, 120) : '';
+
     try {
         const accessToken = await generateAccessToken();
+        
         const payload = {
             intent: "CAPTURE",
             purchase_units: [{
                 custom_id: String(livroId), 
                 amount: {
                     currency_code: "BRL",
-                    value: preco,
-                    breakdown: { item_total: { currency_code: "BRL", value: preco } }
+                    value: valorFormatado,
+                    breakdown: { item_total: { currency_code: "BRL", value: valorFormatado } }
                 },
                 items: [{
-                    name: titulo,
-                    description: descricao,
-                    sku: sku, 
-                    unit_amount: { currency_code: "BRL", value: preco },
+                    name: titulo || 'Livro Digital',
+                    description: descricaoSafe,
+                    sku: sku || `LIVRO-${livroId}`, 
+                    unit_amount: { currency_code: "BRL", value: valorFormatado },
                     quantity: "1",
-                    image_url: 'https://istbrasil.org.br/' + imagem
+                    // Nota: image_url não é campo padrão estrito da V2, mas geralmente não quebra.
+                    // Se der erro de validação, remova a linha abaixo.
+                    // image_url: 'https://istbrasil.org.br/' + imagem 
                 }]
             }],
+            application_context: {
+                brand_name: "IST Editora",
+                user_action: "PAY_NOW",
+                shipping_preference: "NO_SHIPPING" // Use NO_SHIPPING para produtos digitais se não precisar de endereço
+            }
         };
+
         const response = await axios.post(`${PAYPAL_API_URL}/v2/checkout/orders`, payload, {
             headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
         });
         res.json(response.data);
     } catch (error) {
-        console.error("Erro CreateOrder:", error.message);
-        res.status(500).json({ error: "Erro ao criar pedido" });
+        // Log detalhado do erro
+        if (error.response) {
+            console.error("Erro CreateOrder:", error.response.status, error.response.statusText);
+            console.error("Dados do erro:", JSON.stringify(error.response.data, null, 2));
+            res.status(500).json({
+                error: "Erro ao criar pedido",
+                details: error.response.data
+            });
+        } else {
+            console.error("Erro CreateOrder:", error.message);
+            res.status(500).json({ error: "Erro ao criar pedido", message: error.message });
+        }
     }
 };
 
@@ -197,16 +245,31 @@ const captureOrder = async (req, res) => {
     const { orderID } = req.body;
     try {
         const accessToken = await generateAccessToken();
-        await axios.post(`${PAYPAL_API_URL}/v2/checkout/orders/${orderID}/capture`, {}, {
+        
+        // 1. Captura o pagamento
+        const captureResponse = await axios.post(`${PAYPAL_API_URL}/v2/checkout/orders/${orderID}/capture`, {}, {
             headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
         });
+
+        // 2. Busca detalhes completos (para garantir que temos shipping, payer info, etc)
+        // Nota: A resposta do capture já traz muitos dados, mas o getOrderDetails traz o estado consolidado.
         const fullOrder = await getOrderDetails(orderID);
+        
+        // 3. Salva no banco
         const orderData = extractOrderData(fullOrder);
         await upsertOrder(orderData);
+        
+        // Retorna o objeto capturado ou o fullOrder
         res.json(fullOrder);
+        
     } catch (error) {
-        console.error("Erro CaptureOrder:", error.message);
-        res.status(500).json({ error: "Erro na captura" });
+        if (error.response) {
+            console.error("Erro CaptureOrder:", JSON.stringify(error.response.data));
+            res.status(error.response.status).json(error.response.data);
+        } else {
+            console.error("Erro CaptureOrder Genérico:", error.message);
+            res.status(500).json({ error: "Erro na captura do pedido." });
+        }
     }
 };
 
@@ -214,6 +277,7 @@ const handleWebhook = async (req, res) => {
     const evento = req.body;
     console.log(`🪝 Webhook: ${evento.event_type}`);
     try {
+        // Verifica se é o evento de pedido completado
         if (evento.event_type === 'CHECKOUT.ORDER.COMPLETED') {
             const orderData = extractOrderData(evento.resource);
             await upsertOrder(orderData);
@@ -221,6 +285,7 @@ const handleWebhook = async (req, res) => {
     } catch (error) {
         console.error("❌ Erro no Webhook:", error.message);
     }
+    // Sempre retornar 200 OK para o PayPal não tentar reenviar infinitamente
     res.status(200).send();
 };
 
