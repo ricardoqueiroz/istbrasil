@@ -155,4 +155,3 @@ export class LivroComponent implements OnInit {
   }
 }
 
-<script src="https://www.paypal.com/sdk/js?client-id=AWIY7zKNlVKtB2RYEO-A7RGgXucL0n9lH_OjKouYNttukLOhmoY5tbKAgBjwWbstV1oQCfPKwcJIVDWS&currency=BRL"></script>
