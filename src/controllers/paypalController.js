@@ -193,11 +193,11 @@ const createOrder = async (req, res) => {
 
     try {
         const accessToken = await generateAccessToken();
-        
+
         const payload = {
             intent: "CAPTURE",
             purchase_units: [{
-                custom_id: String(livroId), 
+                custom_id: String(livroId),
                 amount: {
                     currency_code: "BRL",
                     value: valorFormatado,
@@ -206,18 +206,16 @@ const createOrder = async (req, res) => {
                 items: [{
                     name: titulo || 'Livro Digital',
                     description: descricaoSafe,
-                    sku: sku || `LIVRO-${livroId}`, 
+                    sku: sku || `LIVRO-${livroId}`,
                     unit_amount: { currency_code: "BRL", value: valorFormatado },
                     quantity: "1",
-                    // Nota: image_url não é campo padrão estrito da V2, mas geralmente não quebra.
-                    // Se der erro de validação, remova a linha abaixo.
-                    // image_url: 'https://istbrasil.org.br/' + imagem 
+                    // image_url: 'https://istbrasil.org.br/' + imagem
                 }]
             }],
             application_context: {
                 brand_name: "IST Editora",
                 user_action: "PAY_NOW",
-                shipping_preference: "NO_SHIPPING" // Use NO_SHIPPING para produtos digitais se não precisar de endereço
+                shipping_preference: "NO_SHIPPING"
             }
         };
 
@@ -226,16 +224,23 @@ const createOrder = async (req, res) => {
         });
         res.json(response.data);
     } catch (error) {
-        // Log detalhado do erro
+        // Log detalhado do erro do PayPal
         if (error.response) {
-            console.error("Erro CreateOrder:", error.response.status, error.response.statusText);
-            console.error("Dados do erro:", JSON.stringify(error.response.data, null, 2));
-            res.status(500).json({
+            console.error("[PayPal CreateOrder] Status:", error.response.status);
+            console.error("[PayPal CreateOrder] StatusText:", error.response.statusText);
+            console.error("[PayPal CreateOrder] Headers:", JSON.stringify(error.response.headers, null, 2));
+            console.error("[PayPal CreateOrder] Data:", JSON.stringify(error.response.data, null, 2));
+            res.status(error.response.status || 500).json({
                 error: "Erro ao criar pedido",
-                details: error.response.data
+                details: error.response.data,
+                status: error.response.status,
+                statusText: error.response.statusText
             });
+        } else if (error.request) {
+            console.error("[PayPal CreateOrder] Nenhuma resposta recebida:", error.request);
+            res.status(500).json({ error: "Erro ao criar pedido", message: "Nenhuma resposta recebida do PayPal." });
         } else {
-            console.error("Erro CreateOrder:", error.message);
+            console.error("[PayPal CreateOrder] Erro desconhecido:", error.message);
             res.status(500).json({ error: "Erro ao criar pedido", message: error.message });
         }
     }
