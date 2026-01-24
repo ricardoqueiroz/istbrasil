@@ -178,7 +178,7 @@ export class LivroComponent implements OnInit {
       // --- ERROS GENÉRICOS ---
       onError: (err: any) => {
         console.error('[PayPal] Erro genérico do componente Buttons:', err);
-        this.router.navigate(['/editora/checkout'], { queryParams: { code: 'CREATE_ERROR' } });
+        // this.router.navigate(['/editora/checkout'], { queryParams: { code: 'CREATE_ERROR' } });
       }
 
     }).render(this.paypalRef.nativeElement);

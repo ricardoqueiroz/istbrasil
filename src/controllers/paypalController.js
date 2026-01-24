@@ -6,17 +6,16 @@ import { pool as db } from '../config/db.js';
 const { 
     PAYPAL_CLIENT_ID, 
     PAYPAL_CLIENT_SECRET, 
-    NODE_ENV 
+    PAYPAL_ENV 
 } = process.env;
 
 // [CORREÇÃO 1] Definição correta da URL base (Sandbox vs Production)
 // Se NODE_ENV for 'production', usa a URL live. Caso contrário, usa sandbox.
-const PAYPAL_API_URL = (NODE_ENV === 'production')
+const PAYPAL_API_URL = (PAYPAL_ENV === 'production')
     ? 'https://api-m.paypal.com'
     : 'https://api-m.sandbox.paypal.com';
 
-console.log(`[PayPal Controller] Ambiente: ${NODE_ENV || 'development'} | URL: ${PAYPAL_API_URL}`);
-
+console.log(`[PayPal Controller] Ambiente: ${PAYPAL_ENV || 'development'} | URL: ${PAYPAL_API_URL}`);
 // --- Funções Auxiliares ---
 
 async function generateAccessToken() {

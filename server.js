@@ -31,11 +31,12 @@ app.use(bodyParser.json());
 const {
     PAYPAL_CLIENT_ID,
     PAYPAL_CLIENT_SECRET,
+    PAYPAL_ENV,
     NODE_ENV // Sugestão: Use uma variável de ambiente para definir se é PROD ou DEV
 } = process.env;
 
 // Define o ambiente baseando-se em variável ou fixa para Production se for o caso
-const paypalEnvironment = (NODE_ENV === 'production') 
+const paypalEnvironment = (PAYPAL_ENV === 'production') 
     ? Environment.Production 
     : Environment.Sandbox;
 
