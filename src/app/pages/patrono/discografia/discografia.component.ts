@@ -4,11 +4,12 @@ import { TableModule } from 'primeng/table';
 import { ButtonModule } from 'primeng/button';
 import { Release, ReleasesService } from '../../../services/releases.service';
 import { HttpClientModule } from '@angular/common/http';
+import { FooterWidget } from 'src/app/shared/footer';
 
 @Component({
     selector: 'app-discografia',
     standalone: true,
-    imports: [CommonModule, TableModule, ButtonModule, HttpClientModule],
+    imports: [CommonModule, TableModule, ButtonModule, HttpClientModule, FooterWidget],
     templateUrl: './discografia.component.html',
     providers: [ReleasesService]
 })

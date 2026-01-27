@@ -40,9 +40,10 @@ import { Router, RouterModule } from '@angular/router';
 
                         <div class="col-span-12 md:col-span-3">
                             <h4 class="font-medium text-2xl leading-normal mb-6 text-surface-900 dark:text-surface-0">Legal</h4>
-                            <a (click)="router.navigate(['/marca'], { fragment: 'Política de Marca' })" class="leading-normal text-xl block cursor-pointer mb-2 text-surface-700 dark:text-surface-100">Política de marca</a>
-                            <a (click)="router.navigate(['/privacidade'], { fragment: 'Política de Privacidade' })" class="leading-normal text-xl block cursor-pointer mb-2 text-surface-700 dark:text-surface-100">Política de privacidade</a>
-                            <a (click)="router.navigate(['/termos'], { fragment: 'Termos de Serviço' })" class="leading-normal text-xl block cursor-pointer text-surface-700 dark:text-surface-100">Termos de Serviço</a>
+                            <a (click)="router.navigate(['/disclaimers/brandpolicy'], { fragment: 'Política de Marca' })" class="leading-normal text-xl block cursor-pointer mb-2 text-surface-700 dark:text-surface-100">Política de marca</a>
+                            <a (click)="router.navigate(['/disclaimers/privacypolicy'], { fragment: 'Política de Privacidade' })" class="leading-normal text-xl block cursor-pointer mb-2 text-surface-700 dark:text-surface-100">Política de privacidade</a>
+                            <a (click)="router.navigate(['/disclaimers/termsofservice'], { fragment: 'Termos de Serviço' })" class="leading-normal text-xl block cursor-pointer text-surface-700 dark:text-surface-100">Termos de Serviço</a>
+                            <a (click)="router.navigate(['/disclaimers/refundpolicy'], { fragment: 'Política de Reembolso' })" class="leading-normal text-xl block cursor-pointer text-surface-700 dark:text-surface-100">Política de Reembolso</a>
                         </div>
                     </div>
                 </div>

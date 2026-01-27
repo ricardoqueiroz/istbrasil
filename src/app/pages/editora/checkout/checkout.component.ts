@@ -6,11 +6,12 @@ import { ButtonModule } from 'primeng/button';
 import { HttpClient, HttpHeaders } from '@angular/common/http'; // Importante para o download
 import { BookService } from '../../../services/book.service';
 import { environment } from '../../../../environments/environment';
+import { FooterWidget } from 'src/app/shared/footer';
 
 @Component({
   selector: 'app-checkout',
   standalone: true,
-  imports: [CommonModule, CardModule, ButtonModule, RouterModule],
+  imports: [CommonModule, CardModule, ButtonModule, RouterModule, FooterWidget],
   templateUrl: './checkout.component.html',
   styleUrls: ['./checkout.component.scss']
 })

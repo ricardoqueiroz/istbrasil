@@ -1,0 +1,13 @@
+<div *ngIf="visible" class="fixed bottom-0 left-0 w-full z-50 bg-white dark:bg-surface-900 border-t border-surface-200 dark:border-surface-700 shadow-lg animate-slide-up">
+  <div class="flex flex-col md:flex-row items-center justify-between gap-4 p-4 md:p-6">
+    <div class="flex-1 text-center md:text-left">
+      <span class="text-lg md:text-xl text-surface-800 dark:text-surface-0">
+        Utilizamos cookies para melhorar sua experiência. Ao continuar navegando, você concorda com nossa <a routerLink="/disclaimers/privacypolicy" class="underline text-primary font-semibold">Política de Privacidade</a> em conformidade com a LGPD.
+      </span>
+    </div>
+    <div class="flex gap-2 mt-4 md:mt-0">
+      <button pButton type="button" label="Aceitar Todos" class="p-button-success" (click)="acceptAll()"></button>
+      <button pButton type="button" label="Recusar Opcionais" class="p-button-secondary" (click)="rejectOptional()"></button>
+    </div>
+  </div>
+</div>

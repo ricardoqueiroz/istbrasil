@@ -9,6 +9,7 @@ import { RouterModule } from '@angular/router';
 import { HttpClientModule } from '@angular/common/http'; // Importante para o Service funcionar no Standalone
 import { BookService, Book } from '../../services/book.service'; // Ajuste o caminho conforme necessário
 import { JsonDescriptionPipe } from '../../pipes/json-description.pipe';
+import { FooterWidget } from 'src/app/shared/footer';
 
 @Component({
   selector: 'app-editora',
@@ -22,7 +23,8 @@ import { JsonDescriptionPipe } from '../../pipes/json-description.pipe';
     FormsModule,
     RouterModule,
     HttpClientModule,
-    JsonDescriptionPipe
+    JsonDescriptionPipe,
+    FooterWidget
   ],
   providers: [BookService], // Opcional se providedIn: 'root'
   templateUrl: './editora.component.html',

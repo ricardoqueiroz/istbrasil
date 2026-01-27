@@ -14,6 +14,28 @@ import { CheckoutComponent } from './app/pages/editora/checkout/checkout.compone
 export const appRoutes: Routes = [
     { path: '', component: Landing },
     {
+        path: 'disclaimers',
+        component: AppLayout,
+        children: [
+            {
+                path: 'brandpolicy',
+                loadComponent: () => import('./app/pages/disclaimers/brandpolicy/brandpolicy.component').then(m => m.BrandPolicyComponent)
+            },
+            {
+                path: 'privacypolicy',
+                loadComponent: () => import('./app/pages/disclaimers/privacypolicy/privacypolicy.component').then(m => m.PrivacyPolicyComponent)
+            },
+            {
+                path: 'termsofservice',
+                loadComponent: () => import('./app/pages/disclaimers/termsofservice/termsofservice.component').then(m => m.TermsOfServiceComponent)
+            },
+            {
+                path: 'refundpolicy',
+                loadComponent: () => import('./app/pages/disclaimers/refundpolicy/refundpolicy.component').then(m => m.RefundPolicyComponent)
+            }
+        ]
+    },
+    {
         path: 'instituto',
         component: AppLayout,
         children: [

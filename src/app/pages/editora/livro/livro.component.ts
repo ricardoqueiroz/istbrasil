@@ -7,6 +7,7 @@ import { HttpClient } from '@angular/common/http';
 import { ButtonModule } from 'primeng/button';
 import { environment } from '../../../../environments/environment'; 
 import { JsonDescriptionPipe } from '../../../pipes/json-description.pipe';
+import { FooterWidget } from 'src/app/shared/footer';
 
 declare var paypal: any; 
 
@@ -17,7 +18,8 @@ declare var paypal: any;
     CommonModule,
     CardModule,
     ButtonModule,
-    JsonDescriptionPipe
+    JsonDescriptionPipe,
+    FooterWidget
   ],
   templateUrl: './livro.component.html',
   styleUrls: ['./livro.component.css']

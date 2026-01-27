@@ -6,6 +6,7 @@ import { ButtonModule } from 'primeng/button';
 import { Obra, ObraService } from '../../../services/obra.service';
 import { Subject } from 'rxjs';
 import { debounceTime, distinctUntilChanged } from 'rxjs/operators';
+import { FooterWidget } from 'src/app/shared/footer';
 
 @Component({
     selector: 'app-obra',
@@ -14,7 +15,8 @@ import { debounceTime, distinctUntilChanged } from 'rxjs/operators';
         CommonModule,
         TableModule,
         InputTextModule,
-        ButtonModule
+        ButtonModule,
+        FooterWidget
     ],
     templateUrl: './obra.component.html',
     styleUrls: ['./obra.component.scss']

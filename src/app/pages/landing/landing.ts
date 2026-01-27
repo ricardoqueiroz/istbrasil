@@ -9,7 +9,7 @@ import { HeroWidget } from './components/herowidget';
 import { FeaturesWidget } from './components/featureswidget';
 import { HighlightsWidget } from './components/highlightswidget';
 import { PricingWidget } from './components/pricingwidget';
-import { FooterWidget } from './components/footerwidget';
+import { FooterWidget } from 'src/app/shared/footer';
 
 @Component({
     selector: 'app-landing',

@@ -28,7 +28,7 @@ import { RippleModule } from 'primeng/ripple';
                     type="button" 
                     label="Onde estamos" 
                     class="text-xl! mt-8 px-4!" 
-                    routerLink="/instituto/localizacao">
+                    routerLink="/localizacao">
                 </button>
             </div>
             <div class="flex justify-center md:justify-end">

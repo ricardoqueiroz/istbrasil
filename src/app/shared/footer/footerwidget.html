@@ -1,0 +1,83 @@
+<div class="py-12 px-12 mx-0 mt-20 lg:mx-20">
+    <div class="grid grid-cols-12 gap-4">
+        <div class="col-span-12 md:col-span-2">
+            <a (click)="navigateAndScrollTop(['/'], { fragment: 'home' })" class="flex flex-wrap items-center justify-center md:justify-start md:mb-0 mb-6 cursor-pointer">
+                <img src="assets/images/selo-small.png" alt="Logo IST" class="h-14 mr-2">
+                <h4 class="font-medium text-3xl text-surface-900 dark:text-surface-0">IST</h4>
+            </a>
+        </div>
+        <div class="col-span-12 md:col-span-10">
+            <div class="grid grid-cols-12 gap-8 text-center md:text-left">
+                <div class="col-span-12 md:col-span-3">
+                    <h4 class="font-medium text-2xl leading-normal mb-6 text-surface-900 dark:text-surface-0">Institucional</h4>
+                    <a (click)="navigateAndScrollTop(['/instituto'], { fragment: 'Quem Somos' })" class="leading-normal text-xl block cursor-pointer mb-2 text-surface-700 dark:text-surface-100">Sobre Nós</a>
+                    <a (click)="navigateAndScrollTop(['/transparencia'], { fragment: 'Transparência' })" class="leading-normal text-xl block cursor-pointer mb-2 text-surface-700 dark:text-surface-100">Transparência</a>
+                    <a (click)="navigateAndScrollTop(['/localizacao'], { fragment: 'Localização' })" class="leading-normal text-xl block cursor-pointer text-surface-700 dark:text-surface-100">Localização</a>
+                </div>
+                <div class="col-span-12 md:col-span-3">
+                    <h4 class="font-medium text-2xl leading-normal mb-6 text-surface-900 dark:text-surface-0">Sebastião Tapajós</h4>
+                    <a (click)="navigateAndScrollTop(['/autorizacao'], { fragment: 'Autorizações musicais' })" class="leading-normal text-xl block cursor-pointer mb-2 text-surface-700 dark:text-surface-100">Autorizações musicais</a>
+                    <a (click)="navigateAndScrollTop(['/editora'], { fragment: 'Livros e partituras' })" class="leading-normal text-xl block cursor-pointer mb-2 text-surface-700 dark:text-surface-100">Livros e partituras</a>
+                    <a (click)="navigateAndScrollTop(['/patrono/biografia'], { fragment: 'Biografia' })" class="leading-normal text-xl block cursor-pointer text-surface-700 dark:text-surface-100">Imagens</a>
+                </div>
+                <div class="col-span-12 md:col-span-3">
+                    <h4 class="font-medium text-2xl leading-normal mb-6 text-surface-900 dark:text-surface-0">Contato</h4>
+                    <a href="https://wa.me/5521966083752" target="_blank" rel="noopener" title="WhatsApp" class="leading-normal text-xl block cursor-pointer mb-2 text-surface-700 dark:text-surface-100">
+                        <i class="fa-brands fa-whatsapp" style="color: #25d366;"></i> WhatsApp
+                    </a>
+                    <a (click)="navigateAndScrollTop(['/editora'], { fragment: 'IST Editora' })" class="leading-normal text-xl block cursor-pointer mb-2 text-surface-700 dark:text-surface-100">
+                        <i class="fa-solid fa-book-open-reader text-2xl! text-slate-700"></i> IST Editora
+                    </a>
+                    <a (click)="navigateAndScrollTop(['/contato'], { fragment: 'Contato' })" class="leading-normal text-xl block cursor-pointer mb-2 text-surface-700 dark:text-surface-100">
+                        <i class="fa-regular fa-address-card"></i> Fale Conosco
+                    </a>
+                    <a (click)="navigateAndScrollTop(['/imprensa'], { fragment: 'Imprensa' })" class="leading-normal text-xl block cursor-pointer text-surface-700 dark:text-surface-100">
+                        <i class="fa-solid fa-newspaper"></i> Imprensa
+                    </a>
+                </div>
+                <div class="col-span-12 md:col-span-3">
+                    <h4 class="font-medium text-2xl leading-normal mb-6 text-surface-900 dark:text-surface-0">Legal</h4>
+                    <a (click)="navigateAndScrollTop(['/disclaimers/brandpolicy'], { fragment: 'Política de Marca' })" class="leading-normal text-xl block cursor-pointer mb-2 text-surface-700 dark:text-surface-100">Política de marca</a>
+                    <a (click)="navigateAndScrollTop(['/disclaimers/privacypolicy'], { fragment: 'Política de Privacidade' })" class="leading-normal text-xl block cursor-pointer mb-2 text-surface-700 dark:text-surface-100">Política de privacidade</a>
+                    <a (click)="navigateAndScrollTop(['/disclaimers/termsofservice'], { fragment: 'Termos de Serviço' })" class="leading-normal text-xl block cursor-pointer text-surface-700 dark:text-surface-100">Termos de Serviço</a>
+                    <a (click)="navigateAndScrollTop(['/disclaimers/refundpolicy'], { fragment: 'Política de Reembolso' })" class="leading-normal text-xl block cursor-pointer text-surface-700 dark:text-surface-100">Política de Reembolso</a>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="grid grid-cols-12 gap-4 mt-8 text-center">
+        <div class="col-span-12">
+            <h4 class="font-medium text-2xl leading-normal mb-4 text-surface-900 dark:text-surface-0">Redes Sociais</h4>
+            <div class="flex justify-center gap-4">
+                <a href="https://www.youtube.com/@institutosebastiaotapajos" target="_blank" rel="noopener" title="YouTube" class="cursor-pointer text-surface-700 dark:text-surface-100 hover:text-primary transition-colors">
+                    <i class="pi pi-youtube !text-3xl"></i>
+                </a>
+                <a href="https://www.facebook.com/institutosebastiaotapajos" target="_blank" rel="noopener" title="Facebook" class="cursor-pointer text-surface-700 dark:text-surface-100 hover:text-primary transition-colors">
+                    <i class="pi pi-facebook !text-3xl"></i>
+                </a>
+                <a href="https://open.spotify.com/intl-pt/artist/2WFZ8Nkgao0Wf9LNztudDW?si=lQAqSQyqR4aup4jvlnI8Xg" target="_blank" rel="noopener" title="Spotify" class="cursor-pointer text-surface-700 dark:text-surface-100 hover:text-primary transition-colors">
+                    <i class="fa-brands fa-spotify !text-3xl"></i>
+                </a>
+                <a href="https://www.instagram.com/institutosebastiaotapajos_ist/" target="_blank" rel="noopener" title="Instagram" class="cursor-pointer text-surface-700 dark:text-surface-100 hover:text-primary transition-colors">
+                    <i class="pi pi-instagram !text-3xl"></i>
+                </a>
+            </div>
+        </div>
+    </div>
+    <div class="grid grid-cols-12 gap-4 mt-12 text-center">
+        <div class="col-span-12">
+            <p class="text-surface-700 dark:text-surface-100 font-bold">INSTITUTO SEBASTIAO TAPAJOS IST</p>
+            <p class="text-surface-700 dark:text-surface-100">
+                CNPJ 28.870.139/0001-05<br>
+                Estrada do Pajuçara, 33 - Praia de pajuçara (Zona Rural)<br>
+                Santarém - PA - Brasil 68005000
+            </p>
+        </div>
+    </div>
+    <div class="grid grid-cols-12 gap-4 mt-8 text-center">
+        <div class="col-span-12">
+            <hr class="mb-4 border-surface-300 dark:border-surface-700" />
+            <p class="text-surface-700 dark:text-surface-100">Copyright (c) Instituto Sebastião Tapajós IST - Todos os direitos reservados.</p>
+        </div>
+    </div>
+</div>

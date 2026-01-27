@@ -1,5 +1,6 @@
 import { Component, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
+import { FooterWidget } from 'src/app/shared/footer';
 
 // Interfaces para tipagem dos dados
 interface TeamMember {
@@ -19,6 +20,7 @@ interface Objective {
   standalone: true,
   imports: [
     CommonModule,
+    FooterWidget,
     // ...other imports if any...
   ],
   templateUrl: './instituto.component.html',

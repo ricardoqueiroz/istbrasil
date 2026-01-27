@@ -2,11 +2,12 @@ import { Component } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { HttpClient } from '@angular/common/http';
 import { environment } from '../../../environments/environment';
+import { FooterWidget } from 'src/app/shared/footer';
 
 @Component({
   selector: 'app-transparencia',
   standalone: true,
-  imports: [CommonModule],
+  imports: [CommonModule, FooterWidget],
   templateUrl: './transparencia.component.html',
   styleUrls: ['./transparencia.component.css']
 })
