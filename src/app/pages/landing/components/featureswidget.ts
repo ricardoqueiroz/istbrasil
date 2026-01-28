@@ -11,7 +11,7 @@ import { AccordionModule } from 'primeng/accordion';
     template: ` <div id="features" class="py-6 px-6 lg:px-20 mt-8 mx-0 lg:mx-20">
         <div class="grid grid-cols-12 gap-4 justify-center">
             <div class="col-span-12 text-center mt-20 mb-6">
-                <div class="text-surface-900 dark:text-surface-0 font-normal mb-2 text-4xl">Conheça o Instituto</div>
+                <div class="text-emerald-900 dark:text-surface-0 font-normal mb-2 text-4xl">Conheça o Instituto</div>
                 <span class="text-muted-color text-2xl">Compromisso com a excelência e inovação</span>
             </div>
             <!-- link para a página /instituto -->
@@ -22,7 +22,7 @@ import { AccordionModule } from 'primeng/accordion';
                             <div class="flex items-center justify-center bg-yellow-200 mb-4" style="width: 3.5rem; height: 3.5rem; border-radius: 10px">
                                 <i class="fa-solid fa-users text-2xl! text-yellow-700"></i>
                             </div>
-                            <div class="mt-6 mb-1 text-surface-900 dark:text-surface-0 text-xl font-semibold">Quem somos</div>
+                            <div class="mt-6 mb-1 text-emerald-900 dark:text-surface-0 text-xl font-semibold">Quem somos</div>
                             <span class="text-surface-600 dark:text-surface-200">Objetivos & princípios.</span>
                         </div>
                     </div>
@@ -36,7 +36,7 @@ import { AccordionModule } from 'primeng/accordion';
                             <div class="flex items-center justify-center bg-cyan-200 mb-4" style="width: 3.5rem; height: 3.5rem; border-radius: 10px">
                                 <i class="fa-solid fa-magnifying-glass-chart text-2xl! text-cyan-700"></i>
                             </div>
-                            <div class="mt-6 mb-1 text-surface-900 dark:text-surface-0 text-xl font-semibold">Transparência</div>
+                            <div class="mt-6 mb-1 text-emerald-900 dark:text-surface-0 text-xl font-semibold">Transparência</div>
                             <span class="text-surface-600 dark:text-surface-200">Informações claras e acessíveis.</span>
                         </div>
                     </div>
@@ -50,7 +50,7 @@ import { AccordionModule } from 'primeng/accordion';
                             <div class="flex items-center justify-center bg-indigo-200" style="width: 3.5rem; height: 3.5rem; border-radius: 10px">
                                 <i class="fa-solid fa-map-location-dot text-2xl! text-indigo-700"></i>
                             </div>
-                            <div class="mt-6 mb-1 text-surface-900 dark:text-surface-0 text-xl font-semibold">Localização</div>
+                            <div class="mt-6 mb-1 text-emerald-900 dark:text-surface-0 text-xl font-semibold">Localização</div>
                             <span class="text-surface-600 dark:text-surface-200">Santarém - Pará - Brasil</span>
                         </div>
                     </div>
@@ -64,7 +64,7 @@ import { AccordionModule } from 'primeng/accordion';
                             <div class="flex items-center justify-center bg-slate-200 mb-4" style="width: 3.5rem; height: 3.5rem; border-radius: 10px">
                                 <i class="fa-solid fa-book-open-reader text-2xl! text-slate-700"></i>
                             </div>
-                            <div class="mt-6 mb-1 text-surface-900 dark:text-surface-0 text-xl font-semibold">IST Editora</div>
+                            <div class="mt-6 mb-1 text-emerald-900 dark:text-surface-0 text-xl font-semibold">IST Editora</div>
                             <span class="text-surface-600 dark:text-surface-200">Publicações e conteúdos culturais.</span>
                         </div>
                     </div>
@@ -78,7 +78,7 @@ import { AccordionModule } from 'primeng/accordion';
                             <div class="flex items-center justify-center bg-orange-200 mb-4" style="width: 3.5rem; height: 3.5rem; border-radius: 10px">
                                 <i class="fa-solid fa-calendar-days text-2xl! text-orange-700"></i>
                             </div>
-                            <div class="mt-6 mb-1 text-surface-900 dark:text-surface-0 text-xl font-semibold">Eventos</div>
+                            <div class="mt-6 mb-1 text-emerald-900 dark:text-surface-0 text-xl font-semibold">Eventos</div>
                             <span class="text-surface-600 dark:text-surface-200">Eventos apoiados & programação.</span>
                         </div>
                     </div>
@@ -92,7 +92,7 @@ import { AccordionModule } from 'primeng/accordion';
                             <div class="flex items-center justify-center bg-pink-200 mb-4" style="width: 3.5rem; height: 3.5rem; border-radius: 10px">
                                 <i class="fa-solid fa-children text-2xl! text-pink-700"></i>
                             </div>
-                            <div class="mt-6 mb-1 text-surface-900 dark:text-surface-0 text-xl font-semibold">Projetos</div>
+                            <div class="mt-6 mb-1 text-emerald-900 dark:text-surface-0 text-xl font-semibold">Projetos</div>
                             <span class="text-surface-600 dark:text-surface-200">Gestão de recursos e projetos.</span>
                         </div>
                     </div>
@@ -106,7 +106,7 @@ import { AccordionModule } from 'primeng/accordion';
             >
                 <div class="block h-full">
                     <div class="flex flex-col justify-center items-center text-center px-4 py-4 md:py-0">
-                        <div class="text-surface-900 dark:text-surface-0 font-normal mb-2 text-4xl">Sebastião Tapajós</div>
+                        <div class="text-emerald-900 dark:text-surface-0 font-normal mb-2 text-4xl">Sebastião Tapajós</div>
                         <span class="text-muted-color text-2xl">Exemplo de dedicação e talento</span>
                         <img src="/assets/images/st-banner.jpg" class="mt-6 mb-6 rounded-2xl shadow-xl !max-w-full h-auto" alt="Sebastião Tapajós" />
                         <div class="text-gray-900 mb-2 text-3xl font-semibold">Vida & Obra</div>
@@ -121,7 +121,7 @@ import { AccordionModule } from 'primeng/accordion';
                         </div>
 
                         <div class="text-center mt-8">
-                            <div class="text-surface-900 dark:text-surface-0 font-normal mb-2 text-4xl">Reconhecimento da Obra</div>
+                            <div class="text-emerald-900 dark:text-surface-0 font-normal mb-2 text-4xl">Reconhecimento da Obra</div>
                             <span class="text-muted-color text-2xl">Patrimônio Cultural</span>
                         </div>
 

@@ -1,5 +1,102 @@
-:root {
+
+/* Força modo claro para todo o site */
+:root, html, body {
+    /* Reset para modo claro */
+    --p-surface-100: #f8fafc;
+    --p-surface-900: #fff;
+    --p-surface-950: #f8fafc;
+    --p-surface-800: #f1f5f9;
+    --p-surface-200: #e2e8f0;
+    --p-content-background: #fff;
+    --p-content-border-color: #e5e7eb;
+    --p-content-hover-background: #f1f5f9;
+    --p-overlay-popover-background: #fff;
+    --p-mask-background: rgba(0,0,0,0.2);
+    --p-primary-color: #10b981;
+    --p-primary-contrast-color: #fff;
+    --p-text-color: #10b981 !important;
+    --text-color: #055723 !important;
+    --p-text-muted-color: #64748b;
+    --p-focus-ring-width: 2px;
+    --p-focus-ring-style: solid;
+    --p-focus-ring-color: #10b981;
+    --p-focus-ring-offset: 2px;
+    --p-focus-ring-shadow: 0 0 0 2px #10b98133;
+    --p-transition-duration: 0.2s;
+    --p-content-border-radius: 0.75rem;
+
     --surface-ground: var(--p-surface-100);
-    --code-background: var(--p-surface-900);
+    --surface-card: var(--p-content-background);
+    --surface-border: var(--p-content-border-color);
+    --surface-hover: var(--p-content-hover-background);
+    --surface-overlay: var(--p-overlay-popover-background);
+    --maskbg: var(--p-mask-background);
+    --primary-color: var(--p-primary-color);
+    --primary-contrast-color: var(--p-primary-contrast-color);
+    --text-color: var(--p-text-color);
+    --text-color-secondary: var(--p-text-muted-color);
+    --content-border-radius: var(--p-content-border-radius);
+    --layout-section-transition-duration: 0.2s;
+    --element-transition-duration: var(--p-transition-duration);
+    --focus-ring-width: var(--p-focus-ring-width);
+    --focus-ring-style: var(--p-focus-ring-style);
+    --focus-ring-color: var(--p-focus-ring-color);
+    --focus-ring-offset: var(--p-focus-ring-offset);
+    --focus-ring-shadow: var(--p-focus-ring-shadow);
+    --code-background: var(--p-surface-800);
     --code-color: var(--p-surface-200);
 }
+
+
+    :root {
+        /* PrimeNG/Tailwind padrão para tema claro */
+        --p-surface-0: #ffffff;
+        --p-surface-50: #f8fafc;
+        --p-surface-100: #f1f5f9;
+        --p-surface-200: #e2e8f0;
+        --p-surface-300: #cbd5e1;
+        --p-surface-400: #94a3b8;
+        --p-surface-500: #64748b;
+        --p-surface-600: #475569;
+        --p-surface-700: #334155;
+        --p-surface-800: #1e293b;
+        --p-surface-900: #0f172a;
+        --p-surface-950: #020617;
+        --p-primary-color: #10b981;
+        --p-primary-contrast-color: #ffffff;
+        --p-content-background: #ffffff;
+        --p-content-border-color: #e5e7eb;
+        --p-content-hover-background: #f1f5f9;
+        --p-overlay-popover-background: #ffffff;
+        --p-mask-background: rgba(0,0,0,0.2);
+        --p-text-color: #334155;
+        --p-text-muted-color: #64748b;
+        --p-focus-ring-width: 2px;
+        --p-focus-ring-style: solid;
+        --p-focus-ring-color: #10b981;
+        --p-focus-ring-offset: 2px;
+        --p-focus-ring-shadow: 0 0 0 2px #10b98133;
+        --p-transition-duration: 0.2s;
+        --p-content-border-radius: 0.75rem;
+
+        --surface-ground: var(--p-surface-100);
+        --surface-card: var(--p-content-background);
+        --surface-border: var(--p-content-border-color);
+        --surface-hover: var(--p-content-hover-background);
+        --surface-overlay: var(--p-overlay-popover-background);
+        --maskbg: var(--p-mask-background);
+        --primary-color: var(--p-primary-color);
+        --primary-contrast-color: var(--p-primary-contrast-color);
+        --text-color: var(--p-text-color);
+        --text-color-secondary: var(--p-text-muted-color);
+        --content-border-radius: var(--p-content-border-radius);
+        --layout-section-transition-duration: 0.2s;
+        --element-transition-duration: var(--p-transition-duration);
+        --focus-ring-width: var(--p-focus-ring-width);
+        --focus-ring-style: var(--p-focus-ring-style);
+        --focus-ring-color: var(--p-focus-ring-color);
+        --focus-ring-offset: var(--p-focus-ring-offset);
+        --focus-ring-shadow: var(--p-focus-ring-shadow);
+        --code-background: var(--p-surface-50);
+        --code-color: var(--p-surface-700);
+    }

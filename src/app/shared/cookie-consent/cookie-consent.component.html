@@ -3,12 +3,12 @@
     <div class="flex flex-col md:flex-row items-center justify-between gap-4 p-4 md:p-6">
       <div class="flex-1 text-center md:text-left">
         <span class="text-lg md:text-xl text-surface-800 dark:text-surface-0">
-          Utilizamos cookies para melhorar sua experiência. Ao continuar navegando, você concorda com nossa <a routerLink="/disclaimers/privacypolicy" class="underline text-primary font-semibold">Política de Privacidade</a> em conformidade com a LGPD.
+          Utilizamos cookies para melhorar sua experiência. Ao continuar navegando, você concorda com nossa <a href="/disclaimers/privacypolicy" class="underline text-primary font-semibold">Política de Privacidade</a> em conformidade com a LGPD.
         </span>
       </div>
-      <div class="flex gap-2 mt-4 md:mt-0">
-        <button pButton type="button" label="Aceitar Todos" class="p-button-success" (click)="acceptAll()"></button>
-        <button pButton type="button" label="Recusar Opcionais" class="p-button-secondary" (click)="rejectOptional()"></button>
+      <div class="flex gap-2 mt-4 md:mt-0 min-h-[48px] min-w-[260px] items-center justify-center">
+        <button pButton type="button" label="Aceitar Todos" class="p-button-success" style="min-width:120px; min-height:40px; font-size:1rem; padding:0.5rem 1rem;" (click)="acceptAll()">Aceitar Todos</button>
+        <button pButton type="button" label="Recusar Opcionais" class="p-button-secondary" style="min-width:120px; min-height:40px; font-size:1rem; padding:0.5rem 1rem;" (click)="rejectOptional()">Recusar Opcionais</button>
       </div>
     </div>
   </div>

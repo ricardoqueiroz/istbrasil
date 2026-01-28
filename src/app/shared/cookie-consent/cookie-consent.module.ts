@@ -5,8 +5,7 @@ import { RouterModule } from '@angular/router';
 import { CookieConsentComponent } from './cookie-consent.component';
 
 @NgModule({
-  declarations: [CookieConsentComponent],
-  imports: [CommonModule, ButtonModule, RouterModule],
+  imports: [CommonModule, ButtonModule, RouterModule, CookieConsentComponent],
   exports: [CookieConsentComponent]
 })
 export class CookieConsentModule2 {}
