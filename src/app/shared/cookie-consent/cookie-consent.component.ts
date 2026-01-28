@@ -1,11 +1,11 @@
 import { Component } from '@angular/core';
-import { CommonModule } from '@angular/common';
+
 import { CookieService } from '../cookie.service';
 
 @Component({
   selector: 'p-cookie-consent',
   standalone: true,
-  imports: [CommonModule],
+  imports: [],
   providers: [CookieService],
   templateUrl: './cookie-consent.component.html',
   styleUrls: ['./cookie-consent.component.css']
