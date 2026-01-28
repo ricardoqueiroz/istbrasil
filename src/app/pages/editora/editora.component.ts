@@ -91,14 +91,14 @@ export class EditoraComponent implements OnInit {
     return html;
   }
 
-  getSeverity(book: Book): 'success' | 'warning' | 'danger' | 'info' | 'secondary' | 'contrast' | undefined {
+  getSeverity(book: Book): 'success' | 'warn' | 'danger' | 'info' | 'secondary' | 'contrast' | undefined {
     // Verifica inventory ou inventoryStatus
     const status = book.inventory || book.inventoryStatus;
     switch (status) {
         case 'Em estoque':
             return 'success';
         case 'Poucas unidades':
-            return 'warning';
+            return 'warn';
         case 'Esgotado':
             return 'danger';
         default:
