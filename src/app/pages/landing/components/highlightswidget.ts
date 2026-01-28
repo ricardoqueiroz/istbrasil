@@ -8,7 +8,7 @@ import { RouterModule } from '@angular/router';
     template: `
         <div id="highlights" class="py-6 px-6 lg:px-20 mx-0 my-12 lg:mx-20">
             <div class="text-center mb-8">
-                <div class="text-surface-900 dark:text-surface-0 font-normal mb-2 text-4xl">Divulgação da Obra</div>
+                <div class="text-emerald-900 dark:text-surface-0 font-normal mb-2 text-4xl">Divulgação da Obra</div>
                 <span class="text-muted-color text-2xl">Sebastião Tapajós</span>
             </div>
 
@@ -16,7 +16,7 @@ import { RouterModule } from '@angular/router';
                 <a [routerLink]="['/editora']" class="no-underline">
                     <div class="grid grid-cols-12 gap-4 mb-10 p-6 md:p-10 items-center bg-surface-0 dark:bg-surface-900 shadow-lg rounded-3xl border border-surface-200 dark:border-surface-700">
                         <div class="col-span-12 lg:col-span-8 text-left">
-                            <div class="leading-none text-surface-900 dark:text-surface-0 text-3xl font-bold mb-4" style="color: var(--color-yellow-500)">Livro Partituras Sebastião Tapajós</div>
+                            <div class="leading-none text-emerald-900 dark:text-surface-0 text-3xl font-bold mb-4" style="color: var(--color-yellow-500)">Livro Partituras Sebastião Tapajós</div>
                             <div class="text-surface-700 dark:text-surface-100 text-2xl leading-normal">
                                 <div class="mb-4">
                                     <strong style="color: var(--p-gray-400)">E-book em formato PDF, A4 , 424 páginas.</strong>

@@ -9,7 +9,7 @@ import { RippleModule } from 'primeng/ripple';
     template: `
         <div id="pricing" class="py-6 px-6 lg:px-20 my-2 md:my-6">
             <div class="text-center mb-6">
-                <div class="text-surface-900 dark:text-surface-0 font-normal mb-2 text-4xl">Conheça Santarém</div>
+                <div class="text-emerald-900 dark:text-surface-0 font-normal mb-2 text-4xl">Conheça Santarém</div>
                 <span class="text-muted-color text-2xl">Ecoturismo, cultura e negócios</span>
             </div>
 
@@ -17,11 +17,11 @@ import { RippleModule } from 'primeng/ripple';
                 <div class="col-span-12 lg:col-span-4 p-0 md:p-4">
                     <a href="https://turismo.santarem.pa.gov.br/" target="_blank" rel="noopener noreferrer" class="no-underline">
                         <div class="p-4 flex flex-col border-surface-200 dark:border-surface-600 pricing-card border-2 hover:border-primary duration-300 transition-all h-full" style="border-radius: 10px">
-                            <div class="text-surface-900 dark:text-surface-0 text-center my-8 text-3xl">Santarém</div>
+                            <div class="text-emerald-900 dark:text-surface-0 text-center my-8 text-3xl">Santarém</div>
                             <img src="/assets/images/alter.png" class="w-10/12 mx-auto" alt="Alter do Chão" />
                             <div class="my-8 flex flex-col items-center gap-4"></div>
                             <p-divider class="w-full bg-surface-200"></p-divider>
-                            <ul class="my-8 list-none p-0 flex text-surface-900 dark:text-surface-0 flex-col px-8">
+                            <ul class="my-8 list-none p-0 flex text-emerald-900 dark:text-surface-0 flex-col px-8">
                                 <li class="py-2">
                                     <i class="pi pi-fw pi-check text-xl text-cyan-500 mr-2"></i>
                                     <span class="text-xl leading-normal">Ilha do Amor</span>
@@ -46,11 +46,11 @@ import { RippleModule } from 'primeng/ripple';
                 <div class="col-span-12 lg:col-span-4 p-0 md:p-4 mt-6 md:mt-0">
                     <a href="https://www.facebook.com/p/Centro-de-Conven%C3%A7%C3%B5es-de-Santar%C3%A9m-Sebasti%C3%A3o-Tapaj%C3%B3s-61565020076617/" target="_blank" rel="noopener noreferrer" class="no-underline">
                         <div class="p-4 flex flex-col border-surface-200 dark:border-surface-600 pricing-card border-2 hover:border-primary duration-300 transition-all h-full" style="border-radius: 10px">
-                            <div class="text-surface-900 dark:text-surface-0 text-center my-8 text-3xl">Centro de Convenções</div>
+                            <div class="text-emerald-900 dark:text-surface-0 text-center my-8 text-3xl">Centro de Convenções</div>
                             <img src="/assets/images/centro-convencoes.png" class="w-10/12 mx-auto" alt="Centro de Convenções" />
                             <div class="my-8 flex flex-col items-center gap-4"></div>
                             <p-divider class="w-full bg-surface-200"></p-divider>
-                            <ul class="my-8 list-none p-0 flex text-surface-900 dark:text-surface-0 flex-col px-8">
+                            <ul class="my-8 list-none p-0 flex text-emerald-900 dark:text-surface-0 flex-col px-8">
                                 <li class="py-2">
                                     <i class="pi pi-fw pi-check text-xl text-cyan-500 mr-2"></i>
                                     <span class="text-xl leading-normal">Polo de Negócios e Cultura</span>
@@ -75,11 +75,11 @@ import { RippleModule } from 'primeng/ripple';
                 <div class="col-span-12 lg:col-span-4 p-0 md:p-4 mt-6 md:mt-0">
                     <a href="https://www.gov.br/icmbio/pt-br/assuntos/biodiversidade/unidade-de-conservacao/unidades-de-biomas/amazonia/lista-de-ucs/flona-do-tapajos" target="_blank" rel="noopener noreferrer" class="no-underline">
                         <div class="p-4 flex flex-col border-surface-200 dark:border-surface-600 pricing-card border-2 hover:border-primary duration-300 transition-all h-full" style="border-radius: 10px">
-                            <div class="text-surface-900 dark:text-surface-0 text-center my-8 text-3xl">Floresta Nacional do Tapajós</div>
+                            <div class="text-emerald-900 dark:text-surface-0 text-center my-8 text-3xl">Floresta Nacional do Tapajós</div>
                             <img src="/assets/images/sumauma.png" class="w-10/12 mx-auto" alt="Sumaúma" />
                             <div class="my-8 flex flex-col items-center gap-4"></div>
                             <p-divider class="w-full bg-surface-200"></p-divider>
-                            <ul class="my-8 list-none p-0 flex text-surface-900 dark:text-surface-0 flex-col px-8">
+                            <ul class="my-8 list-none p-0 flex text-emerald-900 dark:text-surface-0 flex-col px-8">
                                 <li class="py-2">
                                     <i class="pi pi-fw pi-check text-xl text-cyan-500 mr-2"></i>
                                     <span class="text-xl leading-normal">Igarapés de águas claras</span>

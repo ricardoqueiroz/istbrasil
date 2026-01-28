@@ -131,7 +131,7 @@ import { AccordionModule } from 'primeng/accordion';
                                     <p-accordion-header>
                                         <div  class="flex items-center text-left">
                                             <img src="/assets/images/brasao-federal.png" class="!max-w-[50px] h-fit mr-4" alt="Brasão Federal" />
-                                            <div class="leading-none text-surface-900 dark:text-surface-0 text-2xl font-normal mb-4 text-left">Manifestação da Cultura Nacional</div>
+                                            <div class="leading-none text-emerald-900 dark:text-surface-0 text-2xl font-normal mb-4 text-left">Manifestação da Cultura Nacional</div>
                                         </div>
                                     </p-accordion-header>
                                     <p-accordion-content>
@@ -153,7 +153,7 @@ import { AccordionModule } from 'primeng/accordion';
                                     <p-accordion-header>
                                         <div  class="flex items-center text-left">
                                             <img src="/assets/images/brasao-estadual.png" class="!max-w-[50px] h-fit mr-4" alt="Brasão Estadual" />
-                                            <div class="leading-none text-surface-900 dark:text-surface-0 text-2xl font-normal mb-4">Patrimônio Cultural Imaterial do Estado do Pará</div>
+                                            <div class="leading-none text-emerald-900 dark:text-surface-0 text-2xl font-normal mb-4">Patrimônio Cultural Imaterial do Estado do Pará</div>
                                         </div>
                                     </p-accordion-header>
                                     <p-accordion-content>
@@ -175,7 +175,7 @@ import { AccordionModule } from 'primeng/accordion';
                                     <p-accordion-header>
                                         <div  class="flex items-center text-left">
                                             <img src="/assets/images/brasao-municipal.png" class="!max-w-[50px] h-fit mr-4" alt="Brasão Municipal" />
-                                            <div class="leading-none text-surface-900 dark:text-surface-0 text-2xl font-normal mb-4 text-left">Patrimônio Cultural Imaterial do Município de Santarém</div>
+                                            <div class="leading-none text-emerald-900 dark:text-surface-0 text-2xl font-normal mb-4 text-left">Patrimônio Cultural Imaterial do Município de Santarém</div>
                                         </div>
                                     </p-accordion-header>
                                     <p-accordion-content>
