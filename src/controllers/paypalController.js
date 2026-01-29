@@ -1,6 +1,11 @@
+
 import 'dotenv/config';
 import axios from 'axios';
 import { pool as db } from '../config/db.js';
+
+// Variável global para armazenar o access_token e expiração
+let PAYPAL_ACCESS_TOKEN = null;
+let PAYPAL_ACCESS_TOKEN_EXP = 0;
 
 // Captura as variáveis de ambiente
 const { 
@@ -23,16 +28,35 @@ async function generateAccessToken() {
         throw new Error("Credenciais do PayPal não encontradas no .env");
     }
 
+    // Se já existe um token válido, retorna ele
+    const now = Date.now();
+    if (PAYPAL_ACCESS_TOKEN && PAYPAL_ACCESS_TOKEN_EXP > now) {
+        console.log("🔑 Usando token de acesso PayPal em cache:" + PAYPAL_ACCESS_TOKEN);
+        return PAYPAL_ACCESS_TOKEN;
+    }
+
     const auth = Buffer.from(PAYPAL_CLIENT_ID + ":" + PAYPAL_CLIENT_SECRET).toString("base64");
-    
     try {
+        console.log("🔑 Gerando novo token de acesso PayPal...");
+        console.log(`${PAYPAL_API_URL}/v2/oauth2/token`, "grant_type=client_credentials", {
+            headers: {
+                Authorization: `Basic ${auth}`,
+                "Content-Type": "application/x-www-form-urlencoded",
+            },
+        });
+
         const response = await axios.post(`${PAYPAL_API_URL}/v2/oauth2/token`, "grant_type=client_credentials", {
             headers: {
                 Authorization: `Basic ${auth}`,
                 "Content-Type": "application/x-www-form-urlencoded",
             },
         });
-        return response.data.access_token;
+        // Calcula expiração (PayPal retorna expires_in em segundos)
+        const expiresIn = response.data.expires_in || 3600; // fallback 1h
+        PAYPAL_ACCESS_TOKEN = response.data.access_token;
+        PAYPAL_ACCESS_TOKEN_EXP = now + (expiresIn - 60) * 1000; // 1 min de margem
+        console.log("✅ Token PayPal gerado com sucesso:", PAYPAL_ACCESS_TOKEN);
+        return PAYPAL_ACCESS_TOKEN;
     } catch (error) {
         console.error("❌ Erro ao gerar token PayPal:", error.response ? error.response.data : error.message);
         throw new Error("Falha na autenticação com PayPal");

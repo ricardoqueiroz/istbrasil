@@ -72,7 +72,11 @@ export class LivroComponent implements OnInit {
     paypal.Buttons({
       // --- CRIAÇÃO DO PEDIDO ---
       createOrder: async (data: any, actions: any) => {
+        
         console.log('[PayPal] Criando ordem...');
+
+        // Neste ponto chame a função generateAccessToken em paypalController.js para obter o access_token do paypal e armazene em uma variável local
+        let accessToken = '';
         
         // Tratamento seguro da descrição para não quebrar o fluxo se o Pipe falhar
         let descr = '';
