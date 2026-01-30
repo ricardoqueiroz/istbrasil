@@ -59,6 +59,8 @@ async function generateAccessToken() {
         return PAYPAL_ACCESS_TOKEN;
     } catch (error) {
         console.error("❌ Erro ao gerar token PayPal:", error.response ? error.response.data : error.message);
+        let errorStr = JSON.stringify(error, null, 2);
+        console.error("Detalhes do erro:", errorStr);
         throw new Error("Falha na autenticação com PayPal");
     }
 }
