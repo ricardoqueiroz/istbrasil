@@ -242,12 +242,19 @@ const createOrder = async (req, res) => {
             }
         };
 
+        // debug: Log da requisição
+        console.log("[PayPal CreateOrder] POST " + PAYPAL_API_URL + "/v2/checkout/orders");
+        console.log("[PayPal CreateOrder] Usando Access Token: " + accessToken);    
+        console.log("[PayPal CreateOrder] Payload:", JSON.stringify(payload, null, 2));
+
         const response = await axios.post(`${PAYPAL_API_URL}/v2/checkout/orders`, payload, {
             headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
         });
         res.json(response.data);
     } catch (error) {
         // Log detalhado do erro do PayPal
+        let errorStr = JSON.stringify(error);
+        console.error("[PayPal CreateOrder] ", errorStr);
         if (error.response) {
             console.error("[PayPal CreateOrder] Status:", error.response.status);
             console.error("[PayPal CreateOrder] StatusText:", error.response.statusText);
@@ -273,6 +280,10 @@ const captureOrder = async (req, res) => {
     const { orderID } = req.body;
     try {
         const accessToken = await generateAccessToken();
+
+        // Debug: Log da requisição de captura
+        console.log(`[CaptureOrder] POST ${PAYPAL_API_URL}/v2/checkout/orders/${orderID}/capture`);
+        console.log(`[CaptureOrder] Usando Access Token: ${accessToken}`);
         
         // 1. Captura o pagamento
         const captureResponse = await axios.post(`${PAYPAL_API_URL}/v2/checkout/orders/${orderID}/capture`, {}, {
@@ -291,8 +302,11 @@ const captureOrder = async (req, res) => {
         res.json(fullOrder);
         
     } catch (error) {
+
+        let errorStr = JSON.stringify(error, null, 2);
+        console.log("Erro CaptureOrder PayPal Response:", errorStr);
+
         if (error.response) {
-            console.error("Erro CaptureOrder:", JSON.stringify(error.response.data));
             res.status(error.response.status).json(error.response.data);
         } else {
             console.error("Erro CaptureOrder Genérico:", error.message);
