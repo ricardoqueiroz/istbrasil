@@ -62,6 +62,13 @@
           </div>
         </section>
 
+        <section class="text-center max-w-4xl mb-8 mx-auto p-6 bg-yellow-50 border border-yellow-100 rounded-2xl shadow-sm flex flex-col items-center">
+          <h2 class="text-2xl font-bold text-red-600 mb-4 w-full flex justify-center" style="color: red !important;">ATENÇÃO</h2>
+          <p class="text-slate-600 text-lg max-w-2xl mx-auto w-full flex justify-center font-bold">
+            Nossa editora está em fase inicial de desenvolvimento. Em breve, disponibilizaremos nosso catálogo completo de livros digitais para venda direta em nosso site. Enquanto isso, sugerimos que você entre em contato por WhatsApp caso tenha interesse em adquirir algum título.
+          </p>
+        </section>
+
         <section class="max-w-6xl mx-auto">
             <div class="flex items-center justify-between mb-6">
                 <h3 class="text-2xl font-bold text-slate-800">Nosso Catálogo</h3>
@@ -150,8 +157,10 @@
                                     <span class="text-2xl font-bold text-emerald-600">{{ 'R$ ' + book.price }}</span>
                                     <div class="flex gap-2">
                                         <p-button icon="pi pi-heart" severity="secondary" [outlined]="true"></p-button>
+                                        <!--
                                         <p-button icon="pi pi-shopping-cart" class="flex-auto whitespace-nowrap" [disabled]="book.inventoryStatus === 'OUTOFSTOCK'"
                                         [routerLink]="['/editora/livro', book.id]"></p-button>
+                                        -->
                                     </div>
                                 </div>
                             </div>

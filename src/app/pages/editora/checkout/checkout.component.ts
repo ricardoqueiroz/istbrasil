@@ -44,6 +44,11 @@ export class CheckoutComponent implements OnInit {
       message: "O cartão foi recusado pelo processador de pagamentos ou pelo banco, ou não pode ser usado para este pagamento.",
       type: 'warning'
     },
+    'PAYEE_ACCOUNT_RESTRICTED': {
+      title: "Estamos com problemas técnicos",
+      message: "A sua compra não pôde ser concluída no momento; tente novamente mais tarde ou entre em contato pelo WhatsApp. O suporte já foi avisado.",
+      type: 'warning'
+    },
     'TRANSACTION_REFUSED': {
       title: "Transação recusada pelo emissor do cartão.",
       message: "A instituição financeira recusou o uso do cartão. Entre em contato com seu banco ou tente outra forma de pagamento.",
@@ -70,9 +75,9 @@ export class CheckoutComponent implements OnInit {
       type: 'warning'
     },
     'DEFAULT': {
-      title: "Status do Pedido",
-      message: "Verifique o status da sua compra em seu e-mail.",
-      type: 'info'
+      title: "Não foi possível processar sua compra",
+      message: "Verifique o meio de pagamento usado e tente novamente.",
+      type: 'error'
     }
   };
 

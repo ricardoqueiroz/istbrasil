@@ -138,13 +138,13 @@ export class LivroComponent implements OnInit {
                 body: JSON.stringify({ orderID: data.orderID })
             });
 
-            const details = await response.json();
+            const paypalreturn = await response.json();
 
             if (!response.ok) {
                 // Se o backend retornar erro (ex: cartão recusado na captura)
-                console.error('[PayPal] Erro na captura:', details);
+                console.error('[PayPal] Erro na captura:', paypalreturn);
 
-                const issue = details?.details?.[0]?.issue;
+                const issue = paypalreturn?.details?.[0]?.issue;
                 const code = issue || 'CAPTURE_ERROR';
                 this.router.navigate(['/editora/checkout'], { queryParams: { code: code } });
                 return;
@@ -162,7 +162,7 @@ export class LivroComponent implements OnInit {
                 */
             }
 
-            console.log('[PayPal] Pagamento capturado com sucesso:', details);
+            console.log('[PayPal] Pagamento capturado com sucesso:', paypalreturn);
 
             // Preparando categoria para exibição no sucesso
             let catDisplay = 'Livro Digital';
@@ -176,7 +176,7 @@ export class LivroComponent implements OnInit {
                 queryParams: { 
                     code: 'SUCCESS', 
                     // O ID da ordem vem na raiz do objeto retornado pelo controller
-                    orderId: details.id, 
+                    orderId: paypalreturn.id, 
                     bookTitle: this.livro.title,
                     bookCategory: catDisplay,
                     bookImg: this.livro.img,
