@@ -34,6 +34,26 @@ export class CheckoutComponent implements OnInit {
       message: "Clique no botão 'Baixar Livro' para receber o seu livro digital. Guarde o número do seu pedido em segurança pois ele será necessário caso precise baixar novamente.",
       type: 'success'
     },
+    'INSUFFICIENT_FUNDS': {
+      title: "Cartão sem saldo suficiente",
+      message: "A instituição informou que não é possível autorizar sua compra. Tente novamente com outro cartão ou outra forma de pagamento.",
+      type: 'warning'
+    },
+    'INSTRUMENT_DECLINED': {
+      title: "Pagamento recusado",
+      message: "O cartão foi recusado pelo processador de pagamentos ou pelo banco, ou não pode ser usado para este pagamento.",
+      type: 'warning'
+    },
+    'TRANSACTION_REFUSED': {
+      title: "Transação recusada pelo emissor do cartão.",
+      message: "A instituição financeira recusou o uso do cartão. Entre em contato com seu banco ou tente outra forma de pagamento.",
+      type: 'warning'
+    },
+    'PAYER_ACTION_REQUIRED': {
+      title: "Transação não pode ser concluída no momento.",
+      message: "Sua compra não pode ser concluída no momento. Retorne a página de compra e tente outra forma de pagamento.",
+      type: 'error'
+    },
     'CREATE_ERROR': {
       title: "Tivemos um problema técnico",
       message: "Pedimos desculpas, mas não foi possível iniciar seu pedido neste momento. Nosso suporte já foi avisado. Tente novamente mais tarde.",

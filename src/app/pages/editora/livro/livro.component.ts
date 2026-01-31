@@ -143,10 +143,23 @@ export class LivroComponent implements OnInit {
             if (!response.ok) {
                 // Se o backend retornar erro (ex: cartão recusado na captura)
                 console.error('[PayPal] Erro na captura:', details);
-                throw { 
-                    type: details.errorType || 'CAPTURE_ERROR', 
-                    details: details 
+
+                const issue = details?.details?.[0]?.issue;
+                const code = issue || 'CAPTURE_ERROR';
+                this.router.navigate(['/editora/checkout'], { queryParams: { code: code } });
+                return;
+
+                /*
+                if (issue === 'INSTRUMENT_DECLINED') {
+                    console.warn('Cartão recusado. Tentando novamente.');
+                    // PayPal recomenda retry
+                    return actions.restart();
+                } else {
+                    const code = issue || 'CAPTURE_ERROR';
+                    this.router.navigate(['/editora/checkout'], { queryParams: { code: code } });
+                    return;
                 };
+                */
             }
 
             console.log('[PayPal] Pagamento capturado com sucesso:', details);
