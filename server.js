@@ -16,6 +16,7 @@ import releaseRoutes from './src/routes/releases.routes.js';
 import timelineRoutes from './src/routes/timeline.routes.js';
 import obraRoutes from './src/routes/obra.routes.js';
 import paypalRoutes from './src/routes/paypal.routes.js';
+import contactRoutes from './routes/contact.routes';
 
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
@@ -26,6 +27,7 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 app.use(bodyParser.json());
+app.use('/api', contactRoutes);
 
 // --- Configuração do Paypal ---
 const {
