@@ -113,6 +113,31 @@ import { AccordionModule } from 'primeng/accordion';
                         <p class="text-gray-900 sm:line-height-2 md:line-height-4 text-2xl mt-6" style="max-width: 800px">
                             O encontro perfeito entre a alma brasileira e a técnica universal. Em mais de 50 anos de carreira, levou a cultura amazônica para dialogar com o Jazz e a música erudita mundial. Descubra a história, as lutas e as glórias deste ícone que carregou o nome de um rio e a força de um povo.
                         </p>
+                        <!-- Destaque para o Leitor Digital do Livro -->
+                        <div class="mt-8 mb-6 flex flex-col items-center w-full" style="max-width: 800px;">
+                            <a routerLink="/flipbooks/book01" class="group flex flex-col md:flex-row items-center justify-between p-6 bg-white/90 dark:bg-slate-800/90 rounded-2xl border-2 border-emerald-200 dark:border-slate-700 shadow-xl hover:shadow-2xl hover:border-emerald-500 dark:hover:border-emerald-400 transition-all duration-300 transform hover:-translate-y-1 w-full gap-6">
+                                <div class="flex flex-col items-center md:items-start text-center md:text-left grow">
+                                    <div class="inline-flex items-center gap-2 px-3.5 py-1.5 bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300 rounded-full text-sm font-semibold mb-3 border border-emerald-200 dark:border-emerald-800">
+                                        <i class="fa-solid fa-book-open-reader"></i>
+                                        <span>Leitor Digital</span>
+                                    </div>
+                                    <span class="text-2xl md:text-3xl font-bold text-slate-800 dark:text-white mb-2 group-hover:text-emerald-700 dark:group-hover:text-emerald-400 transition-colors">
+                                        Sebastião de Todo o Tapajós
+                                    </span>
+                                    <p class="text-slate-600 dark:text-slate-300 text-base md:text-lg mb-4">
+                                        Explore as páginas, partituras e registros históricos do livro oficial em nossa plataforma de leitura interativa.
+                                    </p>
+                                    <span class="inline-flex items-center gap-2 text-white font-bold text-sm px-5 py-2.5 bg-emerald-600 group-hover:bg-emerald-700 rounded-lg shadow-md transition-colors">
+                                        <span>Abrir Livro Digital</span>
+                                        <i class="pi pi-arrow-right text-xs"></i>
+                                    </span>
+                                </div>
+                                <div class="relative shrink-0 overflow-hidden rounded-lg shadow-2xl border-2 border-slate-200 dark:border-slate-700 group-hover:border-emerald-500 transition-colors">
+                                    <img src="assets/flipbooks/book01/p_001.png" alt="Capa do livro Sebastião de Todo o Tapajós" class="w-44 sm:w-52 md:w-56 h-auto object-cover transform group-hover:scale-105 transition-transform duration-300" />
+                                </div>
+                            </a>
+                        </div>
+
                         <!-- Links para as páginas /patrono/biografia, /patrono/obra, /patrono/museu -->
                         <div class="mt-8 flex flex-col md:flex-row gap-8 justify-center" style="max-width: 800px; width: 100%;">
                             <a routerLink="/patrono/biografia" class="px-6 py-3 bg-primary text-white font-semibold rounded-lg hover:bg-primary-dark transition-colors w-full md:w-56 text-center"><i class="layout-menuitem-icon pi pi-fw pi-info-circle mr-2"></i><span class="layout-menuitem-text ng-tns-c207508854-18">Biografia</span></a> 

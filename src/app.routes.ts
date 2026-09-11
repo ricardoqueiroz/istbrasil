@@ -81,6 +81,16 @@ export const appRoutes: Routes = [
         ]
     },
     {
+        path: 'flipbooks',
+        component: AppLayout,
+        children: [
+            {
+                path: 'book01',
+                loadComponent: () => import('./app/pages/flipbooks/book01/book01.component').then(m => m.ReaderPageComponent)
+            }
+        ]
+    },
+    {
         path: 'editora',
         component: AppLayout,
         children: [

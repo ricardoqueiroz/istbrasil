@@ -1,0 +1,113 @@
+<div #flipbookWrapper class="flipbook-wrapper bg-slate-900/5 dark:bg-slate-900/40 rounded-2xl p-3 md:p-6 shadow-inner border border-slate-200/60 dark:border-slate-800 transition-all duration-300">
+  
+  <!-- BARRA DE FERRAMENTAS SUPERIOR DE LEITURA -->
+  <div class="toolbar flex flex-wrap items-center justify-between gap-3 bg-white/90 dark:bg-slate-800/90 backdrop-blur-md px-4 py-2.5 rounded-xl shadow-sm border border-slate-200/80 dark:border-slate-700 w-full mb-4 md:mb-6 z-10">
+    
+    <!-- LADO ESQUERDO: TÍTULO / INDICADOR -->
+    <div class="flex items-center gap-2 text-slate-700 dark:text-slate-200 font-medium text-sm md:text-base">
+      <i class="fa-solid fa-book-open text-emerald-600 dark:text-emerald-400"></i>
+      <span class="font-semibold text-slate-900 dark:text-white">{{ pageLabel }}</span>
+    </div>
+
+    <!-- CENTRO: CONTROLES DE NAVEGAÇÃO -->
+    <div class="flex items-center gap-1 md:gap-2 mx-auto sm:mx-0">
+      <button 
+        pButton 
+        type="button" 
+        icon="pi pi-angle-double-left" 
+        class="p-button-text p-button-rounded p-button-plain p-button-sm text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700" 
+        [disabled]="currentPage === 0" 
+        (click)="firstPage()" 
+        pTooltip="Primeira Página" 
+        tooltipPosition="top">
+      </button>
+
+      <button 
+        pButton 
+        type="button" 
+        icon="pi pi-angle-left" 
+        class="p-button-text p-button-rounded p-button-plain p-button-sm text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700" 
+        [disabled]="currentPage === 0" 
+        (click)="prevPage()" 
+        pTooltip="Página Anterior (Seta Esquerda)" 
+        tooltipPosition="top">
+      </button>
+
+      <!-- CAMPO DE IR PARA PÁGINA -->
+      <div class="flex items-center gap-1.5 px-2 py-1 bg-slate-100 dark:bg-slate-900/60 rounded-lg border border-slate-200 dark:border-slate-700">
+        <span class="text-xs text-slate-500 font-semibold uppercase hidden sm:inline">Pág.</span>
+        <input 
+          type="number" 
+          min="1" 
+          [max]="totalPages" 
+          [(ngModel)]="targetPageInput" 
+          (change)="onJumpToPage()" 
+          (keyup.enter)="onJumpToPage()"
+          aria-label="Número da página"
+          title="Ir para a página"
+          class="w-12 text-center text-sm font-bold bg-transparent text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-emerald-500 rounded" />
+        <span class="text-xs text-slate-400 font-medium">/ {{ totalPages }}</span>
+      </div>
+
+      <button 
+        pButton 
+        type="button" 
+        icon="pi pi-angle-right" 
+        class="p-button-text p-button-rounded p-button-plain p-button-sm text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700" 
+        [disabled]="currentPage >= totalPages - 1" 
+        (click)="nextPage()" 
+        pTooltip="Próxima Página (Seta Direita)" 
+        tooltipPosition="top">
+      </button>
+
+      <button 
+        pButton 
+        type="button" 
+        icon="pi pi-angle-double-right" 
+        class="p-button-text p-button-rounded p-button-plain p-button-sm text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700" 
+        [disabled]="currentPage >= totalPages - 1" 
+        (click)="lastPage()" 
+        pTooltip="Última Página" 
+        tooltipPosition="top">
+      </button>
+    </div>
+
+    <!-- LADO DIREITO: TELA CHEIA -->
+    <div class="flex items-center gap-2">
+      <button 
+        pButton 
+        type="button" 
+        [icon]="isFullscreen ? 'pi pi-window-minimize' : 'pi pi-window-maximize'" 
+        class="p-button-outlined p-button-rounded p-button-sm text-emerald-700 border-emerald-300 hover:bg-emerald-50 dark:text-emerald-400 dark:border-emerald-600 dark:hover:bg-emerald-950/40" 
+        (click)="toggleFullscreen()" 
+        [pTooltip]="isFullscreen ? 'Sair da Tela Cheia' : 'Tela Cheia'" 
+        tooltipPosition="top">
+      </button>
+    </div>
+
+  </div>
+
+  <!-- PALCO / CONTEÚDO DO LIVRO -->
+  <div class="book-stage flex justify-center items-center w-full py-2 my-auto overflow-hidden">
+    <div #bookContainer class="flipbook-container mx-auto">
+      @for (page of pages; track page; let i = $index) {
+        <div class="page bg-white shadow-md">
+          <img [src]="page" [alt]="'Página ' + (i + 1)" loading="lazy" />
+        </div>
+      }
+    </div>
+  </div>
+
+  <!-- INSTRUÇÃO VISUAL INFERIOR -->
+  <div class="mt-4 flex flex-wrap items-center justify-between text-xs text-slate-500 dark:text-slate-400 px-2 w-full gap-2">
+    <div class="flex items-center gap-2">
+      <i class="fa-solid fa-hand-pointer text-emerald-600"></i>
+      <span>Arraste ou clique nos cantos das páginas para folhear.</span>
+    </div>
+    <div class="flex items-center gap-2 hidden md:flex">
+      <i class="fa-solid fa-keyboard text-emerald-600"></i>
+      <span>Use as setas &larr; &rarr; do teclado para navegar.</span>
+    </div>
+  </div>
+
+</div>

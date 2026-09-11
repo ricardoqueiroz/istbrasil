@@ -1,0 +1,70 @@
+.flipbook-wrapper {
+  position: relative;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+
+  &:fullscreen {
+    background-color: #0f172a;
+    padding: 2rem;
+    overflow-y: auto;
+
+    .toolbar {
+      background-color: rgba(30, 41, 59, 0.95);
+      border-color: rgba(51, 65, 85, 0.8);
+      color: #f8fafc;
+    }
+
+    .book-stage {
+      min-height: calc(100vh - 160px);
+    }
+  }
+}
+
+.book-stage {
+  position: relative;
+  width: 100%;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.flipbook-container {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  margin: 0 auto;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.page {
+  background-color: #ffffff;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.12);
+  overflow: hidden;
+  border-radius: 2px;
+
+  img {
+    width: 100%;
+    height: 100%;
+    object-fit: fill;
+    display: block;
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-user-drag: none;
+  }
+}
+
+/* Oculta as setas de incremento do input number */
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+input[type="number"] {
+  appearance: textfield;
+  -moz-appearance: textfield;
+}

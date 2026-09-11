@@ -1,0 +1,36 @@
+<div class="bg-slate-50 dark:bg-slate-900 min-h-screen pb-12 font-sans text-slate-800 dark:text-slate-100">
+  
+  <!-- CABEÇALHO HERO COM PADRÃO VISUAL DO SITE -->
+  <header class="relative ist-background rounded-b-[2.5rem] overflow-hidden mb-8">
+    <div class="absolute inset-0 opacity-10 pointer-events-none bg-[radial-gradient(circle_at_top_right,_var(--tw-gradient-stops))] from-white via-transparent to-transparent"></div>
+    
+    <div class="container mx-auto px-6 py-10 flex flex-col items-center text-center relative z-10">
+      <div class="mb-4 p-3 bg-white rounded-full border border-white/20 shadow-lg inline-block">
+        <img src="assets/images/logo-ist.png" alt="Logo IST" class="w-8/12 md:w-auto max-h-24 object-contain mx-auto">
+      </div>
+      
+      <div class="inline-flex items-center gap-2 px-3 py-1 bg-emerald-100/90 text-emerald-900 rounded-full text-sm font-semibold mb-3 border border-emerald-200">
+        <i class="fa-solid fa-book-open-reader"></i>
+        <span>IST Editora • Leitor Digital</span>
+      </div>
+      
+      <h1 class="text-3xl md:text-5xl font-bold text-emerald-900 mb-2 tracking-tight">
+        Sebastião de Todo Tapajós
+      </h1>
+      <p class="text-emerald-700 text-base md:text-lg font-light max-w-2xl mx-auto opacity-90">
+        Navegue pelas páginas do livro em nossa plataforma interativa de leitura digital.
+      </p>
+    </div>
+  </header>
+
+  <!-- CONTEÚDO PRINCIPAL (LEITOR FLIPBOOK CENTRALIZADO COM MARGENS) -->
+  <main class="w-full max-w-[1400px] mx-auto px-3 sm:px-6 lg:px-8">
+    <div class="w-full bg-white dark:bg-slate-800 rounded-2xl shadow-sm border border-slate-100 dark:border-slate-700/80 p-3 sm:p-6 mb-12">
+      <app-flipbook [pages]="book01" [showCover]="true"></app-flipbook>
+    </div>
+  </main>
+
+  <!-- RODAPÉ PADRÃO DO SITE -->
+  <footer-widget></footer-widget>
+
+</div>
