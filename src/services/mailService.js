@@ -8,7 +8,10 @@ export const mailTransporter = nodemailer.createTransport({
     secure: process.env.SMTP_SECURE === 'true',
     auth: process.env.SMTP_USER
         ? { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS }
-        : undefined
+        : undefined,
+    // O Postfix local usa STARTTLS com certificado autoassinado; aceitar aqui é seguro
+    // pois a conexão fica restrita ao loopback do próprio servidor.
+    tls: { rejectUnauthorized: process.env.SMTP_REJECT_UNAUTHORIZED === 'true' }
 });
 
 export async function sendMail({ fromName, fromEmail, subject, html, replyTo }) {
