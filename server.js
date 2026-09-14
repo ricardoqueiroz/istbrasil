@@ -16,7 +16,7 @@ import releaseRoutes from './src/routes/releases.routes.js';
 import timelineRoutes from './src/routes/timeline.routes.js';
 import obraRoutes from './src/routes/obra.routes.js';
 import paypalRoutes from './src/routes/paypal.routes.js';
-import contactRoutes from './routes/contact.routes';
+import contactRoutes from './src/routes/contact.routes.js';
 
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';

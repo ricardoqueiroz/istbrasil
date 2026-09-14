@@ -1,10 +1,18 @@
 import { Component } from '@angular/core';
+import { FormsModule } from '@angular/forms';
 import { HttpClient } from '@angular/common/http';
 import { MessageService } from 'primeng/api';
+import { ButtonModule } from 'primeng/button';
+import { InputTextModule } from 'primeng/inputtext';
+import { SelectModule } from 'primeng/select';
+import { TextareaModule } from 'primeng/textarea';
+import { ToastModule } from 'primeng/toast';
+import { FooterWidget } from 'src/app/shared/footer';
 
 @Component({
   selector: 'app-fale-conosco',
-  imports: [],
+  standalone: true,
+  imports: [FormsModule, ButtonModule, InputTextModule, SelectModule, TextareaModule, ToastModule, FooterWidget],
   providers: [MessageService],
   templateUrl: './fale-conosco.html',
   styleUrls: ['./fale-conosco.scss']

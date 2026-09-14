@@ -34,7 +34,7 @@ import { Router, RouterModule } from '@angular/router';
                             <h4 class="font-medium text-2xl leading-normal mb-6 text-surface-900 dark:text-surface-0">Contato</h4>
                             <a href="https://wa.me/5521966083752" target="_blank" class="leading-normal text-xl block cursor-pointer mb-2 text-surface-700 dark:text-surface-100">WhatsApp</a>
                             <a (click)="router.navigate(['/editora'], { fragment: 'IST Editora' })"class="leading-normal text-xl block cursor-pointer mb-2 text-surface-700 dark:text-surface-100">IST Editora</a>
-                            <a (click)="router.navigate(['/contato'], { fragment: 'Contato' })"class="leading-normal text-xl block cursor-pointer mb-2 text-surface-700 dark:text-surface-100">Fale Conosco</a>
+                            <a (click)="router.navigate(['/fale-conosco'], { fragment: 'Contato' })" class="leading-normal text-xl block cursor-pointer mb-2 text-surface-700 dark:text-surface-100">Fale Conosco</a>
                             <a (click)="router.navigate(['/imprensa'], { fragment: 'Imprensa' })"class="leading-normal text-xl block cursor-pointer text-surface-700 dark:text-surface-100">Imprensa</a>
                         </div>
 

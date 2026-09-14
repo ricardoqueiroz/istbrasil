@@ -57,6 +57,16 @@ export const appRoutes: Routes = [
         ]
     },
     {
+        path: 'fale-conosco',
+        component: AppLayout,
+        children: [
+            {
+                path: '',
+                loadComponent: () => import('./app/pages/fale-conosco/fale-conosco').then(m => m.FaleConosco)
+            }
+        ]
+    },
+    {
         path: 'editora',
         component: AppLayout,
         children: [

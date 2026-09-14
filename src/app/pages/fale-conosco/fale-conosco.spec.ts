@@ -1,5 +1,4 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
-
 import { FaleConosco } from './fale-conosco';
 
 describe('FaleConosco', () => {
