@@ -17,7 +17,7 @@ export const mailTransporter = nodemailer.createTransport({
 export async function sendMail({ fromName, fromEmail, subject, html, replyTo }) {
     return mailTransporter.sendMail({
         from: `"${fromName}" <${fromEmail}>`,
-        to: 'contato@istbrasil.org.br',
+        to: 'presidencia+contato@istbrasil.org.br',
         subject,
         html,
         replyTo
