@@ -1,6 +1,7 @@
 import { Component } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { HttpClient } from '@angular/common/http';
+import { Router } from '@angular/router';
 import { MessageService } from 'primeng/api';
 import { ButtonModule } from 'primeng/button';
 import { InputTextModule } from 'primeng/inputtext';
@@ -36,7 +37,11 @@ export class FaleConosco {
 
   loading = false;
 
-  constructor(private http: HttpClient, private message: MessageService) {}
+  constructor(private http: HttpClient, private message: MessageService, private router: Router) {}
+
+  private redirectToHome() {
+    setTimeout(() => this.router.navigate(['/']), 2000);
+  }
 
   send() {
     this.loading = true;
@@ -45,18 +50,22 @@ export class FaleConosco {
         this.message.add({
           severity: 'success',
           summary: 'Mensagem enviada',
-          detail: 'Entraremos em contato em breve.'
+          detail: 'Entraremos em contato em breve.',
+          life: 2000
         });
         this.form = { name: '', email: '', subject: '', message: '', honeypot: '' };
         this.loading = false;
+        this.redirectToHome();
       },
       error: () => {
         this.message.add({
           severity: 'error',
           summary: 'Erro',
-          detail: 'Não foi possível enviar sua mensagem.'
+          detail: 'Não foi possível enviar sua mensagem.',
+          life: 2000
         });
         this.loading = false;
+        this.redirectToHome();
       }
     });
   }

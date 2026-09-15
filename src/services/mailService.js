@@ -18,8 +18,6 @@ const senderBySubject = {
     'Dúvida': 'duvida@istbrasil.org.br',
     'Solicitação': 'solicitacao@istbrasil.org.br',
     'Parceria': 'parceria@istbrasil.org.br',
-    'Parcerias': 'parceria@istbrasil.org.br',
-    'Outro': 'contato@istbrasil.org.br',
     'Outro assunto': 'contato@istbrasil.org.br'
 };
 
@@ -34,7 +32,7 @@ function getSenderEmail(subject) {
 export async function sendMail({ fromName, subject, html, replyTo }) {
     return mailTransporter.sendMail({
         from: `"${fromName}" <${getSenderEmail(subject)}>`,
-        to: 'presidencia+contato@istbrasil.org.br',
+        to: 'presidencia@istbrasil.org.br',
         subject,
         html,
         replyTo
