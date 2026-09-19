@@ -21,6 +21,14 @@ import contactRoutes from './src/routes/contact.routes.js';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 
+// Loga a causa real de crashes que hoje derrubam o processo sem deixar rastro no out.log
+process.on('uncaughtException', (err) => {
+    console.error('[uncaughtException]', err && err.stack ? err.stack : err);
+});
+process.on('unhandledRejection', (reason) => {
+    console.error('[unhandledRejection]', reason && reason.stack ? reason.stack : reason);
+});
+
 const app = express();
 
 // Configurações
@@ -34,39 +42,51 @@ const {
     PAYPAL_CLIENT_ID,
     PAYPAL_CLIENT_SECRET,
     PAYPAL_ENV,
+    PAYPAL_ENABLED, // 'false' desativa Client SDK e rotas do PayPal para isolar problemas
     NODE_ENV // Sugestão: Use uma variável de ambiente para definir se é PROD ou DEV
 } = process.env;
+
+const paypalEnabled = PAYPAL_ENABLED !== 'false';
 
 // Define o ambiente baseando-se em variável ou fixa para Production se for o caso
 const paypalEnvironment = (PAYPAL_ENV === 'production') 
     ? Environment.Production 
     : Environment.Sandbox;
 
-const client = new Client({
-    clientCredentialsAuthCredentials: {
-        oAuthClientId: PAYPAL_CLIENT_ID,
-        oAuthClientSecret: PAYPAL_CLIENT_SECRET,
-    },
-    timeout: 0,
-    environment: paypalEnvironment, // <--- AQUI A MÁGICA ACONTECE
-    logging: {
-        logLevel: LogLevel.Info,
-        logRequest: { logBody: true },
-        logResponse: { logHeaders: true },
-    },
-});
+let paypalClient;
 
-// Se você usa o ordersController dentro de paypal.routes.js, 
-// certifique-se de estar exportando ou passando este 'client' para lá.
-// Se as rotas criam sua própria instância, verifique o arquivo paypal.routes.js também!
-export const paypalClient = client; // Exportando caso suas rotas precisem
+if (paypalEnabled) {
+    const client = new Client({
+        clientCredentialsAuthCredentials: {
+            oAuthClientId: PAYPAL_CLIENT_ID,
+            oAuthClientSecret: PAYPAL_CLIENT_SECRET,
+        },
+        timeout: 0,
+        environment: paypalEnvironment, // <--- AQUI A MÁGICA ACONTECE
+        logging: {
+            logLevel: LogLevel.Info,
+            logRequest: { logBody: true },
+            logResponse: { logHeaders: true },
+        },
+    });
+
+    // Se você usa o ordersController dentro de paypal.routes.js, 
+    // certifique-se de estar exportando ou passando este 'client' para lá.
+    // Se as rotas criam sua própria instância, verifique o arquivo paypal.routes.js também!
+    paypalClient = client;
+
+    app.use('/api/paypal', paypalRoutes); // Suas rotas reais do PayPal
+} else {
+    console.warn('[PayPal] Desativado via PAYPAL_ENABLED=false');
+}
+
+export { paypalClient };
 
 // --- Rotas ---
 app.use('/api/books', bookRoutes);
 app.use('/api/releases', releaseRoutes);
 app.use('/api/timeline', timelineRoutes);
 app.use('/api/obra', obraRoutes);
-app.use('/api/paypal', paypalRoutes); // Suas rotas reais do PayPal
 
 // --- Arquivos Estáticos ---
 const __filename = fileURLToPath(import.meta.url);

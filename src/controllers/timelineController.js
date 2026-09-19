@@ -7,7 +7,7 @@ const getTimelineEvents = async (req, res) => {
         const limit = parseInt(req.query.limit, 10) || 10;
         const offset = (page - 1) * limit;
         const finalQuery = `SELECT * FROM ist_vw_timeline LIMIT ? OFFSET ?`;
-        const [rows] = await db.execute(finalQuery, [limit.toString(), offset.toString()]);
+        const [rows] = await db.query(finalQuery, [limit, offset]);
         res.status(200).json(rows);
     } catch (error) {
         console.error('Erro no TimelineController:', error);
