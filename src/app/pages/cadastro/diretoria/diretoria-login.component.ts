@@ -12,7 +12,7 @@ import { PasswordModule } from 'primeng/password';
     standalone: true,
     imports: [CommonModule, FormsModule, RouterLink, ButtonModule, CheckboxModule, InputTextModule, PasswordModule],
     template: `
-        <div class="min-h-screen flex items-center justify-center bg-surface-100 dark:bg-surface-950 px-4">
+        <div class="flex items-center justify-center py-12 px-4">
             <div class="w-full max-w-xl rounded-3xl border border-surface-200 bg-white p-8 shadow-2xl dark:border-surface-700 dark:bg-surface-900">
                 <div class="mb-8 text-center">
                     <h1 class="text-3xl font-semibold text-surface-900 dark:text-white">Cadastro de Diretoria</h1>
@@ -56,6 +56,7 @@ import { PasswordModule } from 'primeng/password';
                             <p-checkbox id="manterConectado" name="manterConectado" [(ngModel)]="manterConectado" [binary]="true"></p-checkbox>
                             Manter Conectado?
                         </label>
+                        <a routerLink="/cadastro/diretoria/esqueci-senha" class="text-sm font-medium text-primary hover:underline">Esqueci a senha</a>
                     </div>
 
                     <button
@@ -130,13 +131,15 @@ export class DiretoriaLoginComponent {
 
             const response = await fetch('/api/usuarios/login', {
                 method: 'POST',
+                credentials: 'include',
                 headers: {
                     'Content-Type': 'application/json'
                 },
                 body: JSON.stringify({
                     id_tipo_usuario: Number(this.idTipoUsuario),
                     email: this.email.trim(),
-                    senha: senhaCriptografada
+                    senha: senhaCriptografada,
+                    manterConectado: this.manterConectado
                 })
             });
 

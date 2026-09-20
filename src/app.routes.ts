@@ -115,9 +115,25 @@ export const appRoutes: Routes = [
     },
     {
         path: 'cadastro',
+        component: AppLayout,
         children: [
             { path: 'diretoria/login', component: DiretoriaLoginComponent },
-            { path: 'diretoria/cadastro', loadComponent: () => import('./app/pages/cadastro/diretoria/diretoria-cadastro.component').then(m => m.DiretoriaCadastroComponent) }
+            { path: 'diretoria/cadastro', loadComponent: () => import('./app/pages/cadastro/diretoria/diretoria-cadastro.component').then(m => m.DiretoriaCadastroComponent) },
+            { path: 'diretoria/esqueci-senha', loadComponent: () => import('./app/pages/cadastro/diretoria/diretoria-esqueci-senha.component').then(m => m.DiretoriaEsqueciSenhaComponent) }
+        ]
+    },
+    {
+        path: 'confirmar-email',
+        component: AppLayout,
+        children: [
+            { path: '', loadComponent: () => import('./app/pages/cadastro/confirmar-email/confirmar-email.component').then(m => m.ConfirmarEmailComponent) }
+        ]
+    },
+    {
+        path: 'redefinir-senha',
+        component: AppLayout,
+        children: [
+            { path: '', loadComponent: () => import('./app/pages/cadastro/redefinir-senha/redefinir-senha.component').then(m => m.RedefinirSenhaComponent) }
         ]
     },
     { path: 'notfound', component: Notfound },

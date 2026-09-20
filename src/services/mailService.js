@@ -38,3 +38,18 @@ export async function sendMail({ fromName, subject, html, replyTo }) {
         replyTo
     });
 }
+
+// Envio genérico para o próprio usuário (ex: confirmação de cadastro), diferente do sendMail acima
+// que sempre encaminha para a presidência (fluxo do Fale Conosco).
+export async function sendAccountMail({ to, subject, html }) {
+    const fromName = process.env.MAIL_FROM_NAME || 'IST Brasil';
+    const fromAddress = process.env.MAIL_FROM_ADDRESS || 'contato@istbrasil.org.br';
+
+    return mailTransporter.sendMail({
+        from: `"${fromName}" <${fromAddress}>`,
+        to,
+        subject,
+        html
+    });
+}
+
