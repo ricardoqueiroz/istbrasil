@@ -15,8 +15,15 @@ const buildCookieOptions = () => {
         maxAge: maxAgeSeconds * 1000
     };
 
-    if (process.env.COOKIE_HTTP_HOST) {
-        options.domain = process.env.COOKIE_HTTP_HOST;
+    // Aceita apenas hostname puro (ex: istbrasil.org.br ou .istbrasil.org.br);
+    // valores com protocolo, porta ou caminho fazem o cookie.serialize() lançar "option domain is invalid"
+    const cookieHost = (process.env.COOKIE_HTTP_HOST || '').trim();
+    if (cookieHost) {
+        if (/^\.?[a-zA-Z0-9-]+(\.[a-zA-Z0-9-]+)+$/.test(cookieHost)) {
+            options.domain = cookieHost;
+        } else {
+            console.warn(`COOKIE_HTTP_HOST inválido ("${cookieHost}"); ignorando e usando cookie sem domínio explícito.`);
+        }
     }
 
     return options;
