@@ -42,7 +42,7 @@ import {AppFloatingConfigurator} from "@/layout/component/app.floatingconfigurat
             </ul>
             <div class="flex border-t lg:border-t-0 border-surface py-4 lg:py-0 mt-4 lg:mt-0 gap-2">
                 <button pButton pRipple label="Login" routerLink="/auth/login" [rounded]="true" [text]="true"></button>
-                <app-floating-configurator [float]="false"/>
+                <app-floating-configurator [float]="false" style="display: none;"/>
             </div>
         </div> `
 })

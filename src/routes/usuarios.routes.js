@@ -26,4 +26,10 @@ router.get('/validar-token-senha', usuariosController.validarTokenSenha);
 // POST /api/usuarios/redefinir-senha
 router.post('/redefinir-senha', usuariosController.redefinirSenha);
 
+// GET /api/usuarios/me
+router.get('/me', usuariosController.me);
+
+// POST /api/usuarios/logout
+router.post('/logout', usuariosController.logout);
+
 export default router;

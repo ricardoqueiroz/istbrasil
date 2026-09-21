@@ -1,5 +1,6 @@
 import "dotenv/config";
 import cors from 'cors';
+import cookieParser from 'cookie-parser';
 import path from 'path';
 import express from 'express';
 import bodyParser from "body-parser"; // Importação movida para cima por organização
@@ -34,6 +35,7 @@ const app = express();
 
 // Configurações
 app.use(cors());
+app.use(cookieParser());
 app.use(express.json());
 app.use(bodyParser.json());
 app.use('/api', contactRoutes);

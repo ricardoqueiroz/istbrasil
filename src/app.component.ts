@@ -1,8 +1,9 @@
 
 
-import { Component } from '@angular/core';
+import { Component, OnInit } from '@angular/core';
 import { RouterModule } from '@angular/router';
 import { CookieConsentComponent } from './app/shared/cookie-consent/cookie-consent.component';
+import { AuthService } from './app/shared/auth.service';
 
 
 @Component({
@@ -14,4 +15,10 @@ import { CookieConsentComponent } from './app/shared/cookie-consent/cookie-conse
         <p-cookie-consent></p-cookie-consent>
     `
 })
-export class AppComponent {}
+export class AppComponent implements OnInit {
+    constructor(private readonly authService: AuthService) {}
+
+    ngOnInit(): void {
+        this.authService.verificarSessao();
+    }
+}

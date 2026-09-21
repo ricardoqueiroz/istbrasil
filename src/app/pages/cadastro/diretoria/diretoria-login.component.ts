@@ -6,6 +6,7 @@ import { ButtonModule } from 'primeng/button';
 import { CheckboxModule } from 'primeng/checkbox';
 import { InputTextModule } from 'primeng/inputtext';
 import { PasswordModule } from 'primeng/password';
+import { AuthService } from 'src/app/shared/auth.service';
 
 @Component({
     selector: 'app-diretoria-login',
@@ -94,7 +95,10 @@ export class DiretoriaLoginComponent {
     mensagem = '';
     tipoMensagem: 'success' | 'error' | 'info' = 'info';
 
-    constructor(private readonly router: Router) {}
+    constructor(
+        private readonly router: Router,
+        private readonly authService: AuthService
+    ) {}
 
     validarCampos(): boolean {
         return !!this.email?.trim() && !!this.password?.trim();
@@ -159,6 +163,7 @@ export class DiretoriaLoginComponent {
 
             this.tipoMensagem = 'success';
             this.mensagem = 'Login realizado com sucesso.';
+            this.authService.definirUsuario(data);
             await this.router.navigate(['/cadastro/diretoria/cadastro']);
         } catch (error) {
             this.tipoMensagem = 'error';

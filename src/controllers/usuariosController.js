@@ -1,10 +1,15 @@
 import crypto from 'crypto';
 import bcrypt from 'bcrypt';
+import jwt from 'jsonwebtoken';
 import { pool as db } from '../config/db.js';
 import { sendAccountMail } from '../services/mailService.js';
 
 const BCRYPT_ROUNDS = 12;
 const TOKEN_VALIDADE_MINUTOS = 30;
+const COOKIE_NAME = process.env.COOKIE_NAME || 'ist_session';
+// Sem JWT_SECRET definido no .env, cai em um segredo fixo apenas para nunca derrubar o login em dev;
+// em produção o .env DEVE definir JWT_SECRET para os cookies de sessão serem realmente seguros.
+const JWT_SECRET = process.env.JWT_SECRET || 'dev-only-insecure-secret';
 
 const buildCookieOptions = () => {
     const maxAgeSeconds = parseInt(process.env.COOKIE_MAXLIFETIME, 10) || 86400;
@@ -38,7 +43,7 @@ const login = async (req, res) => {
     }
 
     try {
-        const [rows] = await db.query('SELECT id_usuario, senha, id_tipo_usuario FROM ist_usuarios WHERE email = ?', [email.trim().toLowerCase()]);
+        const [rows] = await db.query('SELECT id_usuario, senha, nome, foto, id_tipo_usuario FROM ist_usuarios WHERE email = ?', [email.trim().toLowerCase()]);
 
         if (rows.length === 0) {
             return res.status(404).json({ message: 'E-mail não cadastrado. Cadastre-se para continuar.' });
@@ -62,16 +67,22 @@ const login = async (req, res) => {
 
         const cookieOptions = buildCookieOptions();
         const maxAgeMs = manterConectado ? cookieOptions.maxAge * 30 : cookieOptions.maxAge;
-        const cookieValue = manterConectado ? 'extended' : 'normal';
+        const sessionToken = jwt.sign(
+            { id_usuario: usuario.id_usuario, id_tipo_usuario: usuario.id_tipo_usuario },
+            JWT_SECRET,
+            { expiresIn: Math.floor(maxAgeMs / 1000) }
+        );
 
-        res.cookie(process.env.COOKIE_NAME || 'ist_session', cookieValue, {
+        res.cookie(COOKIE_NAME, sessionToken, {
             ...cookieOptions,
             maxAge: maxAgeMs
         });
 
         return res.status(200).json({
             id_usuario: usuario.id_usuario,
-            id_tipo_usuario: usuario.id_tipo_usuario
+            id_tipo_usuario: usuario.id_tipo_usuario,
+            nome: usuario.nome,
+            foto_url: usuario.foto || null
         });
     } catch (error) {
         console.error('Erro no login de usuário:', error);
@@ -358,4 +369,42 @@ const redefinirSenha = async (req, res) => {
     }
 };
 
-export default { login, listarCargos, verificarEmail, cadastrar, confirmarEmail, esqueciSenha, validarTokenSenha, redefinirSenha };
+// Checagem de sessão: lê o cookie assinado (JWT) e retorna os dados atuais do usuário
+const me = async (req, res) => {
+    const token = req.cookies?.[COOKIE_NAME];
+
+    if (!token) {
+        return res.status(401).json({ message: 'Não autenticado.' });
+    }
+
+    try {
+        const payload = jwt.verify(token, JWT_SECRET);
+
+        const [rows] = await db.query('SELECT id_usuario, nome, foto, id_tipo_usuario FROM ist_usuarios WHERE id_usuario = ?', [payload.id_usuario]);
+
+        if (rows.length === 0) {
+            res.clearCookie(COOKIE_NAME, buildCookieOptions());
+            return res.status(401).json({ message: 'Sessão inválida.' });
+        }
+
+        const usuario = rows[0];
+
+        return res.status(200).json({
+            id_usuario: usuario.id_usuario,
+            id_tipo_usuario: usuario.id_tipo_usuario,
+            nome: usuario.nome,
+            foto_url: usuario.foto || null
+        });
+    } catch (error) {
+        res.clearCookie(COOKIE_NAME, buildCookieOptions());
+        return res.status(401).json({ message: 'Sessão expirada ou inválida.' });
+    }
+};
+
+// Logout: expira o cookie de sessão no navegador
+const logout = async (_req, res) => {
+    res.clearCookie(COOKIE_NAME, buildCookieOptions());
+    return res.status(200).json({ message: 'Logout realizado com sucesso.' });
+};
+
+export default { login, listarCargos, verificarEmail, cadastrar, confirmarEmail, esqueciSenha, validarTokenSenha, redefinirSenha, me, logout };
