@@ -112,9 +112,9 @@ const somenteDigitos = (valor) => (valor || '').toString().replace(/\D/g, '');
 // Cadastro de Diretoria (id_tipo_usuario = 1); a senha chega em SHA-256 (calculada no front)
 // e o backend aplica bcrypt (com salt) por cima antes de gravar.
 const cadastrar = async (req, res) => {
-    const { nome, email, confirmarEmail, cpf, telefone_celular, senha, id_cargo, identidade, logradouro, numero, complemento, bairro, cidade, uf, cep } = req.body;
+    const { nome, email, confirmarEmail, cpf, telefone_celular, senha, id_cargo, identidade, data_nascimento, logradouro, numero, complemento, bairro, cidade, uf, cep } = req.body;
 
-    if (!nome?.trim() || !email?.trim() || !senha?.trim() || !cpf?.trim() || !telefone_celular?.trim() || !id_cargo) {
+    if (!nome?.trim() || !email?.trim() || !senha?.trim() || !cpf?.trim() || !telefone_celular?.trim() || !id_cargo || !data_nascimento) {
         return res.status(400).json({ message: 'Preencha todos os campos obrigatórios.' });
     }
 
@@ -131,6 +131,14 @@ const cadastrar = async (req, res) => {
 
     if (identidade && identidade.trim().length > 20) {
         return res.status(400).json({ message: 'Identidade deve ter no máximo 20 caracteres.' });
+    }
+
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(data_nascimento) || Number.isNaN(new Date(data_nascimento).getTime())) {
+        return res.status(400).json({ message: 'Data de nascimento inválida.' });
+    }
+
+    if (new Date(data_nascimento) > new Date()) {
+        return res.status(400).json({ message: 'Data de nascimento não pode ser no futuro.' });
     }
 
     try {
@@ -153,16 +161,17 @@ const cadastrar = async (req, res) => {
         // id_tipo_usuario = 1 (Diretoria) e id_situacao = 1 (Normal) são fixados pelo backend, nunca pelo cliente
         const [result] = await db.query(
             `INSERT INTO ist_usuarios
-                (id_tipo_usuario, id_cargo, id_situacao, senha, nome, cpf, identidade, email, telefone_celular,
+                (id_tipo_usuario, id_cargo, id_situacao, senha, nome, cpf, identidade, data_nascimento, email, telefone_celular,
                  logradouro, numero, complemento, bairro, cidade, uf, cep,
                  token_confirmacao, token_expira_em, token_tipo)
-             VALUES (1, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'email')`,
+             VALUES (1, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'email')`,
             [
                 id_cargo,
                 senhaBcrypt,
                 nome.trim(),
                 cpfNormalizado,
                 identidade?.trim() || null,
+                data_nascimento,
                 emailNormalizado,
                 somenteDigitos(telefone_celular),
                 logradouro?.trim() || null,

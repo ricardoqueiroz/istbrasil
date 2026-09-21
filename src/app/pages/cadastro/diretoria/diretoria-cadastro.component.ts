@@ -3,6 +3,7 @@ import { Component, OnInit } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { Router, RouterLink } from '@angular/router';
 import { ButtonModule } from 'primeng/button';
+import { DatePickerModule } from 'primeng/datepicker';
 import { InputMaskModule } from 'primeng/inputmask';
 import { InputTextModule } from 'primeng/inputtext';
 import { PasswordModule } from 'primeng/password';
@@ -33,7 +34,7 @@ const UFS: UfOption[] = [
 @Component({
     selector: 'app-diretoria-cadastro',
     standalone: true,
-    imports: [CommonModule, FormsModule, RouterLink, ButtonModule, InputTextModule, PasswordModule, SelectModule, InputMaskModule],
+    imports: [CommonModule, FormsModule, RouterLink, ButtonModule, InputTextModule, PasswordModule, SelectModule, InputMaskModule, DatePickerModule],
     template: `
         <div class="flex items-center justify-center py-12 px-4">
             <div class="w-full max-w-2xl rounded-3xl border border-surface-200 bg-white p-8 shadow-2xl dark:border-surface-700 dark:bg-surface-900">
@@ -100,6 +101,11 @@ const UFS: UfOption[] = [
                     <div class="mb-5">
                         <label for="identidade" class="mb-2 block text-sm font-medium text-surface-700 dark:text-surface-200">RG / Identidade (opcional)</label>
                         <input id="identidade" pInputText type="text" name="identidade" [(ngModel)]="identidade" maxlength="20" class="w-full" />
+                    </div>
+
+                    <div class="mb-5">
+                        <label for="dataNascimento" class="mb-2 block text-sm font-medium text-surface-700 dark:text-surface-200">Data de Nascimento</label>
+                        <p-datepicker id="dataNascimento" name="dataNascimento" [(ngModel)]="dataNascimento" dateFormat="dd/mm/yy" [showIcon]="true" [maxDate]="hoje" placeholder="dd/mm/aaaa" styleClass="w-full" [required]="true"></p-datepicker>
                     </div>
 
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-5">
@@ -170,6 +176,8 @@ export class DiretoriaCadastroComponent implements OnInit {
     telefoneCelular = '';
     idCargo: number | null = null;
     identidade = '';
+    dataNascimento: Date | null = null;
+    hoje = new Date();
     senha = '';
     confirmarSenha = '';
     logradouro = '';
@@ -203,6 +211,18 @@ export class DiretoriaCadastroComponent implements OnInit {
         } catch {
             // Silencioso: o select ficará vazio e o usuário pode tentar novamente ao reenviar o formulário
         }
+    }
+
+    private formatarDataIso(data: Date | null): string | null {
+        if (!data) {
+            return null;
+        }
+
+        const ano = data.getFullYear();
+        const mes = String(data.getMonth() + 1).padStart(2, '0');
+        const dia = String(data.getDate()).padStart(2, '0');
+
+        return `${ano}-${mes}-${dia}`;
     }
 
     voltarPasso1(): void {
@@ -288,6 +308,18 @@ export class DiretoriaCadastroComponent implements OnInit {
             return;
         }
 
+        if (!this.dataNascimento) {
+            this.tipoMensagem = 'error';
+            this.mensagem = 'Informe a data de nascimento.';
+            return;
+        }
+
+        if (this.dataNascimento > this.hoje) {
+            this.tipoMensagem = 'error';
+            this.mensagem = 'A data de nascimento não pode ser no futuro.';
+            return;
+        }
+
         if (this.senha.length < 8) {
             this.tipoMensagem = 'error';
             this.mensagem = 'A senha deve ter no mínimo 8 caracteres.';
@@ -319,6 +351,7 @@ export class DiretoriaCadastroComponent implements OnInit {
                     senha: senhaCriptografada,
                     id_cargo: this.idCargo,
                     identidade: this.identidade,
+                    data_nascimento: this.formatarDataIso(this.dataNascimento),
                     logradouro: this.logradouro,
                     numero: this.numero,
                     complemento: this.complemento,
