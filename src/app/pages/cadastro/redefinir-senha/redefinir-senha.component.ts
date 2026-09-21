@@ -26,7 +26,7 @@ type Estado = 'verificando' | 'valido' | 'expirado' | 'invalido';
                 <div *ngIf="estado === 'expirado' || estado === 'invalido'" class="rounded-md border border-red-200 bg-red-50 px-3 py-3 text-sm text-red-700">
                     {{ mensagem }}
                     <div class="mt-4 text-center">
-                        <a routerLink="/cadastro/diretoria/esqueci-senha" class="text-sm font-medium text-primary hover:underline">Solicitar novo link</a>
+                        <a routerLink="/esqueci-senha" class="text-sm font-medium text-primary hover:underline">Solicitar novo link</a>
                     </div>
                 </div>
 

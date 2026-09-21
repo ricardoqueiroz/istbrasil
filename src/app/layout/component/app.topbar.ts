@@ -1,4 +1,4 @@
-import { Component } from '@angular/core';
+import { Component, Input } from '@angular/core';
 import { MenuItem } from 'primeng/api';
 import { Router, RouterModule } from '@angular/router';
 import { CommonModule } from '@angular/common';
@@ -14,7 +14,7 @@ import { AuthService } from '../../shared/auth.service';
     imports: [RouterModule, CommonModule, StyleClassModule, MenuModule, AppConfigurator],
     template: ` <div class="layout-topbar">
         <div class="layout-topbar-logo-container">
-            <button class="layout-menu-button layout-topbar-action" (click)="layoutService.onMenuToggle()">
+            <button *ngIf="showMenuButton" class="layout-menu-button layout-topbar-action" (click)="layoutService.onMenuToggle()">
                 <i class="pi pi-bars"></i>
             </button>
             <a routerLink="/" class="layout-topbar-logo">
@@ -59,26 +59,23 @@ import { AuthService } from '../../shared/auth.service';
                         <span>Contato</span>
                     </button>
 
-                    <ng-container *ngIf="authService.usuario() as usuario; else linkLogin">
-                        <span class="mr-2 hidden md:inline-flex items-center self-center text-sm font-medium">{{ primeiroNome(usuario.nome) }}</span>
-                        <button type="button" class="layout-topbar-action p-0" (click)="menuPerfil.toggle($event)">
-                            <img *ngIf="usuario.foto_url" [src]="usuario.foto_url" alt="Foto de perfil" class="w-8 h-8 rounded-full object-cover" />
-                            <i *ngIf="!usuario.foto_url" class="pi pi-user"></i>
-                        </button>
-                        <p-menu #menuPerfil [model]="itensMenuPerfil" [popup]="true"></p-menu>
-                    </ng-container>
-                    <ng-template #linkLogin>
-                        <button type="button" class="layout-topbar-action" routerLink="/cadastro/diretoria/login">
-                            <i class="pi pi-user"></i>
-                            <span>Entrar</span>
-                        </button>
-                    </ng-template>
+                    <span class="mr-2 hidden md:inline-flex items-center self-center text-sm font-medium">
+                        <ng-container *ngIf="authService.usuario() as usuario; else linkEntrar">{{ primeiroNome(usuario.nome) }}</ng-container>
+                        <ng-template #linkEntrar><a routerLink="/login" class="hover:underline">Entrar</a></ng-template>
+                    </span>
+                    <button type="button" class="layout-topbar-action p-0" (click)="authService.usuario() ? menuPerfil.toggle($event) : irParaLogin()">
+                        <img *ngIf="authService.usuario()?.foto_url as foto" [src]="foto" alt="Foto de perfil" class="w-8 h-8 rounded-full object-cover" />
+                        <i *ngIf="!authService.usuario()?.foto_url" class="pi pi-user"></i>
+                    </button>
+                    <p-menu #menuPerfil [model]="itensMenuPerfil" [popup]="true"></p-menu>
                 </div>
             </div>
         </div>
     </div>`
 })
 export class AppTopbar {
+    @Input() showMenuButton = true;
+
     items!: MenuItem[];
 
     itensMenuPerfil: MenuItem[] = [
@@ -108,8 +105,12 @@ export class AppTopbar {
         return nomeCompleto.split(' ')[0];
     }
 
+    async irParaLogin(): Promise<void> {
+        await this.router.navigate(['/login']);
+    }
+
     async sair(): Promise<void> {
         await this.authService.logout();
-        await this.router.navigate(['/cadastro/diretoria/login']);
+        await this.router.navigate(['/']);
     }
 }

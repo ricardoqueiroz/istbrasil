@@ -117,16 +117,23 @@ export const appRoutes: Routes = [
         path: 'cadastro',
         component: AppLayout,
         children: [
+            { path: '', loadComponent: () => import('./app/pages/cadastro/cadastro.component').then(m => m.DiretoriaCadastroComponent) },
             { path: 'diretoria/login', component: DiretoriaLoginComponent },
-            { path: 'diretoria/cadastro', loadComponent: () => import('./app/pages/cadastro/diretoria/diretoria-cadastro.component').then(m => m.DiretoriaCadastroComponent) },
-            { path: 'diretoria/esqueci-senha', loadComponent: () => import('./app/pages/cadastro/diretoria/diretoria-esqueci-senha.component').then(m => m.DiretoriaEsqueciSenhaComponent) }
+            { path: 'diretoria/cadastro', loadComponent: () => import('./app/pages/cadastro/diretoria/diretoria-cadastro.component').then(m => m.DiretoriaCadastroComponent) }
+        ]
+    },
+    {
+        path: 'login',
+        component: AppLayout,
+        children: [
+            { path: '', loadComponent: () => import('./app/pages/login/login.component').then(m => m.LoginComponent) }
         ]
     },
     {
         path: 'confirmar-email',
         component: AppLayout,
         children: [
-            { path: '', loadComponent: () => import('./app/pages/cadastro/confirmar-email/confirmar-email.component').then(m => m.ConfirmarEmailComponent) }
+            { path: '', loadComponent: () => import('./app/pages/confirmar-email/confirmar-email.component').then(m => m.ConfirmarEmailComponent) }
         ]
     },
     {
@@ -134,6 +141,13 @@ export const appRoutes: Routes = [
         component: AppLayout,
         children: [
             { path: '', loadComponent: () => import('./app/pages/cadastro/redefinir-senha/redefinir-senha.component').then(m => m.RedefinirSenhaComponent) }
+        ]
+    },
+    {
+        path: 'esqueci-senha',
+        component: AppLayout,
+        children: [
+            { path: '', loadComponent: () => import('./app/pages/esqueci-senha/esqueci-senha.component').then(m => m.EsqueciSenhaComponent) }
         ]
     },
     { path: 'notfound', component: Notfound },

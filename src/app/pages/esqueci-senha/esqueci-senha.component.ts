@@ -6,7 +6,7 @@ import { ButtonModule } from 'primeng/button';
 import { InputTextModule } from 'primeng/inputtext';
 
 @Component({
-    selector: 'app-diretoria-esqueci-senha',
+    selector: 'app-esqueci-senha',
     standalone: true,
     imports: [CommonModule, FormsModule, RouterLink, ButtonModule, InputTextModule],
     template: `
@@ -41,7 +41,7 @@ import { InputTextModule } from 'primeng/inputtext';
         </div>
     `
 })
-export class DiretoriaEsqueciSenhaComponent {
+export class EsqueciSenhaComponent {
     email = '';
     isLoading = false;
     mensagem = '';

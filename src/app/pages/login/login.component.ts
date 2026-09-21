@@ -9,14 +9,14 @@ import { PasswordModule } from 'primeng/password';
 import { AuthService } from 'src/app/shared/auth.service';
 
 @Component({
-    selector: 'app-diretoria-login',
+    selector: 'app-login',
     standalone: true,
     imports: [CommonModule, FormsModule, RouterLink, ButtonModule, CheckboxModule, InputTextModule, PasswordModule],
     template: `
         <div class="flex items-center justify-center py-12 px-4">
             <div class="w-full max-w-xl rounded-3xl border border-surface-200 bg-white p-8 shadow-2xl dark:border-surface-700 dark:bg-surface-900">
                 <div class="mb-8 text-center">
-                    <h1 class="text-3xl font-semibold text-surface-900 dark:text-white">Cadastro de Diretoria</h1>
+                    <h1 class="text-3xl font-semibold text-surface-900 dark:text-white">Login</h1>
                 </div>
 
                 <input type="hidden" name="id_tipo_usuario" [value]="idTipoUsuario" />
@@ -77,7 +77,7 @@ import { AuthService } from 'src/app/shared/auth.service';
                     </div>
 
                     <div class="mt-6 text-center">
-                        <a routerLink="/cadastro/diretoria/cadastro" class="text-sm font-medium text-primary hover:underline">
+                        <a routerLink="/cadastro" class="text-sm font-medium text-primary hover:underline">
                             Não tem conta? Cadastrar.
                         </a>
                     </div>
@@ -86,8 +86,8 @@ import { AuthService } from 'src/app/shared/auth.service';
         </div>
     `
 })
-export class DiretoriaLoginComponent {
-    idTipoUsuario = '1';
+export class LoginComponent {
+    idTipoUsuario = '3';
     email = '';
     password = '';
     manterConectado = false;
@@ -164,7 +164,7 @@ export class DiretoriaLoginComponent {
             this.tipoMensagem = 'success';
             this.mensagem = 'Login realizado com sucesso.';
             this.authService.definirUsuario(data);
-            await this.router.navigate(['/cadastro/diretoria/cadastro']);
+            await this.router.navigate(['/cadastro']);
         } catch (error) {
             this.tipoMensagem = 'error';
             this.mensagem = 'Erro ao consultar o banco de dados. Tente novamente.';
