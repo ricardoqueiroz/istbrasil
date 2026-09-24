@@ -19,6 +19,7 @@ import obraRoutes from './src/routes/obra.routes.js';
 import paypalRoutes from './src/routes/paypal.routes.js';
 import contactRoutes from './src/routes/contact.routes.js';
 import usuariosRoutes from './src/routes/usuarios.routes.js';
+import eventosRoutes from './src/routes/eventos.routes.js';
 
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
@@ -91,6 +92,7 @@ app.use('/api/releases', releaseRoutes);
 app.use('/api/timeline', timelineRoutes);
 app.use('/api/obra', obraRoutes);
 app.use('/api/usuarios', usuariosRoutes);
+app.use('/api/eventos', eventosRoutes);
 
 // --- Arquivos Estáticos ---
 const __filename = fileURLToPath(import.meta.url);

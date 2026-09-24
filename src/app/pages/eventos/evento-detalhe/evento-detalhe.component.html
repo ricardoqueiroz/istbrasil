@@ -1,0 +1,276 @@
+<div class="bg-slate-50 min-h-screen pb-20 font-sans text-slate-800">
+  <app-topbar [showMenuButton]="false"></app-topbar>
+  
+  <!-- SKELETON LOADING -->
+  <div *ngIf="carregando" class="container mx-auto px-4 py-12 max-w-6xl">
+    <p-skeleton width="120px" height="36px" styleClass="mb-6"></p-skeleton>
+    <p-skeleton width="100%" height="320px" borderRadius="24px" styleClass="mb-8"></p-skeleton>
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+      <div class="lg:col-span-2 space-y-4">
+        <p-skeleton width="60%" height="32px"></p-skeleton>
+        <p-skeleton width="100%" height="150px"></p-skeleton>
+        <p-skeleton width="100%" height="200px"></p-skeleton>
+      </div>
+      <div>
+        <p-skeleton width="100%" height="300px" borderRadius="16px"></p-skeleton>
+      </div>
+    </div>
+  </div>
+
+  <!-- TELA DE ERRO / NÃO ENCONTRADO -->
+  <div *ngIf="!carregando && erroCarregamento" class="container mx-auto px-4 py-20 text-center max-w-xl">
+    <div class="bg-white p-8 rounded-3xl shadow-sm border border-slate-200">
+      <i class="pi pi-exclamation-triangle text-6xl text-amber-500 mb-4 block"></i>
+      <h2 class="text-2xl font-bold text-slate-800 mb-2">Evento Não Encontrado</h2>
+      <p class="text-slate-600 mb-6">O evento solicitado não existe ou não está mais disponível.</p>
+      <a routerLink="/eventos" class="p-button p-button-emerald p-button-rounded inline-flex items-center gap-2">
+        <i class="pi pi-arrow-left"></i>
+        <span>Voltar para Eventos</span>
+      </a>
+    </div>
+  </div>
+
+  <!-- CONTEÚDO DO EVENTO -->
+  <article *ngIf="!carregando && evento" class="animate-fade-in">
+    
+    <!-- BANNER DE CAPA E NAVEGAÇÃO -->
+    <header class="relative bg-slate-900 text-white pb-16 pt-8 overflow-hidden mt-[50px]">
+      
+      <!-- Imagem de Fundo com Overlay -->
+      <div class="absolute inset-0 z-0 opacity-40">
+        <img [src]="evento.banner_capa_url || evento.imagem_card_url || 'assets/images/eventos/default-event.jpg'" 
+             [alt]="evento.nome" 
+             class="w-full h-full object-cover blur-sm scale-105">
+      </div>
+      <div class="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-900/80 to-transparent z-0"></div>
+
+      <div class="container mx-auto px-4 md:px-6 relative z-10 max-w-6xl">
+        
+        <!-- Botão Voltar -->
+        <div class="mb-8">
+          <a routerLink="/eventos" 
+             class="inline-flex items-center gap-2 text-emerald-300 hover:text-white bg-black/40 hover:bg-black/60 px-4 py-2 rounded-full text-sm font-medium backdrop-blur-md transition-all">
+            <i class="pi pi-arrow-left"></i>
+            <span>Voltar para a lista de eventos</span>
+          </a>
+        </div>
+
+        <!-- Badges e Categoria -->
+        <div class="flex flex-wrap items-center gap-3 mb-4">
+          <p-tag [value]="getLabel(evento.status)" 
+                 [severity]="getSeverity(evento.status)" 
+                 [rounded]="true">
+          </p-tag>
+          <span class="bg-white/20 backdrop-blur-md text-white text-xs px-3 py-1 rounded-full font-medium">
+            {{ evento.categoria }}
+          </span>
+          <span *ngIf="evento.modalidade" class="bg-emerald-500/80 backdrop-blur-md text-white text-xs px-3 py-1 rounded-full font-medium">
+            {{ evento.modalidade }}
+          </span>
+        </div>
+
+        <!-- Título e Subtítulo -->
+        <h1 class="text-3xl md:text-5xl font-extrabold !text-white tracking-tight leading-tight mb-4 max-w-4xl" style="color: #ffffff">
+          {{ evento.nome }}
+        </h1>
+        <p *ngIf="evento.subtitulo" class="text-lg md:text-xl text-emerald-100 font-light max-w-3xl leading-relaxed opacity-90">
+          {{ evento.subtitulo }}
+        </p>
+
+      </div>
+    </header>
+
+    <!-- CORPO PRINCIPAL DO DETALHAMENTO -->
+    <main class="container mx-auto px-4 md:px-6 max-w-6xl -mt-8 relative z-20">
+      
+      <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+        
+        <!-- COLUNA ESQUERDA: APRESENTAÇÃO E DETALHES -->
+        <div class="lg:col-span-2 space-y-8">
+          
+          <!-- RESUMO E APRESENTAÇÃO COMPLETA -->
+          <section class="bg-white p-6 md:p-8 rounded-3xl shadow-sm border border-slate-200">
+            <h2 class="text-2xl font-bold text-slate-800 mb-4 flex items-center gap-2 border-b border-slate-100 pb-3">
+              <i class="pi pi-info-circle text-emerald-600"></i>
+              Sobre o Evento
+            </h2>
+            
+            <p class="text-slate-700 text-lg leading-relaxed font-medium mb-6 bg-emerald-50/60 p-4 rounded-2xl border border-emerald-100/80">
+              {{ evento.resumo }}
+            </p>
+
+            <!-- Conteúdo com suporte a marcação HTML -->
+            <div *ngIf="evento.descricao_completa" 
+                 class="prose prose-slate max-w-none text-slate-600 leading-relaxed space-y-4"
+                 [innerHTML]="evento.descricao_completa">
+            </div>
+          </section>
+
+          <!-- ETAPAS DO CRONOGRAMA -->
+          <section *ngIf="evento.etapas && evento.etapas.length > 0" class="bg-white p-6 md:p-8 rounded-3xl shadow-sm border border-slate-200">
+            <h2 class="text-2xl font-bold text-slate-800 mb-6 flex items-center gap-2 border-b border-slate-100 pb-3">
+              <i class="pi pi-calendar-plus text-emerald-600"></i>
+              Etapas e Cronograma
+            </h2>
+
+            <p-timeline [value]="evento.etapas" align="left" styleClass="customized-timeline">
+              <ng-template pTemplate="marker" let-etapa>
+                <span class="flex w-8 h-8 items-center justify-center text-white rounded-full bg-emerald-600 shadow-md">
+                  <i class="pi pi-check text-xs" *ngIf="etapa.status === 'Concluido'"></i>
+                  <i class="pi pi-spin pi-spinner text-xs" *ngIf="etapa.status === 'Em_Andamento'"></i>
+                  <i class="pi pi-clock text-xs" *ngIf="etapa.status === 'Pendente'"></i>
+                </span>
+              </ng-template>
+
+              <ng-template pTemplate="content" let-etapa>
+                <div class="mb-6 ml-2 bg-slate-50 p-4 rounded-2xl border border-slate-100">
+                  <div class="flex flex-wrap items-center justify-between gap-2 mb-1">
+                    <h3 class="font-bold text-slate-800 text-lg">{{ etapa.titulo }}</h3>
+                    <span class="text-xs px-2.5 py-1 rounded-full font-semibold" [ngClass]="getEtapaBadgeClass(etapa.status)">
+                      {{ etapa.status === 'Em_Andamento' ? 'Em Andamento' : (etapa.status === 'Concluido' ? 'Concluído' : 'Pendente') }}
+                    </span>
+                  </div>
+
+                  <p *ngIf="etapa.data_inicio" class="text-xs font-semibold text-emerald-700 mb-2 flex items-center gap-1">
+                    <i class="pi pi-calendar"></i>
+                    {{ etapa.data_inicio | date:'dd/MM/yyyy' }} 
+                    <span *ngIf="etapa.data_fim">até {{ etapa.data_fim | date:'dd/MM/yyyy' }}</span>
+                  </p>
+
+                  <p *ngIf="etapa.descricao" class="text-slate-600 text-sm leading-relaxed">
+                    {{ etapa.descricao }}
+                  </p>
+                </div>
+              </ng-template>
+            </p-timeline>
+          </section>
+
+          <!-- PROGRAMAÇÃO / LINE-UP -->
+          <section *ngIf="evento.programacao && evento.programacao.length > 0" class="bg-white p-6 md:p-8 rounded-3xl shadow-sm border border-slate-200">
+            <h2 class="text-2xl font-bold text-slate-800 mb-6 flex items-center gap-2 border-b border-slate-100 pb-3">
+              <i class="pi pi-users text-emerald-600"></i>
+              Programação e Atrações
+            </h2>
+
+            <div class="space-y-4">
+              <div *ngFor="let prog of evento.programacao" class="p-4 rounded-2xl border border-slate-100 bg-slate-50 flex flex-col md:flex-row md:items-center justify-between gap-4">
+                <div>
+                  <span *ngIf="prog.papel_atracao" class="text-xs font-bold text-emerald-700 uppercase tracking-wider block mb-1">
+                    {{ prog.papel_atracao }}
+                  </span>
+                  <h4 class="font-bold text-slate-800 text-lg">{{ prog.atracao }}</h4>
+                  <p *ngIf="prog.descricao" class="text-slate-600 text-sm mt-1">{{ prog.descricao }}</p>
+                </div>
+
+                <div class="text-left md:text-right shrink-0">
+                  <span *ngIf="prog.data_horario" class="inline-block bg-white px-3 py-1.5 rounded-xl border border-slate-200 text-slate-700 text-xs font-bold shadow-xs">
+                    <i class="pi pi-clock text-emerald-600 mr-1"></i>
+                    {{ prog.data_horario | date:'dd/MM/yyyy HH:mm' }}
+                  </span>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <!-- DOCUMENTOS E REGULAMENTOS -->
+          <section *ngIf="evento.documentos && evento.documentos.length > 0" class="bg-white p-6 md:p-8 rounded-3xl shadow-sm border border-slate-200">
+            <h2 class="text-2xl font-bold text-slate-800 mb-6 flex items-center gap-2 border-b border-slate-100 pb-3">
+              <i class="pi pi-file-pdf text-emerald-600"></i>
+              Documentos & Regulamentos
+            </h2>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div *ngFor="let doc of evento.documentos" class="p-4 rounded-2xl border border-slate-200 bg-slate-50/50 hover:bg-white hover:border-emerald-500 hover:shadow-md transition-all flex items-center justify-between gap-3">
+                <div class="flex items-center gap-3 overflow-hidden">
+                  <div class="p-3 bg-red-50 text-red-600 rounded-xl">
+                    <i class="pi pi-file-pdf text-xl"></i>
+                  </div>
+                  <div class="truncate">
+                    <h4 class="font-bold text-slate-800 text-sm truncate" [title]="doc.titulo">{{ doc.titulo }}</h4>
+                    <span class="text-xs text-slate-500">{{ doc.formato || 'PDF' }} <span *ngIf="doc.tamanho">• {{ doc.tamanho }}</span></span>
+                  </div>
+                </div>
+
+                <button (click)="abrirDocumento(doc.arquivo_url)" 
+                        class="p-button p-button-outlined p-button-emerald p-button-sm p-button-rounded shrink-0">
+                  <i class="pi pi-download"></i>
+                </button>
+              </div>
+            </div>
+          </section>
+
+        </div>
+
+        <!-- COLUNA DIREITA: CARD DE INSCRIÇÃO E METADADOS -->
+        <aside class="space-y-6">
+          
+          <!-- CARD DE INSCRIÇÃO / CALL TO ACTION -->
+          <div class="bg-white p-6 rounded-3xl shadow-lg border border-emerald-100 sticky top-6">
+            <div class="text-center mb-6">
+              <span class="text-xs font-bold uppercase tracking-widest text-slate-400 block mb-1">Inscrição / Participação</span>
+              <span class="text-3xl font-extrabold text-emerald-700 block">
+                {{ evento.valor_inscricao || 'Gratuito' }}
+              </span>
+            </div>
+
+            <!-- Botão Principal CTA -->
+            <a *ngIf="evento.link_cta" 
+               [href]="evento.link_cta" 
+               target="_blank"
+               class="w-full py-4 px-6 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-2xl shadow-md hover:shadow-xl transition-all text-center block mb-6 text-lg">
+              {{ evento.texto_cta || 'Inscreva-se Já' }}
+            </a>
+
+            <!-- Informações Rápidas -->
+            <div class="space-y-4 pt-4 border-t border-slate-100 text-sm">
+              
+              <div class="flex items-start gap-3">
+                <i class="pi pi-calendar text-emerald-600 text-lg mt-0.5"></i>
+                <div>
+                  <strong class="block text-slate-800 font-semibold">Período</strong>
+                  <span class="text-slate-600">
+                    {{ evento.data_inicio | date:'dd/MM/yyyy' }} 
+                    <span *ngIf="evento.data_fim">até {{ evento.data_fim | date:'dd/MM/yyyy' }}</span>
+                  </span>
+                </div>
+              </div>
+
+              <div *ngIf="evento.local_nome" class="flex items-start gap-3">
+                <i class="pi pi-map-marker text-emerald-600 text-lg mt-0.5"></i>
+                <div>
+                  <strong class="block text-slate-800 font-semibold">Local</strong>
+                  <span class="text-slate-600">{{ evento.local_nome }}</span>
+                  <span *ngIf="evento.endereco" class="block text-xs text-slate-500 mt-0.5">{{ evento.endereco }}</span>
+                  <span *ngIf="evento.cidade" class="block text-xs text-slate-500">{{ evento.cidade }}/{{ evento.estado }}</span>
+                </div>
+              </div>
+
+              <div *ngIf="evento.modalidade" class="flex items-start gap-3">
+                <i class="pi pi-desktop text-emerald-600 text-lg mt-0.5"></i>
+                <div>
+                  <strong class="block text-slate-800 font-semibold">Modalidade</strong>
+                  <span class="text-slate-600">{{ evento.modalidade }}</span>
+                </div>
+              </div>
+
+            </div>
+
+            <!-- Card de Realização IST -->
+            <div class="mt-6 pt-6 border-t border-slate-100 text-center bg-slate-50 p-4 rounded-2xl">
+              <span class="text-xs text-slate-500 block mb-2 font-medium">Realização Oficial:</span>
+              <img src="assets/images/logo-ist.png" alt="IST Brasil" class="h-10 object-contain mx-auto">
+            </div>
+
+          </div>
+
+        </aside>
+
+      </div>
+
+    </main>
+
+  </article>
+
+  <!-- FOOTER -->
+  <footer-widget></footer-widget>
+</div>

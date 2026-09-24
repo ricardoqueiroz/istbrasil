@@ -117,7 +117,7 @@ export const appRoutes: Routes = [
         path: 'cadastro',
         component: AppLayout,
         children: [
-            { path: '', loadComponent: () => import('./app/pages/cadastro/cadastro.component').then(m => m.DiretoriaCadastroComponent) },
+            { path: '', loadComponent: () => import('./app/pages/cadastro/cadastro.component').then(m => m.CadastroComponent) },
             { path: 'diretoria/login', component: DiretoriaLoginComponent },
             { path: 'diretoria/cadastro', loadComponent: () => import('./app/pages/cadastro/diretoria/diretoria-cadastro.component').then(m => m.DiretoriaCadastroComponent) }
         ]
@@ -140,7 +140,7 @@ export const appRoutes: Routes = [
         path: 'redefinir-senha',
         component: AppLayout,
         children: [
-            { path: '', loadComponent: () => import('./app/pages/cadastro/redefinir-senha/redefinir-senha.component').then(m => m.RedefinirSenhaComponent) }
+            { path: '', loadComponent: () => import('./app/pages/redefinir-senha/redefinir-senha.component').then(m => m.RedefinirSenhaComponent) }
         ]
     },
     {
@@ -149,6 +149,14 @@ export const appRoutes: Routes = [
         children: [
             { path: '', loadComponent: () => import('./app/pages/esqueci-senha/esqueci-senha.component').then(m => m.EsqueciSenhaComponent) }
         ]
+    },
+    {
+        path: 'eventos',
+        loadComponent: () => import('./app/pages/eventos/eventos.component').then(m => m.EventosComponent)
+    },
+    {
+        path: 'eventos/:slug',
+        loadComponent: () => import('./app/pages/eventos/evento-detalhe/evento-detalhe.component').then(m => m.EventoDetalheComponent)
     },
     { path: 'notfound', component: Notfound },
     { path: 'auth', loadChildren: () => import('./app/pages/auth/auth.routes') },

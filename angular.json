@@ -33,6 +33,11 @@
                             },
                             {
                                 "glob": "**/*",
+                                "input": "src/assets/images/eventos",
+                                "output": "assets/images/eventos"
+                            },
+                            {
+                                "glob": "**/*",
                                 "input": "public"
                             }
                         ],

@@ -51,3 +51,6 @@ development/
 # Environment files
 src/environments/environment.ts
 .env
+
+# Demo/inspection only, not shipped to production
+src/app/pages/uikit/

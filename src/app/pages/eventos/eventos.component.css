@@ -1,0 +1,30 @@
+:host {
+  display: block;
+}
+
+/* Utilitários para cortar texto em até X linhas */
+.line-clamp-2 {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.line-clamp-3 {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* Customização do Botão PrimeNG no tema do IST */
+::ng-deep .p-button.p-button-emerald {
+  background-color: #059669 !important;
+  border-color: #059669 !important;
+  color: #ffffff !important;
+}
+
+::ng-deep .p-button.p-button-emerald:hover {
+  background-color: #047857 !important;
+  border-color: #047857 !important;
+}

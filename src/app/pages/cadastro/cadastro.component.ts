@@ -160,7 +160,7 @@ const UFS: UfOption[] = [
         </div>
     `
 })
-export class DiretoriaCadastroComponent implements OnInit {
+export class CadastroComponent implements OnInit {
     step = 1;
     isLoading = false;
     mensagem = '';
@@ -372,7 +372,7 @@ export class DiretoriaCadastroComponent implements OnInit {
 
             this.tipoMensagem = 'success';
             this.mensagem = 'Cadastro realizado com sucesso! Redirecionando para o login...';
-            setTimeout(() => this.router.navigate(['/cadastro/diretoria/login']), 1500);
+            setTimeout(() => this.router.navigate(['/login']), 2000);
         } catch {
             this.tipoMensagem = 'error';
             this.mensagem = 'Erro ao enviar o cadastro. Tente novamente.';
