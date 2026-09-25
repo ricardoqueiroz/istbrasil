@@ -1,5 +1,7 @@
 import express from 'express';
 import usuariosController from '../controllers/usuariosController.js';
+import { autenticarUsuario } from '../middlewares/authMiddleware.js';
+import { profilePhotoUpload } from '../services/profilePhotoService.js';
 const router = express.Router();
 
 // POST /api/usuarios/login
@@ -27,7 +29,28 @@ router.get('/validar-token-senha', usuariosController.validarTokenSenha);
 router.post('/redefinir-senha', usuariosController.redefinirSenha);
 
 // GET /api/usuarios/me
-router.get('/me', usuariosController.me);
+router.get('/me', autenticarUsuario, usuariosController.me);
+
+// GET /api/usuarios/perfil
+router.get('/perfil', autenticarUsuario, usuariosController.obterPerfil);
+
+// PUT /api/usuarios/perfil
+router.put('/perfil', autenticarUsuario, usuariosController.atualizarPerfil);
+
+// PUT /api/usuarios/perfil/concorrente/participacao
+router.put('/perfil/concorrente/participacao', autenticarUsuario, usuariosController.atualizarParticipacaoConcorrente);
+
+// PUT /api/usuarios/perfil/curriculo
+router.put('/perfil/curriculo', autenticarUsuario, usuariosController.atualizarCurriculo);
+
+// POST /api/usuarios/perfil/foto
+router.post('/perfil/foto', autenticarUsuario, profilePhotoUpload, usuariosController.atualizarFoto);
+
+// GET /api/usuarios/fotos/:arquivo
+router.get('/fotos/:arquivo', usuariosController.obterFotoPublica);
+
+// DELETE /api/usuarios/perfil/foto
+router.delete('/perfil/foto', autenticarUsuario, usuariosController.removerFoto);
 
 // POST /api/usuarios/logout
 router.post('/logout', usuariosController.logout);

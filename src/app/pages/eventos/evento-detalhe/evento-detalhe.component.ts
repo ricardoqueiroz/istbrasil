@@ -81,6 +81,10 @@ export class EventoDetalheComponent implements OnInit {
     }
   }
 
+  isInternalLink(link: string): boolean {
+    return link.startsWith('/');
+  }
+
   getSeverity(status: EventoStatus): 'success' | 'info' | 'warn' | 'danger' | 'secondary' {
     switch (status) {
       case 'Inscricoes_Abertas':

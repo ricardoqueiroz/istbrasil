@@ -61,11 +61,12 @@ const getAllObras = async (req, res) => {
 const getComposicoesElegiveis = async (_req, res) => {
     try {
         const [rows] = await db.execute(
-            `SELECT DISTINCT id_obra, titulo
+                        `SELECT MIN(id_obra) AS id_obra, titulo
              FROM ist_composicao
              WHERE propria = 1
                AND partitura IS NOT NULL
                AND id_obra <> ?
+                         GROUP BY titulo
              ORDER BY titulo`,
             [ID_OBRA_PRINCIPAL_CONCORRENTE]
         );

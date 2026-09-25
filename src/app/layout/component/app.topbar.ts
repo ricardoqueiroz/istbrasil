@@ -82,7 +82,7 @@ export class AppTopbar {
         {
             label: 'Consultar / Alterar Dados',
             icon: 'pi pi-user-edit',
-            command: () => this.router.navigate(['/cadastro/diretoria/perfil'])
+            command: () => this.irParaPerfil()
         },
         {
             label: 'Sair',
@@ -107,6 +107,23 @@ export class AppTopbar {
 
     async irParaLogin(): Promise<void> {
         await this.router.navigate(['/login']);
+    }
+
+    async irParaPerfil(): Promise<void> {
+        const tipoUsuario = this.authService.usuario()?.id_tipo_usuario;
+        const rotasPorTipo: Record<number, string> = {
+            1: '/cadastro/diretoria/perfil',
+            2: '/cadastro/concorrente/perfil',
+            3: '/cadastro/externo/perfil',
+            4: '/cadastro/colaborador/perfil'
+        };
+
+        if (!tipoUsuario) {
+            await this.router.navigate(['/login']);
+            return;
+        }
+
+        await this.router.navigate([rotasPorTipo[tipoUsuario] || '/']);
     }
 
     async sair(): Promise<void> {

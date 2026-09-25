@@ -11,6 +11,7 @@ import { EditoraComponent } from './app/pages/editora/editora.component';
 import { CheckoutComponent } from './app/pages/editora/checkout/checkout.component';
 import { DiretoriaLoginComponent } from './app/pages/cadastro/diretoria/diretoria-login.component';
 import { TIPO_USUARIO_MAP } from './app/pages/cadastro/models/cadastro.model';
+import { perfilGuard } from './app/guards/perfil.guard';
 // import { LivroComponent } from './app/pages/editora/livro/livro.component';
 
 export const appRoutes: Routes = [
@@ -149,6 +150,42 @@ export const appRoutes: Routes = [
                 data: {
                     cadastroTipo: 'colaborador',
                     idTipoUsuario: TIPO_USUARIO_MAP.colaborador
+                }
+            },
+            {
+                path: 'diretoria/perfil',
+                loadComponent: () => import('./app/pages/perfil/perfil.component').then(m => m.PerfilComponent),
+                canActivate: [perfilGuard],
+                data: {
+                    perfilTipo: 'diretoria',
+                    perfilTipoId: TIPO_USUARIO_MAP.diretoria
+                }
+            },
+            {
+                path: 'concorrente/perfil',
+                loadComponent: () => import('./app/pages/perfil/perfil.component').then(m => m.PerfilComponent),
+                canActivate: [perfilGuard],
+                data: {
+                    perfilTipo: 'concorrente',
+                    perfilTipoId: TIPO_USUARIO_MAP.concorrente
+                }
+            },
+            {
+                path: 'externo/perfil',
+                loadComponent: () => import('./app/pages/perfil/perfil.component').then(m => m.PerfilComponent),
+                canActivate: [perfilGuard],
+                data: {
+                    perfilTipo: 'externo',
+                    perfilTipoId: TIPO_USUARIO_MAP.externo
+                }
+            },
+            {
+                path: 'colaborador/perfil',
+                loadComponent: () => import('./app/pages/perfil/perfil.component').then(m => m.PerfilComponent),
+                canActivate: [perfilGuard],
+                data: {
+                    perfilTipo: 'colaborador',
+                    perfilTipoId: TIPO_USUARIO_MAP.colaborador
                 }
             },
             { path: 'diretoria/login', component: DiretoriaLoginComponent },

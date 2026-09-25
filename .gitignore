@@ -48,6 +48,9 @@ database/
 # Development files
 development/
 
+# User-generated profile photos
+/istbrasil.private/usuarios/fotos/*
+
 # Environment files
 src/environments/environment.ts
 .env

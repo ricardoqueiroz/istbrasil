@@ -214,10 +214,17 @@
             </div>
 
             <!-- Botão Principal CTA -->
-            <a *ngIf="evento.link_cta" 
-               [href]="evento.link_cta" 
-               target="_blank"
-               class="w-full py-4 px-6 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-2xl shadow-md hover:shadow-xl transition-all text-center block mb-6 text-lg">
+            <a *ngIf="evento.link_cta && isInternalLink(evento.link_cta)"
+              [routerLink]="evento.link_cta"
+              class="w-full py-4 px-6 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-2xl shadow-md hover:shadow-xl transition-all text-center block mb-6 text-lg">
+              {{ evento.texto_cta || 'Inscreva-se Já' }}
+            </a>
+
+            <a *ngIf="evento.link_cta && !isInternalLink(evento.link_cta)"
+              [href]="evento.link_cta"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="w-full py-4 px-6 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-2xl shadow-md hover:shadow-xl transition-all text-center block mb-6 text-lg">
               {{ evento.texto_cta || 'Inscreva-se Já' }}
             </a>
 

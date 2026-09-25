@@ -2,6 +2,7 @@ import { CommonModule } from '@angular/common';
 import { Component, OnInit } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
+import { DomSanitizer, SafeResourceUrl } from '@angular/platform-browser';
 import { ButtonModule } from 'primeng/button';
 import { DatePickerModule } from 'primeng/datepicker';
 import { InputMaskModule } from 'primeng/inputmask';
@@ -112,7 +113,7 @@ const UFS: UfOption[] = [
 
                     <div class="mb-5">
                         <label for="dataNascimento" class="mb-2 block text-sm font-medium text-surface-700 dark:text-surface-200">Data de Nascimento</label>
-                        <p-datepicker id="dataNascimento" name="dataNascimento" [(ngModel)]="dataNascimento" dateFormat="dd/mm/yy" [showIcon]="true" [maxDate]="hoje" placeholder="dd/mm/aaaa" styleClass="w-full" [required]="true"></p-datepicker>
+                        <p-datepicker id="dataNascimento" name="dataNascimento" [(ngModel)]="dataNascimentoSelecionada" (input)="formatarEntradaDataNascimento($event)" (ngModelChange)="atualizarDataNascimento($event)" dateFormat="dd/mm/yy" [showIcon]="true" [maxDate]="hoje" placeholder="dd/mm/aaaa" styleClass="w-full" [required]="true"></p-datepicker>
                     </div>
 
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-5">
@@ -186,6 +187,9 @@ const UFS: UfOption[] = [
                         <div class="mb-5">
                             <label for="linkVideo1" class="mb-2 block text-sm font-medium text-surface-700 dark:text-surface-200">Vídeo da primeira obra</label>
                             <input id="linkVideo1" pInputText type="url" name="linkVideo1" [(ngModel)]="linkVideo1" placeholder="https://www.youtube.com/... ou https://vimeo.com/..." class="w-full" />
+                            <div *ngIf="video1EmbedUrl" class="mt-3 aspect-video w-full overflow-hidden rounded-md">
+                                <iframe [src]="video1EmbedUrl" title="Vídeo da primeira obra" class="h-full w-full border-0" allow="autoplay; encrypted-media; picture-in-picture" allowfullscreen loading="lazy"></iframe>
+                            </div>
                         </div>
 
                         <div class="mb-5">
@@ -197,6 +201,9 @@ const UFS: UfOption[] = [
                         <div class="mb-5">
                             <label for="linkVideo2" class="mb-2 block text-sm font-medium text-surface-700 dark:text-surface-200">Vídeo da segunda obra</label>
                             <input id="linkVideo2" pInputText type="url" name="linkVideo2" [(ngModel)]="linkVideo2" [disabled]="idObra2 === null" placeholder="https://www.youtube.com/... ou https://vimeo.com/..." class="w-full" />
+                            <div *ngIf="video2EmbedUrl" class="mt-3 aspect-video w-full overflow-hidden rounded-md">
+                                <iframe [src]="video2EmbedUrl" title="Vídeo da segunda obra" class="h-full w-full border-0" allow="autoplay; encrypted-media; picture-in-picture" allowfullscreen loading="lazy"></iframe>
+                            </div>
                         </div>
                     </ng-container>
 
@@ -216,11 +223,16 @@ export class CadastroComponent implements OnInit {
     mensagem = '';
     tipoMensagem: 'success' | 'error' | 'info' = 'info';
     hoje = new Date();
+    dataNascimentoSelecionada: Date | null = null;
+    private dataNascimentoEmEdicaoInvalida = false;
     cidadeBloqueada = false;
     ufBloqueada = false;
     fotoSelecionada: File | null = null;
+    video1EmbedUrl: SafeResourceUrl | null = null;
+    video2EmbedUrl: SafeResourceUrl | null = null;
     readonly obraPrincipal = OBRA_PRINCIPAL_CONCORRENTE;
-    readonly obrasSecundarias: ObraOption[] = [{ idObra: 0, titulo: 'Selecione a segunda obra (opcional)' }];
+    obrasSecundarias: ObraOption[] = [{ idObra: 0, titulo: 'Selecione a segunda obra (opcional)' }];
+    private obrasSecundariasCarregadas = false;
 
     cargos: Cargo[] = [];
     ufs = UFS;
@@ -266,13 +278,6 @@ export class CadastroComponent implements OnInit {
     set idCargo(value: number | null) { this.cadastroStateService.atualizarDadosPessoais({ idCargo: this.usaCargo ? value : null }); }
     get identidade(): string { return this.cadastroStateService.dadosPessoais().identidade; }
     set identidade(value: string) { this.cadastroStateService.atualizarDadosPessoais({ identidade: value }); }
-    get dataNascimento(): Date | null {
-        const value = this.cadastroStateService.dadosPessoais().dataNascimento;
-        return value ? new Date(`${value}T00:00:00`) : null;
-    }
-    set dataNascimento(value: Date | null) {
-        this.cadastroStateService.atualizarDadosPessoais({ dataNascimento: this.formatarDataIso(value) || '' });
-    }
     get senha(): string { return this.cadastroStateService.dadosPessoais().senha; }
     set senha(value: string) { this.cadastroStateService.atualizarDadosPessoais({ senha: value }); }
     get confirmarSenha(): string { return this.cadastroStateService.dadosPessoais().confirmarSenha; }
@@ -295,7 +300,10 @@ export class CadastroComponent implements OnInit {
     set curriculo(value: string) { this.cadastroStateService.atualizarDadosComplementares({ curriculo: value }); }
     get idObra1(): number | null { return this.cadastroStateService.dadosComplementares().idObra1; }
     get linkVideo1(): string { return this.cadastroStateService.dadosComplementares().linkVideo1; }
-    set linkVideo1(value: string) { this.cadastroStateService.atualizarDadosComplementares({ linkVideo1: value }); }
+    set linkVideo1(value: string) {
+        this.cadastroStateService.atualizarDadosComplementares({ linkVideo1: value });
+        this.video1EmbedUrl = this.criarVideoEmbedUrl(value);
+    }
     get idObra2(): number | null { return this.cadastroStateService.dadosComplementares().idObra2; }
     get segundaObraSelecionada(): number { return this.idObra2 ?? 0; }
     set segundaObraSelecionada(value: number) {
@@ -303,19 +311,24 @@ export class CadastroComponent implements OnInit {
 
         if (!idObra || idObra === this.obraPrincipal.idObra) {
             this.cadastroStateService.atualizarDadosComplementares({ idObra2: null, linkVideo2: '' });
+            this.video2EmbedUrl = null;
             return;
         }
 
         this.cadastroStateService.atualizarDadosComplementares({ idObra2: idObra });
     }
     get linkVideo2(): string { return this.cadastroStateService.dadosComplementares().linkVideo2; }
-    set linkVideo2(value: string) { this.cadastroStateService.atualizarDadosComplementares({ linkVideo2: value }); }
+    set linkVideo2(value: string) {
+        this.cadastroStateService.atualizarDadosComplementares({ linkVideo2: value });
+        this.video2EmbedUrl = this.criarVideoEmbedUrl(value);
+    }
 
     constructor(
         private readonly router: Router,
         private readonly route: ActivatedRoute,
         private readonly enderecoService: EnderecoService,
-        private readonly cadastroStateService: CadastroStateService
+        private readonly cadastroStateService: CadastroStateService,
+        private readonly sanitizer: DomSanitizer
     ) {}
 
     ngOnInit(): void {
@@ -330,11 +343,13 @@ export class CadastroComponent implements OnInit {
 
             if (estadoAtual.tipo === cadastroTipo) {
                 this.inicializarEtapa3();
+                this.sincronizarDataNascimentoSelecionada();
                 return;
             }
 
             this.cadastroStateService.setTipo(cadastroTipo);
             this.inicializarEtapa3();
+            this.sincronizarDataNascimentoSelecionada();
         });
     }
 
@@ -375,6 +390,110 @@ export class CadastroComponent implements OnInit {
         if (this.tipoCadastro === 'concorrente' && this.idObra1 !== this.obraPrincipal.idObra) {
             this.cadastroStateService.atualizarDadosComplementares({ idObra1: this.obraPrincipal.idObra });
         }
+    }
+
+    private async carregarObrasSecundarias(tipo: CadastroTipo): Promise<void> {
+        if (tipo !== 'concorrente' || this.obrasSecundariasCarregadas) {
+            return;
+        }
+
+        this.obrasSecundariasCarregadas = true;
+
+        try {
+            const response = await fetch('/api/obra/composicoes-elegiveis');
+
+            if (!response.ok) {
+                throw new Error('Falha ao carregar composições elegíveis.');
+            }
+
+            const data = await response.json() as unknown;
+            const obras = Array.isArray(data) ? data.filter(this.ehObraOption) : [];
+            this.obrasSecundarias = [
+                { idObra: 0, titulo: 'Selecione a segunda obra (opcional)' },
+                ...obras
+            ];
+        } catch {
+            this.obrasSecundarias = [{ idObra: 0, titulo: 'Selecione a segunda obra (opcional)' }];
+            this.tipoMensagem = 'info';
+            this.mensagem = 'Não foi possível carregar a lista de segunda obra agora.';
+        }
+    }
+
+    private ehObraOption(value: unknown): value is ObraOption {
+        if (!value || typeof value !== 'object') {
+            return false;
+        }
+
+        const obra = value as Record<string, unknown>;
+        return typeof obra['idObra'] === 'number' && typeof obra['titulo'] === 'string';
+    }
+
+    private sincronizarDataNascimentoSelecionada(): void {
+        const value = this.cadastroStateService.dadosPessoais().dataNascimento;
+        this.dataNascimentoSelecionada = value ? new Date(`${value}T00:00:00`) : null;
+        this.dataNascimentoEmEdicaoInvalida = false;
+    }
+
+    atualizarDataNascimento(value: Date | null): void {
+        if (!value && this.dataNascimentoEmEdicaoInvalida) {
+            return;
+        }
+
+        this.dataNascimentoEmEdicaoInvalida = false;
+        this.cadastroStateService.atualizarDadosPessoais({
+            dataNascimento: this.formatarDataIso(value) || ''
+        });
+    }
+
+    formatarEntradaDataNascimento(event: Event): void {
+        const input = event.target as HTMLInputElement;
+        const digits = input.value.replace(/\D/g, '').slice(0, 8);
+        let formatted = digits;
+
+        if (digits.length > 2) {
+            formatted = `${digits.slice(0, 2)}/${digits.slice(2)}`;
+        }
+
+        if (digits.length > 4) {
+            formatted = `${digits.slice(0, 2)}/${digits.slice(2, 4)}/${digits.slice(4)}`;
+        }
+
+        input.value = formatted;
+
+        if (digits.length === 0) {
+            this.dataNascimentoEmEdicaoInvalida = false;
+            this.dataNascimentoSelecionada = null;
+            this.cadastroStateService.atualizarDadosPessoais({ dataNascimento: '' });
+            return;
+        }
+
+        if (digits.length < 8) {
+            this.dataNascimentoEmEdicaoInvalida = true;
+            return;
+        }
+
+        const data = this.criarDataNascimentoValida(digits);
+        this.dataNascimentoEmEdicaoInvalida = !data || data > this.hoje;
+
+        if (data && !this.dataNascimentoEmEdicaoInvalida) {
+            this.dataNascimentoSelecionada = data;
+            this.cadastroStateService.atualizarDadosPessoais({
+                dataNascimento: this.formatarDataIso(data) || ''
+            });
+        }
+    }
+
+    private criarDataNascimentoValida(digits: string): Date | null {
+        const dia = Number(digits.slice(0, 2));
+        const mes = Number(digits.slice(2, 4));
+        const ano = Number(digits.slice(4, 8));
+        const data = new Date(ano, mes - 1, dia);
+
+        if (data.getFullYear() !== ano || data.getMonth() !== mes - 1 || data.getDate() !== dia) {
+            return null;
+        }
+
+        return data;
     }
 
     selecionarFoto(event: Event): void {
@@ -493,13 +612,13 @@ export class CadastroComponent implements OnInit {
             return;
         }
 
-        if (!this.dataNascimento) {
+        if (!this.dataNascimentoSelecionada || this.dataNascimentoEmEdicaoInvalida) {
             this.tipoMensagem = 'error';
             this.mensagem = 'Informe a data de nascimento.';
             return;
         }
 
-        if (this.dataNascimento > this.hoje) {
+        if (this.dataNascimentoSelecionada > this.hoje) {
             this.tipoMensagem = 'error';
             this.mensagem = 'A data de nascimento não pode ser no futuro.';
             return;
@@ -532,7 +651,7 @@ export class CadastroComponent implements OnInit {
                 telefone_celular: this.telefoneCelular,
                 senha: senhaCriptografada,
                 identidade: this.identidade,
-                data_nascimento: this.formatarDataIso(this.dataNascimento),
+                data_nascimento: this.cadastroStateService.dadosPessoais().dataNascimento,
                 logradouro: this.logradouro,
                 numero: this.numero,
                 complemento: this.complemento,
@@ -543,7 +662,7 @@ export class CadastroComponent implements OnInit {
             };
 
             if (this.usaCargo) {
-                payload.id_cargo = this.idCargo;
+                payload['id_cargo'] = this.idCargo;
             }
 
             const response = await fetch('/api/usuarios/cadastro', {
@@ -581,11 +700,54 @@ export class CadastroComponent implements OnInit {
     }
 
     private validarUrlVideo(url: string): boolean {
+        return this.criarVideoEmbedUrl(url) !== null;
+    }
+
+    private criarVideoEmbedUrl(url: string): SafeResourceUrl | null {
+        const valor = this.extrairVideoEmbedUrl(url);
+        return valor ? this.sanitizer.bypassSecurityTrustResourceUrl(valor) : null;
+    }
+
+    private extrairVideoEmbedUrl(url: string): string | null {
         try {
-            const valor = new URL(url);
-            return valor.protocol === 'https:' && (valor.hostname === 'youtube.com' || valor.hostname.endsWith('.youtube.com') || valor.hostname === 'youtu.be' || valor.hostname === 'vimeo.com' || valor.hostname.endsWith('.vimeo.com'));
+            const valor = new URL(url.trim());
+
+            if (valor.protocol !== 'https:') {
+                return null;
+            }
+
+            const hostname = valor.hostname.toLowerCase();
+            let videoId: string | null = null;
+
+            if (hostname === 'youtube.com' || hostname === 'www.youtube.com') {
+                if (valor.pathname === '/watch') {
+                    videoId = valor.searchParams.get('v');
+                } else if (valor.pathname.startsWith('/shorts/') || valor.pathname.startsWith('/embed/')) {
+                    videoId = valor.pathname.split('/')[2] || null;
+                }
+
+                return videoId && /^[A-Za-z0-9_-]{11}$/.test(videoId)
+                    ? `https://www.youtube.com/embed/${videoId}`
+                    : null;
+            }
+
+            if (hostname === 'youtu.be') {
+                videoId = valor.pathname.split('/')[1] || null;
+                return videoId && /^[A-Za-z0-9_-]{11}$/.test(videoId)
+                    ? `https://www.youtube.com/embed/${videoId}`
+                    : null;
+            }
+
+            if (hostname === 'vimeo.com' || hostname === 'www.vimeo.com') {
+                videoId = valor.pathname.split('/')[1] || null;
+                return videoId && /^\d+$/.test(videoId)
+                    ? `https://player.vimeo.com/video/${videoId}`
+                    : null;
+            }
+
+            return null;
         } catch {
-            return false;
+            return null;
         }
     }
 

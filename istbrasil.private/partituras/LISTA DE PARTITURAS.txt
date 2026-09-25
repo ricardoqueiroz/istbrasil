@@ -1,0 +1,110 @@
+UPDATE ist_composicao SET partitura = 'A 200 por hora.pdf' WHERE ist_composicao.id_obra = 1;
+UPDATE ist_composicao SET partitura = 'A 200 por hora.pdf' WHERE ist_composicao.id_obra = 2;
+[SEM MATCH] Arquivo: 'Ana Can.pdf' -> Normalizado: 'ana can'
+UPDATE ist_composicao SET partitura = 'Ana Luiza.pdf' WHERE ist_composicao.id_obra = 22;
+[SEM MATCH] Arquivo: 'Ansiedade.pdf' -> Normalizado: 'ansiedade'
+UPDATE ist_composicao SET partitura = 'Aos da Guitarrada.pdf' WHERE ist_composicao.id_obra = 25;
+[SEM MATCH] Arquivo: 'Ary Olha.pdf' -> Normalizado: 'ary olha'
+[SEM MATCH] Arquivo: 'As Meninas.pdf' -> Normalizado: 'as meninas'
+UPDATE ist_composicao SET partitura = 'Bacuri.pdf' WHERE ist_composicao.id_obra = 35;
+UPDATE ist_composicao SET partitura = 'Banzeiro.pdf' WHERE ist_composicao.id_obra = 36;
+UPDATE ist_composicao SET partitura = 'Barroquinho.pdf' WHERE ist_composicao.id_obra = 37;
+[SEM MATCH] Arquivo: 'Barueri.pdf' -> Normalizado: 'barueri'
+UPDATE ist_composicao SET partitura = 'Belém Adormecida.pdf' WHERE ist_composicao.id_obra = 40;
+[SEM MATCH] Arquivo: 'Belém.pdf' -> Normalizado: 'belem'
+UPDATE ist_composicao SET partitura = 'Blandice.pdf' WHERE ist_composicao.id_obra = 44;
+UPDATE ist_composicao SET partitura = 'Bom Pará.pdf' WHERE ist_composicao.id_obra = 45;
+UPDATE ist_composicao SET partitura = 'Brinde às Raízes.pdf' WHERE ist_composicao.id_obra = 49;
+UPDATE ist_composicao SET partitura = 'Brinquedo pro Junior.pdf' WHERE ist_composicao.id_obra = 50;
+[SEM MATCH] Arquivo: 'Brisa (Blandice).pdf' -> Normalizado: 'brisa (blandice)'
+UPDATE ist_composicao SET partitura = 'Brisa Leve.pdf' WHERE ist_composicao.id_obra = 51;
+[SEM MATCH] Arquivo: 'Buenos Aires.pdf' -> Normalizado: 'buenos aires'
+[SEM MATCH] Arquivo: 'Caboclo.pdf' -> Normalizado: 'caboclo'
+UPDATE ist_composicao SET partitura = 'Canção para Marisa.pdf' WHERE ist_composicao.id_obra = 55;
+UPDATE ist_composicao SET partitura = 'Carajás.pdf' WHERE ist_composicao.id_obra = 58;
+UPDATE ist_composicao SET partitura = 'Carimbó.pdf' WHERE ist_composicao.id_obra = 59;
+UPDATE ist_composicao SET partitura = 'Catraias.pdf' WHERE ist_composicao.id_obra = 63;
+UPDATE ist_composicao SET partitura = 'Cheiros do Pará.pdf' WHERE ist_composicao.id_obra = 64;
+UPDATE ist_composicao SET partitura = 'Choro pro Waldir.pdf' WHERE ist_composicao.id_obra = 65;
+UPDATE ist_composicao SET partitura = 'Choro Santareno.pdf' WHERE ist_composicao.id_obra = 66;
+UPDATE ist_composicao SET partitura = 'Chuvas da Tarde.pdf' WHERE ist_composicao.id_obra = 67;
+UPDATE ist_composicao SET partitura = 'Cidade Velha.pdf' WHERE ist_composicao.id_obra = 68;
+UPDATE ist_composicao SET partitura = 'Coisas do Ver-O-Peso.pdf' WHERE ist_composicao.id_obra = 69;
+UPDATE ist_composicao SET partitura = 'Cordas do Tapajós.pdf' WHERE ist_composicao.id_obra = 233;
+[SEM MATCH] Arquivo: 'Cosme Velho.pdf' -> Normalizado: 'cosme velho'
+UPDATE ist_composicao SET partitura = 'Crepúsculo.pdf' WHERE ist_composicao.id_obra = 71;
+UPDATE ist_composicao SET partitura = 'Dança dos Desejos.pdf' WHERE ist_composicao.id_obra = 72;
+[SEM MATCH] Arquivo: 'Desirèe.pdf' -> Normalizado: 'desiree'
+UPDATE ist_composicao SET partitura = 'Didi Manu.pdf' WHERE ist_composicao.id_obra = 78;
+UPDATE ist_composicao SET partitura = 'Dindinha.pdf' WHERE ist_composicao.id_obra = 79;
+UPDATE ist_composicao SET partitura = 'Encontro com as Águas.pdf' WHERE ist_composicao.id_obra = 84;
+[SEM MATCH] Arquivo: 'Encontro de Família.pdf' -> Normalizado: 'encontro de familia'
+UPDATE ist_composicao SET partitura = 'Encontro Marcado.pdf' WHERE ist_composicao.id_obra = 85;
+[SEM MATCH] Arquivo: 'Espelhos.pdf' -> Normalizado: 'espelhos'
+[SEM MATCH] Arquivo: 'Esquivando.pdf' -> Normalizado: 'esquivando'
+[SEM MATCH] Arquivo: 'Estrada Iluminada.pdf' -> Normalizado: 'estrada iluminada'
+[SEM MATCH] Arquivo: 'Estudo Afro-Samba.pdf' -> Normalizado: 'estudo afro-samba'
+[SEM MATCH] Arquivo: 'Faustino.pdf' -> Normalizado: 'faustino'
+[SEM MATCH] Arquivo: 'Flores pra Nossa Senhora.pdf' -> Normalizado: 'flores pra nossa senhora'
+[SEM MATCH] Arquivo: 'Florestas.pdf' -> Normalizado: 'florestas'
+[SEM MATCH] Arquivo: 'Gafieira na Madrugada.pdf' -> Normalizado: 'gafieira na madrugada'
+[SEM MATCH] Arquivo: 'Ganga.pdf' -> Normalizado: 'ganga'
+UPDATE ist_composicao SET partitura = 'Garoteando.pdf' WHERE ist_composicao.id_obra = 98;
+UPDATE ist_composicao SET partitura = 'Garoteando.pdf' WHERE ist_composicao.id_obra = 99;
+UPDATE ist_composicao SET partitura = 'Guajará.pdf' WHERE ist_composicao.id_obra = 101;
+[SEM MATCH] Arquivo: 'Icoaraci.pdf' -> Normalizado: 'icoaraci'
+UPDATE ist_composicao SET partitura = 'Igapó.pdf' WHERE ist_composicao.id_obra = 104;
+UPDATE ist_composicao SET partitura = 'Ilha do Marajó.pdf' WHERE ist_composicao.id_obra = 107;
+[SEM MATCH] Arquivo: 'Julieta.pdf' -> Normalizado: 'julieta'
+[SEM MATCH] Arquivo: 'Karolline.pdf' -> Normalizado: 'karolline'
+UPDATE ist_composicao SET partitura = 'Lagrimas do Meu Rio.pdf' WHERE ist_composicao.id_obra = 113;
+UPDATE ist_composicao SET partitura = 'Luar de Santarém.pdf' WHERE ist_composicao.id_obra = 120;
+[SEM MATCH] Arquivo: 'Luá Joá.pdf' -> Normalizado: 'lua joa'
+UPDATE ist_composicao SET partitura = 'Maite.pdf' WHERE ist_composicao.id_obra = 121;
+UPDATE ist_composicao SET partitura = 'Mangueiras.pdf' WHERE ist_composicao.id_obra = 123;
+UPDATE ist_composicao SET partitura = 'Marajo.pdf' WHERE ist_composicao.id_obra = 128;
+UPDATE ist_composicao SET partitura = 'Marco Zero.pdf' WHERE ist_composicao.id_obra = 125;
+UPDATE ist_composicao SET partitura = 'Mariçarro.pdf' WHERE ist_composicao.id_obra = 126;
+UPDATE ist_composicao SET partitura = 'Mascote.pdf' WHERE ist_composicao.id_obra = 129;
+UPDATE ist_composicao SET partitura = 'Mifilas.pdf' WHERE ist_composicao.id_obra = 131;
+UPDATE ist_composicao SET partitura = 'Mifilas.pdf' WHERE ist_composicao.id_obra = 131;
+[SEM MATCH] Arquivo: 'Milongueiro Ábalos.pdf' -> Normalizado: 'milongueiro abalos'
+UPDATE ist_composicao SET partitura = 'Minha Flor.pdf' WHERE ist_composicao.id_obra = 134;
+[SEM MATCH] Arquivo: 'Moleque Mocorongo.pdf' -> Normalizado: 'moleque mocorongo'
+[SEM MATCH] Arquivo: 'O Jogo da Convivencia.pdf' -> Normalizado: 'o jogo da convivencia'
+[SEM MATCH] Arquivo: 'O Linda Medieval.pdf' -> Normalizado: 'o linda medieval'
+UPDATE ist_composicao SET partitura = 'Passaro no Jardim.pdf' WHERE ist_composicao.id_obra = 147;
+[SEM MATCH] Arquivo: 'Pequeno Pedaço de Lembrança.pdf' -> Normalizado: 'pequeno pedaco de lembranca'
+[SEM MATCH] Arquivo: 'Peripecias do Boto Tonini.pdf' -> Normalizado: 'peripecias do boto tonini'
+UPDATE ist_composicao SET partitura = 'Piaçoca.pdf' WHERE ist_composicao.id_obra = 153;
+UPDATE ist_composicao SET partitura = 'Poente.pdf' WHERE ist_composicao.id_obra = 154;
+[SEM MATCH] Arquivo: 'Por Um Momento.pdf' -> Normalizado: 'por um momento'
+[SEM MATCH] Arquivo: 'Pra Tânia.pdf' -> Normalizado: 'pra tania'
+UPDATE ist_composicao SET partitura = 'Prainha.pdf' WHERE ist_composicao.id_obra = 160;
+UPDATE ist_composicao SET partitura = 'Prelúdio do Entardecer.pdf' WHERE ist_composicao.id_obra = 161;
+UPDATE ist_composicao SET partitura = 'Prelúdio para Karen.pdf' WHERE ist_composicao.id_obra = 162;
+UPDATE ist_composicao SET partitura = 'Primavera.pdf' WHERE ist_composicao.id_obra = 163;
+UPDATE ist_composicao SET partitura = 'Rei Solano.pdf' WHERE ist_composicao.id_obra = 168;
+UPDATE ist_composicao SET partitura = 'Remanso.pdf' WHERE ist_composicao.id_obra = 169;
+UPDATE ist_composicao SET partitura = 'Rio Abaixo.pdf' WHERE ist_composicao.id_obra = 172;
+[SEM MATCH] Arquivo: 'Salve, Belem.pdf' -> Normalizado: 'salve, belem'
+[SEM MATCH] Arquivo: 'Santareno Cantador.pdf' -> Normalizado: 'santareno cantador'
+[SEM MATCH] Arquivo: 'Sao Joao Dararão.pdf' -> Normalizado: 'sao joao dararao'
+[SEM MATCH] Arquivo: 'Saudações Cariocas.pdf' -> Normalizado: 'saudacoes cariocas'
+[SEM MATCH] Arquivo: 'Sincopando.pdf' -> Normalizado: 'sincopando'
+[SEM MATCH] Arquivo: 'Sob o Signo do Samba.pdf' -> Normalizado: 'sob o signo do samba'
+UPDATE ist_composicao SET partitura = 'Taiaçupeba.pdf' WHERE ist_composicao.id_obra = 193;
+[SEM MATCH] Arquivo: 'Tempo de Espera.pdf' -> Normalizado: 'tempo de espera'
+UPDATE ist_composicao SET partitura = 'Tocata para Billy Blanco.pdf' WHERE ist_composicao.id_obra = 202;
+[SEM MATCH] Arquivo: 'Transas de Amor.pdf' -> Normalizado: 'transas de amor'
+UPDATE ist_composicao SET partitura = 'Tres violeiros.pdf' WHERE ist_composicao.id_obra = 207;
+[SEM MATCH] Arquivo: 'Trinta e Cinco Anos.pdf' -> Normalizado: 'trinta e cinco anos'
+UPDATE ist_composicao SET partitura = 'Um Pro Ney.pdf' WHERE ist_composicao.id_obra = 213;
+[SEM MATCH] Arquivo: 'Um pro Zimbo.pdf' -> Normalizado: 'um pro zimbo'
+[SEM MATCH] Arquivo: 'Vagalume.pdf' -> Normalizado: 'vagalume'
+UPDATE ist_composicao SET partitura = 'Valsa de Um Sonho.pdf' WHERE ist_composicao.id_obra = 215;
+[SEM MATCH] Arquivo: 'Velha Varanda.pdf' -> Normalizado: 'velha varanda'
+[SEM MATCH] Arquivo: 'Viagens à Europa.pdf' -> Normalizado: 'viagens a europa'
+[SEM MATCH] Arquivo: 'Vila da Penha.pdf' -> Normalizado: 'vila da penha'
+[SEM MATCH] Arquivo: 'Vitoria Régia.pdf' -> Normalizado: 'vitoria regia'
+UPDATE ist_composicao SET partitura = 'Ze da Velha Lapa.pdf' WHERE ist_composicao.id_obra = 230;

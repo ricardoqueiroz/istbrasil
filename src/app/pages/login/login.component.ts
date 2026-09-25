@@ -164,7 +164,7 @@ export class LoginComponent {
             this.tipoMensagem = 'success';
             this.mensagem = 'Login realizado com sucesso.';
             this.authService.definirUsuario(data);
-            await this.router.navigate(['/cadastro']);
+            await this.router.navigate(['/']);
         } catch (error) {
             this.tipoMensagem = 'error';
             this.mensagem = 'Erro ao consultar o banco de dados. Tente novamente.';

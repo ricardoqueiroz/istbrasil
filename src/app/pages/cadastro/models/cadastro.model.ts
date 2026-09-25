@@ -19,7 +19,7 @@ export type CadastroSituacaoId = (typeof SITUACAO_INICIAL_MAP)[CadastroTipo];
 
 export const TOTAL_ETAPAS_MAP = {
     diretoria: 3,
-    concorrente: 3,
+    concorrente: 2,
     externo: 2,
     colaborador: 2
 } as const satisfies Record<CadastroTipo, number>;

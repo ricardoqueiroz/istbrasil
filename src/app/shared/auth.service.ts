@@ -35,6 +35,32 @@ export class AuthService {
         this.usuario.set(usuario);
     }
 
+    atualizarNomeUsuarioLogado(nome: string): void {
+        const usuarioAtual = this.usuario();
+
+        if (!usuarioAtual) {
+            return;
+        }
+
+        this.usuario.set({
+            ...usuarioAtual,
+            nome
+        });
+    }
+
+    atualizarFotoUsuarioLogado(fotoUrl: string | null): void {
+        const usuarioAtual = this.usuario();
+
+        if (!usuarioAtual) {
+            return;
+        }
+
+        this.usuario.set({
+            ...usuarioAtual,
+            foto_url: fotoUrl
+        });
+    }
+
     async logout(): Promise<void> {
         try {
             await fetch('/api/usuarios/logout', { method: 'POST', credentials: 'include' });
