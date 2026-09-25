@@ -7,6 +7,7 @@ import {
     CadastroTipo,
     CadastroTipoId,
     criarEstadoCadastroInicial,
+    TOTAL_ETAPAS_MAP,
     TIPO_USUARIO_MAP
 } from '../models/cadastro.model';
 
@@ -18,8 +19,10 @@ export class CadastroStateService {
 
     readonly cadastro = this.state.asReadonly();
     readonly idTipoUsuario = computed(() => this.state().idTipoUsuario);
+    readonly idSituacao = computed(() => this.state().idSituacao);
     readonly tipo = computed(() => this.state().tipo);
     readonly etapaAtual = computed(() => this.state().etapaAtual);
+    readonly totalEtapas = computed(() => TOTAL_ETAPAS_MAP[this.state().tipo]);
     readonly identificacao = computed(() => this.state().identificacao);
     readonly dadosPessoais = computed(() => this.state().dadosPessoais);
     readonly dadosComplementares = computed(() => this.state().dadosComplementares);

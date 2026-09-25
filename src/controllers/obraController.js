@@ -1,6 +1,8 @@
 // Relação de Obras Musicais do Patrono Sebastião Tapajós - Controller
 import { pool as db } from '../config/db.js';
 
+const ID_OBRA_PRINCIPAL_CONCORRENTE = 63;
+
 const getAllObras = async (req, res) => {
     try {
         const page = parseInt(req.query.page, 10) || 1;
@@ -56,6 +58,29 @@ const getAllObras = async (req, res) => {
     }
 };
 
+const getComposicoesElegiveis = async (_req, res) => {
+    try {
+        const [rows] = await db.execute(
+            `SELECT DISTINCT id_obra, titulo
+             FROM ist_composicao
+             WHERE propria = 1
+               AND partitura IS NOT NULL
+               AND id_obra <> ?
+             ORDER BY titulo`,
+            [ID_OBRA_PRINCIPAL_CONCORRENTE]
+        );
+
+        return res.status(200).json(rows.map((obra) => ({
+            idObra: obra.id_obra,
+            titulo: obra.titulo
+        })));
+    } catch (error) {
+        console.error('Error fetching eligible compositions:', error);
+        return res.status(500).json({ error: 'Erro ao consultar composições elegíveis.' });
+    }
+};
+
 export default {
-    getAllObras
+    getAllObras,
+    getComposicoesElegiveis
 };

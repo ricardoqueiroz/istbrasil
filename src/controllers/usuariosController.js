@@ -120,13 +120,65 @@ const verificarEmail = async (req, res) => {
 
 const somenteDigitos = (valor) => (valor || '').toString().replace(/\D/g, '');
 
-// Cadastro de Diretoria (id_tipo_usuario = 1); a senha chega em SHA-256 (calculada no front)
-// e o backend aplica bcrypt (com salt) por cima antes de gravar.
-const cadastrar = async (req, res) => {
-    const { nome, email, confirmarEmail, cpf, telefone_celular, senha, id_cargo, identidade, data_nascimento, logradouro, numero, complemento, bairro, cidade, uf, cep } = req.body;
+const CADASTRO_TIPO_MAP = {
+    diretoria: { idTipoUsuario: 1, idSituacao: 1, exigeCargo: true },
+    concorrente: { idTipoUsuario: 2, idSituacao: 3, exigeCargo: false },
+    externo: { idTipoUsuario: 3, idSituacao: 6, exigeCargo: false },
+    colaborador: { idTipoUsuario: 4, idSituacao: 8, exigeCargo: true }
+};
 
-    if (!nome?.trim() || !email?.trim() || !senha?.trim() || !cpf?.trim() || !telefone_celular?.trim() || !id_cargo || !data_nascimento) {
+// O cadastro legado não envia cadastroTipo; essa ausência continua significando Diretoria temporariamente.
+const cadastrar = async (req, res) => {
+    const {
+        cadastroTipo,
+        id_tipo_usuario,
+        id_situacao,
+        nome,
+        email,
+        confirmarEmail,
+        cpf,
+        telefone_celular,
+        senha,
+        id_cargo,
+        identidade,
+        data_nascimento,
+        logradouro,
+        numero,
+        complemento,
+        bairro,
+        cidade,
+        uf,
+        cep
+    } = req.body;
+
+    const tipo = cadastroTipo === undefined ? 'diretoria' : cadastroTipo;
+    const regrasTipo = typeof tipo === 'string' ? CADASTRO_TIPO_MAP[tipo] : undefined;
+
+    if (!regrasTipo) {
+        return res.status(400).json({ message: 'Tipo de cadastro inválido.' });
+    }
+
+    if (id_situacao !== undefined) {
+        return res.status(400).json({ message: 'A situação do cadastro não pode ser informada pelo cliente.' });
+    }
+
+    if (id_tipo_usuario !== undefined && Number(id_tipo_usuario) !== regrasTipo.idTipoUsuario) {
+        return res.status(400).json({ message: 'O tipo de usuário informado não corresponde ao cadastro.' });
+    }
+
+    const cargoInformado = id_cargo !== undefined && id_cargo !== null && id_cargo !== '';
+    const idCargoNormalizado = cargoInformado ? Number(id_cargo) : null;
+
+    if (!nome?.trim() || !email?.trim() || !senha?.trim() || !cpf?.trim() || !telefone_celular?.trim() || !data_nascimento || !cep?.trim() || !logradouro?.trim() || !numero?.trim() || !bairro?.trim() || !cidade?.trim() || !uf?.trim()) {
         return res.status(400).json({ message: 'Preencha todos os campos obrigatórios.' });
+    }
+
+    if (regrasTipo.exigeCargo && (!Number.isInteger(idCargoNormalizado) || idCargoNormalizado <= 0)) {
+        return res.status(400).json({ message: 'Informe um cargo válido.' });
+    }
+
+    if (!regrasTipo.exigeCargo && cargoInformado) {
+        return res.status(400).json({ message: 'Este tipo de cadastro não aceita cargo.' });
     }
 
     if (confirmarEmail && email.trim().toLowerCase() !== confirmarEmail.trim().toLowerCase()) {
@@ -152,32 +204,45 @@ const cadastrar = async (req, res) => {
         return res.status(400).json({ message: 'Data de nascimento não pode ser no futuro.' });
     }
 
+    let connection;
+    let transacaoIniciada = false;
+    let cadastroConfirmacao;
+
     try {
-        const [existentes] = await db.query('SELECT id_usuario, email, cpf FROM ist_usuarios WHERE email = ? OR cpf = ?', [emailNormalizado, cpfNormalizado]);
+        connection = await db.getConnection();
+        await connection.beginTransaction();
+        transacaoIniciada = true;
+
+        const [existentes] = await connection.query('SELECT id_usuario, email, cpf FROM ist_usuarios WHERE email = ? OR cpf = ?', [emailNormalizado, cpfNormalizado]);
 
         const emailDuplicado = existentes.find((u) => u.email === emailNormalizado);
         if (emailDuplicado) {
-            return res.status(409).json({ message: 'Este e-mail já está cadastrado. Faça login ou recupere sua senha.' });
+            const erro = new Error('E-mail duplicado');
+            erro.code = 'DUPLICATE_EMAIL';
+            throw erro;
         }
 
         const cpfDuplicado = existentes.find((u) => u.cpf === cpfNormalizado);
         if (cpfDuplicado) {
-            return res.status(409).json({ message: 'Este CPF já está cadastrado.' });
+            const erro = new Error('CPF duplicado');
+            erro.code = 'DUPLICATE_CPF';
+            throw erro;
         }
 
         const senhaBcrypt = await bcrypt.hash(senha, BCRYPT_ROUNDS);
         const tokenConfirmacao = crypto.randomBytes(32).toString('hex');
         const tokenExpiraEm = new Date(Date.now() + TOKEN_VALIDADE_MINUTOS * 60 * 1000);
 
-        // id_tipo_usuario = 1 (Diretoria) e id_situacao = 1 (Normal) são fixados pelo backend, nunca pelo cliente
-        const [result] = await db.query(
+        const [result] = await connection.query(
             `INSERT INTO ist_usuarios
                 (id_tipo_usuario, id_cargo, id_situacao, senha, nome, cpf, identidade, data_nascimento, email, telefone_celular,
                  logradouro, numero, complemento, bairro, cidade, uf, cep,
                  token_confirmacao, token_expira_em, token_tipo)
-             VALUES (1, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'email')`,
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'email')`,
             [
-                id_cargo,
+                regrasTipo.idTipoUsuario,
+                regrasTipo.exigeCargo ? idCargoNormalizado : null,
+                regrasTipo.idSituacao,
                 senhaBcrypt,
                 nome.trim(),
                 cpfNormalizado,
@@ -197,28 +262,61 @@ const cadastrar = async (req, res) => {
             ]
         );
 
-        const linkConfirmacao = `${process.env.APP_URL || 'https://www.istbrasil.org.br'}/confirmar-email?token=${tokenConfirmacao}`;
-
-        try {
-            await sendAccountMail({
-                to: emailNormalizado,
-                subject: 'Confirme seu e-mail - IST Brasil',
-                html: `<p>Olá, ${nome.trim()}!</p><p>Confirme seu cadastro clicando no link abaixo (válido por ${TOKEN_VALIDADE_MINUTOS} minutos):</p><p><a href="${linkConfirmacao}">${linkConfirmacao}</a></p>`
-            });
-        } catch (mailError) {
-            // Cadastro já foi salvo; falha no envio de e-mail não deve derrubar a resposta de sucesso
-            console.error('Erro ao enviar e-mail de confirmação:', mailError.message);
+        if (tipo === 'concorrente') {
+            await connection.query(
+                `INSERT INTO ist_concorrentes
+                    (id_usuario, id_concorrente, id_obra_1, link_video_1, id_obra_2, link_video_2)
+                 VALUES (?, NULL, NULL, NULL, NULL, NULL)`,
+                [result.insertId]
+            );
         }
 
-        return res.status(201).json({ id_usuario: result.insertId });
+        await connection.commit();
+        transacaoIniciada = false;
+        cadastroConfirmacao = { id_usuario: result.insertId, email: emailNormalizado, nome: nome.trim(), token: tokenConfirmacao };
     } catch (error) {
-        if (error.code === 'ER_DUP_ENTRY') {
+        if (transacaoIniciada) {
+            try {
+                await connection.rollback();
+            } catch (rollbackError) {
+                console.error('Erro ao desfazer cadastro de usuário:', rollbackError);
+            }
+        }
+
+        if (error.code === 'DUPLICATE_EMAIL') {
+            return res.status(409).json({ message: 'Este e-mail já está cadastrado. Faça login ou recupere sua senha.' });
+        }
+
+        if (error.code === 'DUPLICATE_CPF' || error.code === 'ER_DUP_ENTRY') {
             return res.status(409).json({ message: 'E-mail ou CPF já cadastrado.' });
         }
 
+        if (error.code === 'ER_NO_REFERENCED_ROW_2' || error.code === 'ER_ROW_IS_REFERENCED_2') {
+            return res.status(400).json({ message: 'Os dados relacionados ao cadastro são inválidos.' });
+        }
+
         console.error('Erro ao cadastrar usuário:', error);
-        return res.status(500).json({ message: 'Erro ao cadastrar usuário.', error: error.message });
+        return res.status(500).json({ message: 'Erro ao cadastrar usuário.' });
+    } finally {
+        if (connection) {
+            connection.release();
+        }
     }
+
+    const linkConfirmacao = `${process.env.APP_URL || 'https://www.istbrasil.org.br'}/confirmar-email?token=${cadastroConfirmacao.token}`;
+
+    try {
+        await sendAccountMail({
+            to: cadastroConfirmacao.email,
+            subject: 'Confirme seu e-mail - IST Brasil',
+            html: `<p>Olá, ${cadastroConfirmacao.nome}!</p><p>Confirme seu cadastro clicando no link abaixo (válido por ${TOKEN_VALIDADE_MINUTOS} minutos):</p><p><a href="${linkConfirmacao}">${linkConfirmacao}</a></p>`
+        });
+    } catch (mailError) {
+        // O banco já confirmou o cadastro; falha SMTP não desfaz o commit.
+        console.error('Erro ao enviar e-mail de confirmação após cadastro confirmado:', mailError.message);
+    }
+
+    return res.status(201).json({ id_usuario: cadastroConfirmacao.id_usuario });
 };
 
 // Confirmação de e-mail via token enviado no cadastro

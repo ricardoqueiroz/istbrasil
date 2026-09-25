@@ -1,19 +1,26 @@
 import { CommonModule } from '@angular/common';
 import { Component, OnInit } from '@angular/core';
 import { FormsModule } from '@angular/forms';
-import { Router, RouterLink } from '@angular/router';
+import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { ButtonModule } from 'primeng/button';
 import { DatePickerModule } from 'primeng/datepicker';
 import { InputMaskModule } from 'primeng/inputmask';
 import { InputTextModule } from 'primeng/inputtext';
 import { PasswordModule } from 'primeng/password';
 import { SelectModule } from 'primeng/select';
+import { CadastroTipo, isCadastroTipo, OBRA_PRINCIPAL_CONCORRENTE } from './models/cadastro.model';
+import { CadastroStateService } from './services/cadastro-state.service';
 import { EnderecoService } from 'src/app/shared/endereco.service';
 import { sha256 } from 'src/app/shared/crypto.util';
 
 interface Cargo {
     id_cargo: number;
     nome_cargo: string;
+}
+
+interface ObraOption {
+    idObra: number;
+    titulo: string;
 }
 
 interface UfOption {
@@ -39,8 +46,8 @@ const UFS: UfOption[] = [
         <div class="flex items-center justify-center py-12 px-4">
             <div class="w-full max-w-2xl rounded-3xl border border-surface-200 bg-white p-8 shadow-2xl dark:border-surface-700 dark:bg-surface-900">
                 <div class="mb-8 text-center">
-                    <h1 class="text-3xl font-semibold text-surface-900 dark:text-white">Cadastro</h1>
-                    <p class="mt-2 text-sm text-surface-500">Etapa {{ step }} de 2</p>
+                    <h1 class="text-3xl font-semibold text-surface-900 dark:text-white">{{ tituloCadastro }}</h1>
+                    <p class="mt-2 text-sm text-surface-500">Etapa {{ step }} de {{ totalEtapasVisiveis }}</p>
                 </div>
 
                 <div *ngIf="mensagem" class="mb-6 rounded-md border px-3 py-2 text-sm" [ngClass]="{
@@ -93,7 +100,7 @@ const UFS: UfOption[] = [
                         </div>
                     </div>
 
-                    <div class="mb-5">
+                    <div *ngIf="usaCargo" class="mb-5">
                         <label for="cargo" class="mb-2 block text-sm font-medium text-surface-700 dark:text-surface-200">Cargo na Diretoria</label>
                         <p-select id="cargo" name="cargo" [(ngModel)]="idCargo" [options]="cargos" optionLabel="nome_cargo" optionValue="id_cargo" placeholder="Selecione o cargo" styleClass="w-full" [required]="true"></p-select>
                     </div>
@@ -153,7 +160,50 @@ const UFS: UfOption[] = [
 
                     <div class="flex gap-3">
                         <button pButton type="button" label="Voltar" class="w-full p-button-outlined" (click)="voltarPasso1()" [disabled]="isLoading"></button>
-                        <button pButton type="submit" label="Finalizar Cadastro" class="w-full" [disabled]="isLoading"></button>
+                        <button pButton type="submit" label="Continuar" class="w-full" [disabled]="isLoading"></button>
+                    </div>
+                </form>
+
+                <!-- Passo 3: dados complementares opcionais -->
+                <form *ngIf="step === 3" (ngSubmit)="concluirEtapa3()" novalidate>
+                    <div class="mb-5">
+                        <label for="foto" class="mb-2 block text-sm font-medium text-surface-700 dark:text-surface-200">Foto (opcional)</label>
+                        <input id="foto" name="foto" type="file" accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp" (change)="selecionarFoto($event)" class="w-full text-sm text-surface-600" />
+                        <p class="mt-1 text-xs text-surface-500">JPG, JPEG, PNG ou WEBP. Máximo de 5 MB.</p>
+                    </div>
+
+                    <div class="mb-5">
+                        <label for="curriculo" class="mb-2 block text-sm font-medium text-surface-700 dark:text-surface-200">Currículo (opcional)</label>
+                        <textarea id="curriculo" name="curriculo" [(ngModel)]="curriculo" rows="5" class="w-full rounded-md border border-surface-300 p-3 text-sm" placeholder="Escreva um breve currículo"></textarea>
+                    </div>
+
+                    <ng-container *ngIf="tipoCadastro === 'concorrente'">
+                        <div class="mb-5">
+                            <label for="obra1" class="mb-2 block text-sm font-medium text-surface-700 dark:text-surface-200">Primeira obra</label>
+                            <p-select id="obra1" name="obra1" [options]="[obraPrincipal]" optionLabel="titulo" optionValue="idObra" [ngModel]="obraPrincipal.idObra" [disabled]="true" styleClass="w-full"></p-select>
+                        </div>
+
+                        <div class="mb-5">
+                            <label for="linkVideo1" class="mb-2 block text-sm font-medium text-surface-700 dark:text-surface-200">Vídeo da primeira obra</label>
+                            <input id="linkVideo1" pInputText type="url" name="linkVideo1" [(ngModel)]="linkVideo1" placeholder="https://www.youtube.com/... ou https://vimeo.com/..." class="w-full" />
+                        </div>
+
+                        <div class="mb-5">
+                            <label for="obra2" class="mb-2 block text-sm font-medium text-surface-700 dark:text-surface-200">Segunda obra</label>
+                            <p-select id="obra2" name="obra2" [options]="obrasSecundarias" optionLabel="titulo" optionValue="idObra" [(ngModel)]="segundaObraSelecionada" styleClass="w-full"></p-select>
+                            <p class="mt-1 text-xs text-surface-500">As opções de obras serão disponibilizadas após a criação do endpoint correspondente.</p>
+                        </div>
+
+                        <div class="mb-5">
+                            <label for="linkVideo2" class="mb-2 block text-sm font-medium text-surface-700 dark:text-surface-200">Vídeo da segunda obra</label>
+                            <input id="linkVideo2" pInputText type="url" name="linkVideo2" [(ngModel)]="linkVideo2" [disabled]="idObra2 === null" placeholder="https://www.youtube.com/... ou https://vimeo.com/..." class="w-full" />
+                        </div>
+                    </ng-container>
+
+                    <div class="flex flex-col gap-3 md:flex-row">
+                        <button pButton type="button" label="Voltar" class="w-full p-button-outlined" (click)="voltarEtapa3()" [disabled]="isLoading"></button>
+                        <button pButton type="button" label="Pular esta etapa" class="w-full p-button-outlined" (click)="pularEtapa3()" [disabled]="isLoading"></button>
+                        <button pButton type="submit" label="Concluir cadastro" class="w-full" [disabled]="isLoading"></button>
                     </div>
                 </form>
             </div>
@@ -161,45 +211,131 @@ const UFS: UfOption[] = [
     `
 })
 export class CadastroComponent implements OnInit {
-    step = 1;
     isLoading = false;
+    cadastroBasicoConcluido = false;
     mensagem = '';
     tipoMensagem: 'success' | 'error' | 'info' = 'info';
-
-    // Passo 1
-    nome = '';
-    email = '';
-    confirmarEmail = '';
-
-    // Passo 2
-    cpf = '';
-    telefoneCelular = '';
-    idCargo: number | null = null;
-    identidade = '';
-    dataNascimento: Date | null = null;
     hoje = new Date();
-    senha = '';
-    confirmarSenha = '';
-    logradouro = '';
-    numero = '';
-    complemento = '';
-    bairro = '';
-    cidade = '';
-    uf = '';
-    cep = '';
     cidadeBloqueada = false;
     ufBloqueada = false;
+    fotoSelecionada: File | null = null;
+    readonly obraPrincipal = OBRA_PRINCIPAL_CONCORRENTE;
+    readonly obrasSecundarias: ObraOption[] = [{ idObra: 0, titulo: 'Selecione a segunda obra (opcional)' }];
 
     cargos: Cargo[] = [];
     ufs = UFS;
 
+    get step(): number {
+        return this.cadastroStateService.etapaAtual();
+    }
+
+    get tipoCadastro(): CadastroTipo {
+        return this.cadastroStateService.tipo();
+    }
+
+    get totalEtapasVisiveis(): number {
+        return this.cadastroStateService.totalEtapas();
+    }
+
+    get tituloCadastro(): string {
+        const titulos: Record<CadastroTipo, string> = {
+            diretoria: 'Cadastro da Diretoria',
+            concorrente: 'Cadastro de Concorrente',
+            externo: 'Cadastro de Usuário Externo',
+            colaborador: 'Cadastro de Colaborador'
+        };
+
+        return titulos[this.tipoCadastro];
+    }
+
+    get usaCargo(): boolean {
+        return this.tipoCadastro === 'diretoria' || this.tipoCadastro === 'colaborador';
+    }
+
+    get nome(): string { return this.cadastroStateService.identificacao().nome; }
+    set nome(value: string) { this.cadastroStateService.atualizarIdentificacao({ nome: value }); }
+    get email(): string { return this.cadastroStateService.identificacao().email; }
+    set email(value: string) { this.cadastroStateService.atualizarIdentificacao({ email: value }); }
+    get confirmarEmail(): string { return this.cadastroStateService.identificacao().confirmarEmail; }
+    set confirmarEmail(value: string) { this.cadastroStateService.atualizarIdentificacao({ confirmarEmail: value }); }
+    get cpf(): string { return this.cadastroStateService.dadosPessoais().cpf; }
+    set cpf(value: string) { this.cadastroStateService.atualizarDadosPessoais({ cpf: value }); }
+    get telefoneCelular(): string { return this.cadastroStateService.dadosPessoais().telefoneCelular; }
+    set telefoneCelular(value: string) { this.cadastroStateService.atualizarDadosPessoais({ telefoneCelular: value }); }
+    get idCargo(): number | null { return this.cadastroStateService.dadosPessoais().idCargo; }
+    set idCargo(value: number | null) { this.cadastroStateService.atualizarDadosPessoais({ idCargo: this.usaCargo ? value : null }); }
+    get identidade(): string { return this.cadastroStateService.dadosPessoais().identidade; }
+    set identidade(value: string) { this.cadastroStateService.atualizarDadosPessoais({ identidade: value }); }
+    get dataNascimento(): Date | null {
+        const value = this.cadastroStateService.dadosPessoais().dataNascimento;
+        return value ? new Date(`${value}T00:00:00`) : null;
+    }
+    set dataNascimento(value: Date | null) {
+        this.cadastroStateService.atualizarDadosPessoais({ dataNascimento: this.formatarDataIso(value) || '' });
+    }
+    get senha(): string { return this.cadastroStateService.dadosPessoais().senha; }
+    set senha(value: string) { this.cadastroStateService.atualizarDadosPessoais({ senha: value }); }
+    get confirmarSenha(): string { return this.cadastroStateService.dadosPessoais().confirmarSenha; }
+    set confirmarSenha(value: string) { this.cadastroStateService.atualizarDadosPessoais({ confirmarSenha: value }); }
+    get logradouro(): string { return this.cadastroStateService.dadosPessoais().logradouro; }
+    set logradouro(value: string) { this.cadastroStateService.atualizarDadosPessoais({ logradouro: value }); }
+    get numero(): string { return this.cadastroStateService.dadosPessoais().numero; }
+    set numero(value: string) { this.cadastroStateService.atualizarDadosPessoais({ numero: value }); }
+    get complemento(): string { return this.cadastroStateService.dadosPessoais().complemento; }
+    set complemento(value: string) { this.cadastroStateService.atualizarDadosPessoais({ complemento: value }); }
+    get bairro(): string { return this.cadastroStateService.dadosPessoais().bairro; }
+    set bairro(value: string) { this.cadastroStateService.atualizarDadosPessoais({ bairro: value }); }
+    get cidade(): string { return this.cadastroStateService.dadosPessoais().cidade; }
+    set cidade(value: string) { this.cadastroStateService.atualizarDadosPessoais({ cidade: value }); }
+    get uf(): string { return this.cadastroStateService.dadosPessoais().uf; }
+    set uf(value: string) { this.cadastroStateService.atualizarDadosPessoais({ uf: value }); }
+    get cep(): string { return this.cadastroStateService.dadosPessoais().cep; }
+    set cep(value: string) { this.cadastroStateService.atualizarDadosPessoais({ cep: value }); }
+    get curriculo(): string { return this.cadastroStateService.dadosComplementares().curriculo; }
+    set curriculo(value: string) { this.cadastroStateService.atualizarDadosComplementares({ curriculo: value }); }
+    get idObra1(): number | null { return this.cadastroStateService.dadosComplementares().idObra1; }
+    get linkVideo1(): string { return this.cadastroStateService.dadosComplementares().linkVideo1; }
+    set linkVideo1(value: string) { this.cadastroStateService.atualizarDadosComplementares({ linkVideo1: value }); }
+    get idObra2(): number | null { return this.cadastroStateService.dadosComplementares().idObra2; }
+    get segundaObraSelecionada(): number { return this.idObra2 ?? 0; }
+    set segundaObraSelecionada(value: number) {
+        const idObra = Number(value);
+
+        if (!idObra || idObra === this.obraPrincipal.idObra) {
+            this.cadastroStateService.atualizarDadosComplementares({ idObra2: null, linkVideo2: '' });
+            return;
+        }
+
+        this.cadastroStateService.atualizarDadosComplementares({ idObra2: idObra });
+    }
+    get linkVideo2(): string { return this.cadastroStateService.dadosComplementares().linkVideo2; }
+    set linkVideo2(value: string) { this.cadastroStateService.atualizarDadosComplementares({ linkVideo2: value }); }
+
     constructor(
         private readonly router: Router,
-        private readonly enderecoService: EnderecoService
+        private readonly route: ActivatedRoute,
+        private readonly enderecoService: EnderecoService,
+        private readonly cadastroStateService: CadastroStateService
     ) {}
 
     ngOnInit(): void {
         this.carregarCargos();
+
+        this.route.data.subscribe(({ cadastroTipo }) => {
+            if (!isCadastroTipo(cadastroTipo)) {
+                return;
+            }
+
+            const estadoAtual = this.cadastroStateService.getEstado();
+
+            if (estadoAtual.tipo === cadastroTipo) {
+                this.inicializarEtapa3();
+                return;
+            }
+
+            this.cadastroStateService.setTipo(cadastroTipo);
+            this.inicializarEtapa3();
+        });
     }
 
     private async carregarCargos(): Promise<void> {
@@ -226,7 +362,50 @@ export class CadastroComponent implements OnInit {
     }
 
     voltarPasso1(): void {
-        this.step = 1;
+            this.cadastroStateService.setEtapaAtual(1);
+        this.mensagem = '';
+    }
+
+    voltarEtapa3(): void {
+        this.cadastroStateService.setEtapaAtual(2);
+        this.mensagem = '';
+    }
+
+    private inicializarEtapa3(): void {
+        if (this.tipoCadastro === 'concorrente' && this.idObra1 !== this.obraPrincipal.idObra) {
+            this.cadastroStateService.atualizarDadosComplementares({ idObra1: this.obraPrincipal.idObra });
+        }
+    }
+
+    selecionarFoto(event: Event): void {
+        const input = event.target as HTMLInputElement;
+        const arquivo = input.files?.[0] ?? null;
+
+        if (!arquivo) {
+            this.fotoSelecionada = null;
+            return;
+        }
+
+        const extensaoValida = /\.(jpe?g|png|webp)$/i.test(arquivo.name);
+        const tipoValido = ['image/jpeg', 'image/png', 'image/webp'].includes(arquivo.type);
+
+        if (!extensaoValida || !tipoValido) {
+            this.fotoSelecionada = null;
+            input.value = '';
+            this.tipoMensagem = 'error';
+            this.mensagem = 'Selecione uma imagem JPG, JPEG, PNG ou WEBP.';
+            return;
+        }
+
+        if (arquivo.size > 5 * 1024 * 1024) {
+            this.fotoSelecionada = null;
+            input.value = '';
+            this.tipoMensagem = 'error';
+            this.mensagem = 'A foto deve ter no máximo 5 MB.';
+            return;
+        }
+
+        this.fotoSelecionada = arquivo;
         this.mensagem = '';
     }
 
@@ -290,7 +469,7 @@ export class CadastroComponent implements OnInit {
                 return;
             }
 
-            this.step = 2;
+            this.cadastroStateService.setEtapaAtual(2);
         } catch {
             this.tipoMensagem = 'error';
             this.mensagem = 'Erro ao verificar o e-mail. Tente novamente.';
@@ -302,7 +481,13 @@ export class CadastroComponent implements OnInit {
     async finalizarCadastro(): Promise<void> {
         this.mensagem = '';
 
-        if (!this.cpf.trim() || !this.telefoneCelular.trim() || !this.idCargo || !this.senha.trim() || !this.confirmarSenha.trim()) {
+        if (this.cadastroBasicoConcluido) {
+            this.tipoMensagem = 'info';
+            this.mensagem = 'A conta já foi criada. A Etapa 3 é complementar e opcional.';
+            return;
+        }
+
+        if (!this.cpf.trim() || !this.telefoneCelular.trim() || (this.usaCargo && !this.idCargo) || !this.senha.trim() || !this.confirmarSenha.trim() || !this.cep.trim() || !this.logradouro.trim() || !this.numero.trim() || !this.bairro.trim() || !this.cidade.trim() || !this.uf.trim()) {
             this.tipoMensagem = 'error';
             this.mensagem = 'Preencha todos os campos obrigatórios.';
             return;
@@ -334,39 +519,53 @@ export class CadastroComponent implements OnInit {
 
         this.isLoading = true;
         this.tipoMensagem = 'info';
-        this.mensagem = 'Enviando cadastro...';
+        this.mensagem = 'Criando cadastro...';
 
         try {
             const senhaCriptografada = await sha256(this.senha);
+            const payload: Record<string, unknown> = {
+                cadastroTipo: this.tipoCadastro,
+                nome: this.nome.trim(),
+                email: this.email.trim(),
+                confirmarEmail: this.confirmarEmail.trim(),
+                cpf: this.cpf,
+                telefone_celular: this.telefoneCelular,
+                senha: senhaCriptografada,
+                identidade: this.identidade,
+                data_nascimento: this.formatarDataIso(this.dataNascimento),
+                logradouro: this.logradouro,
+                numero: this.numero,
+                complemento: this.complemento,
+                bairro: this.bairro,
+                cidade: this.cidade,
+                uf: this.uf,
+                cep: this.cep
+            };
+
+            if (this.usaCargo) {
+                payload.id_cargo = this.idCargo;
+            }
 
             const response = await fetch('/api/usuarios/cadastro', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    nome: this.nome.trim(),
-                    email: this.email.trim(),
-                    confirmarEmail: this.confirmarEmail.trim(),
-                    cpf: this.cpf,
-                    telefone_celular: this.telefoneCelular,
-                    senha: senhaCriptografada,
-                    id_cargo: this.idCargo,
-                    identidade: this.identidade,
-                    data_nascimento: this.formatarDataIso(this.dataNascimento),
-                    logradouro: this.logradouro,
-                    numero: this.numero,
-                    complemento: this.complemento,
-                    bairro: this.bairro,
-                    cidade: this.cidade,
-                    uf: this.uf,
-                    cep: this.cep
-                })
+                body: JSON.stringify(payload)
             });
-
-            const data = await response.json();
+            const data = await response.json().catch(() => ({}));
 
             if (!response.ok) {
                 this.tipoMensagem = 'error';
-                this.mensagem = data?.message || 'Não foi possível concluir o cadastro.';
+                this.mensagem = data?.message || (response.status === 409 ? 'Este e-mail ou CPF já está cadastrado.' : 'Não foi possível concluir o cadastro.');
+                return;
+            }
+
+            this.cadastroBasicoConcluido = true;
+
+            if (this.totalEtapasVisiveis === 3) {
+                this.inicializarEtapa3();
+                this.cadastroStateService.setEtapaAtual(3);
+                this.tipoMensagem = 'success';
+                this.mensagem = 'Conta criada com sucesso. A Etapa 3 é complementar e opcional.';
                 return;
             }
 
@@ -379,5 +578,72 @@ export class CadastroComponent implements OnInit {
         } finally {
             this.isLoading = false;
         }
+    }
+
+    private validarUrlVideo(url: string): boolean {
+        try {
+            const valor = new URL(url);
+            return valor.protocol === 'https:' && (valor.hostname === 'youtube.com' || valor.hostname.endsWith('.youtube.com') || valor.hostname === 'youtu.be' || valor.hostname === 'vimeo.com' || valor.hostname.endsWith('.vimeo.com'));
+        } catch {
+            return false;
+        }
+    }
+
+    private validarEtapa3(): boolean {
+        if (this.tipoCadastro !== 'concorrente') {
+            return true;
+        }
+
+        if (this.idObra1 !== this.obraPrincipal.idObra) {
+            this.tipoMensagem = 'error';
+            this.mensagem = 'A primeira obra deve ser Catraias.';
+            return false;
+        }
+
+        if (!this.linkVideo1.trim() || !this.validarUrlVideo(this.linkVideo1.trim())) {
+            this.tipoMensagem = 'error';
+            this.mensagem = 'Informe um vídeo HTTPS válido do YouTube ou Vimeo para a primeira obra.';
+            return false;
+        }
+
+        if (this.idObra2 === this.obraPrincipal.idObra) {
+            this.tipoMensagem = 'error';
+            this.mensagem = 'A segunda obra deve ser diferente da primeira.';
+            return false;
+        }
+
+        if (this.idObra2 !== null && (!this.linkVideo2.trim() || !this.validarUrlVideo(this.linkVideo2.trim()))) {
+            this.tipoMensagem = 'error';
+            this.mensagem = 'Informe um vídeo HTTPS válido do YouTube ou Vimeo para a segunda obra.';
+            return false;
+        }
+
+        return true;
+    }
+
+    concluirEtapa3(): void {
+        this.mensagem = '';
+
+        if (!this.validarEtapa3()) {
+            return;
+        }
+
+        this.bloquearSubmissaoTemporaria('A conta já foi criada. Os dados complementares foram validados, mas ainda não são persistidos nesta fase.');
+    }
+
+    pularEtapa3(): void {
+        if (!this.cadastroBasicoConcluido) {
+            this.bloquearSubmissaoTemporaria('A conta básica ainda não foi criada.');
+            return;
+        }
+
+        this.tipoMensagem = 'success';
+        this.mensagem = 'Cadastro realizado com sucesso! Redirecionando para o login...';
+        setTimeout(() => this.router.navigate(['/login']), 2000);
+    }
+
+    private bloquearSubmissaoTemporaria(mensagem = 'A conclusão deste tipo de cadastro será habilitada após a adaptação do backend.'): void {
+        this.tipoMensagem = 'info';
+        this.mensagem = mensagem;
     }
 }
