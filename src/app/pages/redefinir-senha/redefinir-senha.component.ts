@@ -140,7 +140,7 @@ export class RedefinirSenhaComponent implements OnInit {
 
             this.tipoMensagem = 'success';
             this.mensagem = 'Senha redefinida com sucesso! Redirecionando para o login...';
-            setTimeout(() => this.router.navigate(['/cadastro/diretoria/login']), 1500);
+            setTimeout(() => this.router.navigate(['/login']), 1500);
         } catch {
             this.tipoMensagem = 'error';
             this.mensagem = 'Erro ao redefinir a senha. Tente novamente.';

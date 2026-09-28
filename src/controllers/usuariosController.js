@@ -2,7 +2,8 @@ import crypto from 'crypto';
 import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
 import { pool as db } from '../config/db.js';
-import { sendAccountMail } from '../services/mailService.js';
+import { enviarEmail } from '../services/mailService.js';
+import { comporEmailPorChave, EmailComposicaoError } from '../services/emailTemplateService.js';
 import {
     buildProfilePhotoUrl,
     processAndStoreProfilePhoto,
@@ -14,6 +15,8 @@ import { validarVideoConcorrente } from '../services/concorrenteVideoService.js'
 
 const BCRYPT_ROUNDS = 12;
 const TOKEN_VALIDADE_MINUTOS = 30;
+// Acrescenta a funcao do e-mail ao nome institucional, mantendo o mesmo fallback de mailService.
+const remetenteContextual = (contexto) => `${process.env.MAIL_FROM_NAME || 'IST Brasil'} (${contexto})`;
 const COOKIE_NAME = process.env.COOKIE_NAME || 'ist_session';
 // Sem JWT_SECRET definido no .env, cai em um segredo fixo apenas para nunca derrubar o login em dev;
 // em produção o .env DEVE definir JWT_SECRET para os cookies de sessão serem realmente seguros.
@@ -252,6 +255,23 @@ const cadastrar = async (req, res) => {
         return res.status(400).json({ message: 'Data de nascimento não pode ser no futuro.' });
     }
 
+    const tokenConfirmacao = crypto.randomBytes(32).toString('hex');
+    const tokenExpiraEm = new Date(Date.now() + TOKEN_VALIDADE_MINUTOS * 60 * 1000);
+    const linkConfirmacao = `${process.env.APP_URL || 'https://www.istbrasil.org.br'}/confirmar-email?token=${tokenConfirmacao}`;
+
+    // Compor antes do INSERT evita criar um usuario que jamais podera ser confirmado.
+    let composicaoConfirmacao;
+    try {
+        composicaoConfirmacao = await comporEmailPorChave('confirmacao_email', { nome: nome.trim(), link: linkConfirmacao });
+    } catch (error) {
+        if (error instanceof EmailComposicaoError) {
+            console.error('[EMAIL_COMPOSICAO] Falha ao compor confirmacao_email:', error.codigo);
+        } else {
+            console.error('[EMAIL_COMPOSICAO] Erro inesperado ao compor confirmacao_email:', error.message);
+        }
+        return res.status(500).json({ message: 'Não foi possível concluir o cadastro no momento. Tente novamente mais tarde.' });
+    }
+
     let connection;
     let transacaoIniciada = false;
     let cadastroConfirmacao;
@@ -278,8 +298,6 @@ const cadastrar = async (req, res) => {
         }
 
         const senhaBcrypt = await bcrypt.hash(senha, BCRYPT_ROUNDS);
-        const tokenConfirmacao = crypto.randomBytes(32).toString('hex');
-        const tokenExpiraEm = new Date(Date.now() + TOKEN_VALIDADE_MINUTOS * 60 * 1000);
 
         const [result] = await connection.query(
             `INSERT INTO ist_usuarios
@@ -321,7 +339,7 @@ const cadastrar = async (req, res) => {
 
         await connection.commit();
         transacaoIniciada = false;
-        cadastroConfirmacao = { id_usuario: result.insertId, email: emailNormalizado, nome: nome.trim(), token: tokenConfirmacao };
+        cadastroConfirmacao = { id_usuario: result.insertId, email: emailNormalizado, nome: nome.trim() };
     } catch (error) {
         if (transacaoIniciada) {
             try {
@@ -351,17 +369,17 @@ const cadastrar = async (req, res) => {
         }
     }
 
-    const linkConfirmacao = `${process.env.APP_URL || 'https://www.istbrasil.org.br'}/confirmar-email?token=${cadastroConfirmacao.token}`;
-
     try {
-        await sendAccountMail({
+        await enviarEmail({
             to: cadastroConfirmacao.email,
-            subject: 'Confirme seu e-mail - IST Brasil',
-            html: `<p>Olá, ${cadastroConfirmacao.nome}!</p><p>Confirme seu cadastro clicando no link abaixo (válido por ${TOKEN_VALIDADE_MINUTOS} minutos):</p><p><a href="${linkConfirmacao}">${linkConfirmacao}</a></p>`
+            fromName: remetenteContextual('Confirmação de Email'),
+            subject: composicaoConfirmacao.assunto,
+            html: composicaoConfirmacao.html,
+            text: composicaoConfirmacao.text
         });
     } catch (mailError) {
         // O banco já confirmou o cadastro; falha SMTP não desfaz o commit.
-        console.error('Erro ao enviar e-mail de confirmação após cadastro confirmado:', mailError.message);
+        console.error('[EMAIL_ENVIO] Erro ao enviar e-mail de confirmação após cadastro confirmado:', mailError.message);
     }
 
     return res.status(201).json({ id_usuario: cadastroConfirmacao.id_usuario });
@@ -403,7 +421,10 @@ const confirmarEmail = async (req, res) => {
     }
 };
 
-// Passo 1 do "Esqueci a senha": gera token e envia o link de redefinição por e-mail
+// Passo 1 do "Esqueci a senha": gera token e envia o link de redefinição por e-mail.
+// A resposta publica e sempre a mesma para nao revelar se a conta existe.
+const RESPOSTA_NEUTRA_SENHA = 'Se o e-mail informado estiver cadastrado, você receberá as instruções para redefinir sua senha.';
+
 const esqueciSenha = async (req, res) => {
     const email = (req.body.email || '').toString().trim().toLowerCase();
 
@@ -411,39 +432,57 @@ const esqueciSenha = async (req, res) => {
         return res.status(400).json({ message: 'Informe o e-mail cadastrado.' });
     }
 
+    if (!emailValido(email)) {
+        return res.status(400).json({ message: 'Informe um e-mail válido.' });
+    }
+
     try {
         const [rows] = await db.query('SELECT id_usuario, nome FROM ist_usuarios WHERE email = ?', [email]);
 
         if (rows.length === 0) {
-            return res.status(404).json({ message: 'E-mail não cadastrado.' });
+            return res.status(200).json({ message: RESPOSTA_NEUTRA_SENHA });
         }
 
         const usuario = rows[0];
         const tokenSenha = crypto.randomBytes(32).toString('hex');
         const tokenExpiraEm = new Date(Date.now() + TOKEN_VALIDADE_MINUTOS * 60 * 1000);
+        const linkRedefinicao = `${process.env.APP_URL || 'https://www.istbrasil.org.br'}/redefinir-senha?token=${tokenSenha}`;
+
+        // Compor antes do UPDATE evita gravar um token que nunca chegara ao usuario.
+        let composicao;
+        try {
+            composicao = await comporEmailPorChave('redefinicao_senha', { nome: usuario.nome, link: linkRedefinicao });
+        } catch (composicaoError) {
+            if (composicaoError instanceof EmailComposicaoError) {
+                console.error('[EMAIL_COMPOSICAO] chave=redefinicao_senha codigo=%s', composicaoError.codigo);
+            } else {
+                console.error('[EMAIL_COMPOSICAO] chave=redefinicao_senha falha inesperada:', composicaoError.message);
+            }
+            return res.status(200).json({ message: RESPOSTA_NEUTRA_SENHA });
+        }
 
         await db.query(
             "UPDATE ist_usuarios SET token_confirmacao = ?, token_expira_em = ?, token_tipo = 'reset_senha' WHERE id_usuario = ?",
             [tokenSenha, tokenExpiraEm, usuario.id_usuario]
         );
 
-        const linkRedefinicao = `${process.env.APP_URL || 'https://www.istbrasil.org.br'}/redefinir-senha?token=${tokenSenha}`;
-
         try {
-            await sendAccountMail({
+            await enviarEmail({
                 to: email,
-                subject: 'Redefinição de senha - IST Brasil',
-                html: `<p>Olá, ${usuario.nome}!</p><p>Recebemos uma solicitação para redefinir sua senha. Clique no link abaixo (válido por ${TOKEN_VALIDADE_MINUTOS} minutos):</p><p><a href="${linkRedefinicao}">${linkRedefinicao}</a></p><p>Se você não solicitou isso, ignore este e-mail.</p>`
+                fromName: remetenteContextual('Redefinição de Senha'),
+                subject: composicao.assunto,
+                html: composicao.html,
+                text: composicao.text
             });
         } catch (mailError) {
-            console.error('Erro ao enviar e-mail de redefinição de senha:', mailError.message);
-            return res.status(502).json({ message: 'Não foi possível enviar o e-mail de redefinição. Tente novamente mais tarde.' });
+            console.error('[EMAIL_ENVIO] Erro ao enviar e-mail de redefinição de senha:', mailError.message);
+            return res.status(200).json({ message: RESPOSTA_NEUTRA_SENHA });
         }
 
-        return res.status(200).json({ message: 'E-mail de redefinição enviado. Verifique sua caixa de entrada.' });
+        return res.status(200).json({ message: RESPOSTA_NEUTRA_SENHA });
     } catch (error) {
         console.error('Erro ao solicitar redefinição de senha:', error);
-        return res.status(500).json({ message: 'Erro ao solicitar redefinição de senha.', error: error.message });
+        return res.status(500).json({ message: 'Não foi possível processar a solicitação no momento.' });
     }
 };
 

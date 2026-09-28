@@ -1,6 +1,5 @@
 import { Routes } from '@angular/router';
 import { AppLayout } from './app/layout/component/app.layout';
-import { Dashboard } from './app/pages/dashboard/dashboard';
 import { Documentation } from './app/pages/documentation/documentation';
 import { Landing } from './app/pages/landing/landing';
 import { Notfound } from './app/pages/notfound/notfound';
@@ -12,6 +11,7 @@ import { CheckoutComponent } from './app/pages/editora/checkout/checkout.compone
 import { DiretoriaLoginComponent } from './app/pages/cadastro/diretoria/diretoria-login.component';
 import { TIPO_USUARIO_MAP } from './app/pages/cadastro/models/cadastro.model';
 import { perfilGuard } from './app/guards/perfil.guard';
+import { adminGuard } from './app/guards/admin.guard';
 // import { LivroComponent } from './app/pages/editora/livro/livro.component';
 
 export const appRoutes: Routes = [
@@ -78,11 +78,8 @@ export const appRoutes: Routes = [
     },
     {
         path: 'admin',
-        component: AppLayout,
-        children: [
-            { path: '', component: Dashboard },
-            { path: 'pages', loadChildren: () => import('./app/pages/pages.routes') }
-        ]
+        canActivate: [adminGuard],
+        loadChildren: () => import('./app/pages/admin/admin.routes')
     },
     {
         path: 'patrono',

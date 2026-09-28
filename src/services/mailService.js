@@ -29,9 +29,29 @@ function getSenderEmail(subject) {
     return senderBySubject[normalizedSubject] || 'contato@istbrasil.org.br';
 }
 
+export async function enviarEmail({ to, subject, html, text, fromName, fromAddress, replyTo }) {
+    if (!to || !subject || (!html && !text)) {
+        throw new TypeError('Destinatário, assunto e conteúdo do e-mail são obrigatórios.');
+    }
+
+    const nomeRemetente = fromName || process.env.MAIL_FROM_NAME || 'IST Brasil';
+    const enderecoRemetente = fromAddress || process.env.MAIL_FROM_ADDRESS || 'contato@istbrasil.org.br';
+    const mensagem = {
+        from: { name: nomeRemetente, address: enderecoRemetente },
+        to,
+        subject,
+        ...(html ? { html } : {}),
+        ...(text ? { text } : {}),
+        ...(replyTo ? { replyTo } : {})
+    };
+
+    return mailTransporter.sendMail(mensagem);
+}
+
 export async function sendMail({ fromName, subject, html, replyTo }) {
-    return mailTransporter.sendMail({
-        from: `"${fromName}" <${getSenderEmail(subject)}>`,
+    return enviarEmail({
+        fromName,
+        fromAddress: getSenderEmail(subject),
         to: 'presidencia@istbrasil.org.br',
         subject,
         html,
@@ -45,8 +65,9 @@ export async function sendAccountMail({ to, subject, html }) {
     const fromName = process.env.MAIL_FROM_NAME || 'IST Brasil';
     const fromAddress = process.env.MAIL_FROM_ADDRESS || 'contato@istbrasil.org.br';
 
-    return mailTransporter.sendMail({
-        from: `"${fromName}" <${fromAddress}>`,
+    return enviarEmail({
+        fromName,
+        fromAddress,
         to,
         subject,
         html

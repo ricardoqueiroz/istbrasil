@@ -1,32 +1,33 @@
 import express from 'express';
 import usuariosController from '../controllers/usuariosController.js';
 import { autenticarUsuario } from '../middlewares/authMiddleware.js';
+import { limiteAutenticacao, limiteConsulta, limiteEmail, limiteToken } from '../middlewares/rateLimit.js';
 import { profilePhotoUpload } from '../services/profilePhotoService.js';
 const router = express.Router();
 
 // POST /api/usuarios/login
-router.post('/login', usuariosController.login);
+router.post('/login', limiteAutenticacao, usuariosController.login);
 
 // GET /api/usuarios/cargos
 router.get('/cargos', usuariosController.listarCargos);
 
 // GET /api/usuarios/verificar-email?email=
-router.get('/verificar-email', usuariosController.verificarEmail);
+router.get('/verificar-email', limiteConsulta, usuariosController.verificarEmail);
 
 // GET /api/usuarios/confirmar-email?token=
-router.get('/confirmar-email', usuariosController.confirmarEmail);
+router.get('/confirmar-email', limiteToken, usuariosController.confirmarEmail);
 
 // POST /api/usuarios/cadastro
-router.post('/cadastro', usuariosController.cadastrar);
+router.post('/cadastro', limiteEmail, usuariosController.cadastrar);
 
 // POST /api/usuarios/esqueci-senha
-router.post('/esqueci-senha', usuariosController.esqueciSenha);
+router.post('/esqueci-senha', limiteEmail, usuariosController.esqueciSenha);
 
 // GET /api/usuarios/validar-token-senha?token=
-router.get('/validar-token-senha', usuariosController.validarTokenSenha);
+router.get('/validar-token-senha', limiteToken, usuariosController.validarTokenSenha);
 
 // POST /api/usuarios/redefinir-senha
-router.post('/redefinir-senha', usuariosController.redefinirSenha);
+router.post('/redefinir-senha', limiteToken, usuariosController.redefinirSenha);
 
 // GET /api/usuarios/me
 router.get('/me', autenticarUsuario, usuariosController.me);
