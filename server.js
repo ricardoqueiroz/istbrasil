@@ -4,19 +4,23 @@ import cookieParser from 'cookie-parser';
 import path from 'path';
 import express from 'express';
 import bodyParser from "body-parser"; // Importação movida para cima por organização
+/* PAYPAL TEMPORARIAMENTE DESABILITADO.
+ * Reativar somente após revisão da integração e configuração de produção.
 import {
     Client,
     Environment, // Importante
     LogLevel,
     OrdersController
 } from "@paypal/paypal-server-sdk";
+*/
 
 // Importação das rotas
 import bookRoutes from './src/routes/book.routes.js';
 import releaseRoutes from './src/routes/releases.routes.js';
 import timelineRoutes from './src/routes/timeline.routes.js';
 import obraRoutes from './src/routes/obra.routes.js';
-import paypalRoutes from './src/routes/paypal.routes.js';
+// PAYPAL TEMPORARIAMENTE DESABILITADO.
+// import paypalRoutes from './src/routes/paypal.routes.js';
 import contactRoutes from './src/routes/contact.routes.js';
 import usuariosRoutes from './src/routes/usuarios.routes.js';
 import eventosRoutes from './src/routes/eventos.routes.js';
@@ -43,6 +47,8 @@ app.use(express.json());
 app.use(bodyParser.json());
 app.use('/api', contactRoutes);
 
+/* PAYPAL TEMPORARIAMENTE DESABILITADO.
+ * Reativar somente após revisão da integração e configuração de produção.
 // --- Configuração do Paypal ---
 const {
     PAYPAL_CLIENT_ID,
@@ -87,6 +93,7 @@ if (paypalEnabled) {
 }
 
 export { paypalClient };
+*/
 
 // --- Rotas ---
 app.use('/api/books', bookRoutes);
@@ -120,5 +127,6 @@ app.get('/', (req, res) => {
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
-    console.log(`Ambiente PayPal: ${paypalEnvironment === Environment.Production ? 'PRODUÇÃO (Dinheiro Real)' : 'SANDBOX (Teste)'}`);
+    // PAYPAL TEMPORARIAMENTE DESABILITADO.
+    // console.log(`Ambiente PayPal: ${paypalEnvironment === Environment.Production ? 'PRODUÇÃO (Dinheiro Real)' : 'SANDBOX (Teste)'}`);
 });

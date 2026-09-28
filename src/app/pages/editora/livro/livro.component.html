@@ -21,9 +21,8 @@
                     <h3 class="text-lg text-gray-700" style="margin-top: 0px">Formato: {{ livro?.format }}</h3>
                     <p class="text-xl text-primary font-semibold">R$ {{ livro?.price }}</p>
                     <div class="text-gray-600" [innerHTML]="livro?.description | jsonDescription"></div>
-                    <div class="mt-6 w-full max-w-md">
-                        <div #paypalRef></div>
-                    </div>
+                    <!-- PAYPAL TEMPORARIAMENTE DESABILITADO. -->
+                    <p class="mt-6 text-sm text-surface-600 dark:text-surface-300">Compra temporariamente indisponível.</p>
                 </div>
             </div>
         </p-card>

@@ -26,6 +26,7 @@ declare var paypal: any;
 })
 export class LivroComponent implements OnInit {
   @ViewChild('paypalRef', { static: true }) private paypalRef!: ElementRef;
+  private readonly paypalTemporariamenteDesabilitado = true;
   
   livro: any;
   livroId: string | null = null;
@@ -44,28 +45,17 @@ export class LivroComponent implements OnInit {
       this.bookService.getById(this.livroId).subscribe({
         next: (data) => {
           this.livro = data;
-          console.log('[PayPal] Livro carregado:', this.livro);
-          
-          // Aguarda o carregamento do SDK do PayPal já incluído em index.html
-          const waitForPaypal = () => {
-            if ((window as any).paypal) {
-              console.log('[PayPal] SDK carregado, renderizando botão...');
-              this.renderPaypalButton();
-            } else {
-              // Tenta novamente a cada 50ms se o script ainda não carregou
-              setTimeout(waitForPaypal, 50);
-            }
-          };
-          waitForPaypal();
         },
         error: (err) => {
-          console.error('[PayPal] Erro ao buscar livro:', err);
+          console.error('Erro ao buscar livro:', err);
         }
       });
     }
   }
 
   renderPaypalButton() {
+    // PAYPAL TEMPORARIAMENTE DESABILITADO. Reativar somente após revisão da integração.
+    if (this.paypalTemporariamenteDesabilitado) return;
     if (!this.livro) return;
     console.log('[PayPal] Iniciando renderização do botão...');
 
