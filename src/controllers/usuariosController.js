@@ -14,7 +14,9 @@ import {
 import { validarVideoConcorrente } from '../services/concorrenteVideoService.js';
 
 const BCRYPT_ROUNDS = 12;
+const HASH_BCRYPT_DUMMY = '$2b$12$uKNr.LozCRYbjD.wVvB0deVP/B5NKLDqhYlI3swBl4j3.3y68xLeO';
 const TOKEN_VALIDADE_MINUTOS = 30;
+const RESPOSTA_NEUTRA_CADASTRO = 'Se for possível concluir o cadastro, enviaremos as instruções para o e-mail informado.';
 // Acrescenta a funcao do e-mail ao nome institucional, mantendo o mesmo fallback de mailService.
 const remetenteContextual = (contexto) => `${process.env.MAIL_FROM_NAME || 'IST Brasil'} (${contexto})`;
 const COOKIE_NAME = process.env.COOKIE_NAME || 'ist_session';
@@ -57,14 +59,15 @@ const login = async (req, res) => {
         const [rows] = await db.query('SELECT id_usuario, senha, nome, foto, id_tipo_usuario FROM ist_usuarios WHERE email = ?', [email.trim().toLowerCase()]);
 
         if (rows.length === 0) {
-            return res.status(404).json({ message: 'E-mail não cadastrado. Cadastre-se para continuar.' });
+            await bcrypt.compare(senha, HASH_BCRYPT_DUMMY);
+            return res.status(401).json({ message: 'E-mail ou senha inválidos.' });
         }
 
         const usuario = rows[0];
         const senhaValida = await bcrypt.compare(senha, usuario.senha);
 
         if (!senhaValida) {
-            return res.status(401).json({ message: 'Senha ou e-mail inválido.' });
+            return res.status(401).json({ message: 'E-mail ou senha inválidos.' });
         }
 
         const cookieOptions = buildCookieOptions();
@@ -88,7 +91,7 @@ const login = async (req, res) => {
         });
     } catch (error) {
         console.error('Erro no login de usuário:', error);
-        return res.status(500).json({ message: 'Erro ao processar login.', error: error.message });
+        return res.status(500).json({ message: 'Não foi possível processar a solicitação no momento.' });
     }
 };
 
@@ -100,23 +103,6 @@ const listarCargos = async (_req, res) => {
     } catch (error) {
         console.error('Erro ao listar cargos:', error);
         return res.status(500).json({ message: 'Erro ao carregar cargos.', error: error.message });
-    }
-};
-
-// Checagem rápida usada no passo de confirmação, antes de preencher o restante do formulário
-const verificarEmail = async (req, res) => {
-    const email = (req.query.email || '').toString().trim().toLowerCase();
-
-    if (!email) {
-        return res.status(400).json({ message: 'Informe um e-mail para verificar.' });
-    }
-
-    try {
-        const [rows] = await db.query('SELECT id_usuario FROM ist_usuarios WHERE email = ?', [email]);
-        return res.status(200).json({ disponivel: rows.length === 0 });
-    } catch (error) {
-        console.error('Erro ao verificar e-mail:', error);
-        return res.status(500).json({ message: 'Erro ao verificar e-mail.', error: error.message });
     }
 };
 
@@ -239,6 +225,10 @@ const cadastrar = async (req, res) => {
     const emailNormalizado = email.trim().toLowerCase();
     const cpfNormalizado = somenteDigitos(cpf);
 
+    if (!emailValido(emailNormalizado)) {
+        return res.status(400).json({ message: 'Informe um e-mail válido.' });
+    }
+
     if (cpfNormalizado.length !== 11) {
         return res.status(400).json({ message: 'CPF inválido.' });
     }
@@ -350,11 +340,11 @@ const cadastrar = async (req, res) => {
         }
 
         if (error.code === 'DUPLICATE_EMAIL') {
-            return res.status(409).json({ message: 'Este e-mail já está cadastrado. Faça login ou recupere sua senha.' });
+            return res.status(200).json({ message: RESPOSTA_NEUTRA_CADASTRO });
         }
 
         if (error.code === 'DUPLICATE_CPF' || error.code === 'ER_DUP_ENTRY') {
-            return res.status(409).json({ message: 'E-mail ou CPF já cadastrado.' });
+            return res.status(200).json({ message: RESPOSTA_NEUTRA_CADASTRO });
         }
 
         if (error.code === 'ER_NO_REFERENCED_ROW_2' || error.code === 'ER_ROW_IS_REFERENCED_2') {
@@ -382,7 +372,7 @@ const cadastrar = async (req, res) => {
         console.error('[EMAIL_ENVIO] Erro ao enviar e-mail de confirmação após cadastro confirmado:', mailError.message);
     }
 
-    return res.status(201).json({ id_usuario: cadastroConfirmacao.id_usuario });
+    return res.status(200).json({ message: RESPOSTA_NEUTRA_CADASTRO });
 };
 
 // Confirmação de e-mail via token enviado no cadastro
@@ -1081,4 +1071,4 @@ const logout = async (_req, res) => {
     return res.status(200).json({ message: 'Logout realizado com sucesso.' });
 };
 
-export default { login, listarCargos, verificarEmail, cadastrar, confirmarEmail, esqueciSenha, validarTokenSenha, redefinirSenha, me, obterPerfil, atualizarPerfil, atualizarParticipacaoConcorrente, atualizarCurriculo, atualizarFoto, obterFotoPublica, removerFoto, logout };
+export default { login, listarCargos, cadastrar, confirmarEmail, esqueciSenha, validarTokenSenha, redefinirSenha, me, obterPerfil, atualizarPerfil, atualizarParticipacaoConcorrente, atualizarCurriculo, atualizarFoto, obterFotoPublica, removerFoto, logout };

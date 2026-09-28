@@ -220,6 +220,7 @@ const UFS: UfOption[] = [
 export class CadastroComponent implements OnInit {
     isLoading = false;
     cadastroBasicoConcluido = false;
+    mensagemCadastroNeutra = '';
     mensagem = '';
     tipoMensagem: 'success' | 'error' | 'info' = 'info';
     hoje = new Date();
@@ -570,31 +571,13 @@ export class CadastroComponent implements OnInit {
             return;
         }
 
-        this.isLoading = true;
-
-        try {
-            const response = await fetch(`/api/usuarios/verificar-email?email=${encodeURIComponent(this.email.trim())}`);
-            const data = await response.json();
-
-            if (!response.ok) {
-                this.tipoMensagem = 'error';
-                this.mensagem = data?.message || 'Não foi possível verificar o e-mail. Tente novamente.';
-                return;
-            }
-
-            if (!data.disponivel) {
-                this.tipoMensagem = 'error';
-                this.mensagem = 'Este e-mail já está cadastrado. Faça login ou recupere sua senha.';
-                return;
-            }
-
-            this.cadastroStateService.setEtapaAtual(2);
-        } catch {
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(this.email.trim())) {
             this.tipoMensagem = 'error';
-            this.mensagem = 'Erro ao verificar o e-mail. Tente novamente.';
-        } finally {
-            this.isLoading = false;
+            this.mensagem = 'Informe um e-mail válido.';
+            return;
         }
+
+        this.cadastroStateService.setEtapaAtual(2);
     }
 
     async finalizarCadastro(): Promise<void> {
@@ -602,7 +585,7 @@ export class CadastroComponent implements OnInit {
 
         if (this.cadastroBasicoConcluido) {
             this.tipoMensagem = 'info';
-            this.mensagem = 'A conta já foi criada. A Etapa 3 é complementar e opcional.';
+            this.mensagem = this.mensagemCadastroNeutra;
             return;
         }
 
@@ -679,17 +662,18 @@ export class CadastroComponent implements OnInit {
             }
 
             this.cadastroBasicoConcluido = true;
+            this.mensagemCadastroNeutra = data?.message || 'Se for possível concluir o cadastro, enviaremos as instruções para o e-mail informado.';
 
             if (this.totalEtapasVisiveis === 3) {
                 this.inicializarEtapa3();
                 this.cadastroStateService.setEtapaAtual(3);
-                this.tipoMensagem = 'success';
-                this.mensagem = 'Conta criada com sucesso. A Etapa 3 é complementar e opcional.';
+                this.tipoMensagem = 'info';
+                this.mensagem = this.mensagemCadastroNeutra;
                 return;
             }
 
-            this.tipoMensagem = 'success';
-            this.mensagem = 'Cadastro realizado com sucesso! Redirecionando para o login...';
+            this.tipoMensagem = 'info';
+            this.mensagem = this.mensagemCadastroNeutra;
             setTimeout(() => this.router.navigate(['/login']), 2000);
         } catch {
             this.tipoMensagem = 'error';
@@ -790,7 +774,7 @@ export class CadastroComponent implements OnInit {
             return;
         }
 
-        this.bloquearSubmissaoTemporaria('A conta já foi criada. Os dados complementares foram validados, mas ainda não são persistidos nesta fase.');
+        this.bloquearSubmissaoTemporaria('Os dados complementares foram validados, mas ainda não são persistidos nesta fase.');
     }
 
     pularEtapa3(): void {
@@ -799,8 +783,8 @@ export class CadastroComponent implements OnInit {
             return;
         }
 
-        this.tipoMensagem = 'success';
-        this.mensagem = 'Cadastro realizado com sucesso! Redirecionando para o login...';
+        this.tipoMensagem = 'info';
+        this.mensagem = this.mensagemCadastroNeutra;
         setTimeout(() => this.router.navigate(['/login']), 2000);
     }
 

@@ -150,12 +150,6 @@ export class LoginComponent {
             const data = await response.json();
 
             if (!response.ok) {
-                if (response.status === 404) {
-                    this.tipoMensagem = 'error';
-                    this.mensagem = 'E-mail não cadastrado.';
-                    return;
-                }
-
                 this.tipoMensagem = 'error';
                 this.mensagem = data?.message || 'Senha ou e-mail inválido.';
                 return;

@@ -272,31 +272,13 @@ export class DiretoriaCadastroComponent implements OnInit {
             return;
         }
 
-        this.isLoading = true;
-
-        try {
-            const response = await fetch(`/api/usuarios/verificar-email?email=${encodeURIComponent(this.email.trim())}`);
-            const data = await response.json();
-
-            if (!response.ok) {
-                this.tipoMensagem = 'error';
-                this.mensagem = data?.message || 'Não foi possível verificar o e-mail. Tente novamente.';
-                return;
-            }
-
-            if (!data.disponivel) {
-                this.tipoMensagem = 'error';
-                this.mensagem = 'Este e-mail já está cadastrado. Faça login ou recupere sua senha.';
-                return;
-            }
-
-            this.step = 2;
-        } catch {
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(this.email.trim())) {
             this.tipoMensagem = 'error';
-            this.mensagem = 'Erro ao verificar o e-mail. Tente novamente.';
-        } finally {
-            this.isLoading = false;
+            this.mensagem = 'Informe um e-mail válido.';
+            return;
         }
+
+        this.step = 2;
     }
 
     async finalizarCadastro(): Promise<void> {
@@ -370,8 +352,8 @@ export class DiretoriaCadastroComponent implements OnInit {
                 return;
             }
 
-            this.tipoMensagem = 'success';
-            this.mensagem = 'Cadastro realizado com sucesso! Redirecionando para o login...';
+            this.tipoMensagem = 'info';
+            this.mensagem = data?.message || 'Se for possível concluir o cadastro, enviaremos as instruções para o e-mail informado.';
             setTimeout(() => this.router.navigate(['/cadastro/diretoria/login']), 1500);
         } catch {
             this.tipoMensagem = 'error';

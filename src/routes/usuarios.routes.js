@@ -1,7 +1,7 @@
 import express from 'express';
 import usuariosController from '../controllers/usuariosController.js';
 import { autenticarUsuario } from '../middlewares/authMiddleware.js';
-import { limiteAutenticacao, limiteConsulta, limiteEmail, limiteToken } from '../middlewares/rateLimit.js';
+import { limiteAutenticacao, limiteEmail, limiteToken } from '../middlewares/rateLimit.js';
 import { profilePhotoUpload } from '../services/profilePhotoService.js';
 const router = express.Router();
 
@@ -10,9 +10,6 @@ router.post('/login', limiteAutenticacao, usuariosController.login);
 
 // GET /api/usuarios/cargos
 router.get('/cargos', usuariosController.listarCargos);
-
-// GET /api/usuarios/verificar-email?email=
-router.get('/verificar-email', limiteConsulta, usuariosController.verificarEmail);
 
 // GET /api/usuarios/confirmar-email?token=
 router.get('/confirmar-email', limiteToken, usuariosController.confirmarEmail);

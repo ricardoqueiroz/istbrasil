@@ -11,11 +11,6 @@ const criarLimitador = ({ windowMs, limit, skipSuccessfulRequests = false }) => 
     handler: (_req, res) => res.status(429).json({ message: mensagemLimite })
 });
 
-export const limiteConsulta = criarLimitador({
-    windowMs: 15 * 60 * 1000,
-    limit: 30
-});
-
 export const limiteAutenticacao = criarLimitador({
     windowMs: 15 * 60 * 1000,
     limit: 10,
