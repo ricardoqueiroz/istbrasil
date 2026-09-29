@@ -219,6 +219,7 @@ const UFS: UfOption[] = [
 })
 export class CadastroComponent implements OnInit {
     isLoading = false;
+    private cargosSolicitados = false;
     cadastroBasicoConcluido = false;
     mensagemCadastroNeutra = '';
     mensagem = '';
@@ -333,8 +334,6 @@ export class CadastroComponent implements OnInit {
     ) {}
 
     ngOnInit(): void {
-        this.carregarCargos();
-
         this.route.data.subscribe(({ cadastroTipo }) => {
             if (!isCadastroTipo(cadastroTipo)) {
                 return;
@@ -345,13 +344,24 @@ export class CadastroComponent implements OnInit {
             if (estadoAtual.tipo === cadastroTipo) {
                 this.inicializarEtapa3();
                 this.sincronizarDataNascimentoSelecionada();
+                this.carregarCargosSeNecessario();
                 return;
             }
 
             this.cadastroStateService.setTipo(cadastroTipo);
             this.inicializarEtapa3();
             this.sincronizarDataNascimentoSelecionada();
+            this.carregarCargosSeNecessario();
         });
+    }
+
+    private carregarCargosSeNecessario(): void {
+        if (!this.usaCargo || this.cargosSolicitados) {
+            return;
+        }
+
+        this.cargosSolicitados = true;
+        void this.carregarCargos();
     }
 
     private async carregarCargos(): Promise<void> {

@@ -116,37 +116,22 @@ export const appRoutes: Routes = [
         path: 'cadastro',
         component: AppLayout,
         children: [
-            { path: '', loadComponent: () => import('./app/pages/cadastro/cadastro.component').then(m => m.CadastroComponent) },
+            { path: '', pathMatch: 'full', redirectTo: 'usuarios' },
             {
-                path: 'diretoria',
-                loadComponent: () => import('./app/pages/cadastro/cadastro.component').then(m => m.CadastroComponent),
-                data: {
-                    cadastroTipo: 'diretoria',
-                    idTipoUsuario: TIPO_USUARIO_MAP.diretoria
-                }
-            },
-            {
-                path: 'concorrente',
-                loadComponent: () => import('./app/pages/cadastro/cadastro.component').then(m => m.CadastroComponent),
-                data: {
-                    cadastroTipo: 'concorrente',
-                    idTipoUsuario: TIPO_USUARIO_MAP.concorrente
-                }
-            },
-            {
-                path: 'externo',
+                path: 'usuarios',
                 loadComponent: () => import('./app/pages/cadastro/cadastro.component').then(m => m.CadastroComponent),
                 data: {
                     cadastroTipo: 'externo',
                     idTipoUsuario: TIPO_USUARIO_MAP.externo
                 }
             },
+            { path: 'externo', pathMatch: 'full', redirectTo: 'usuarios' },
             {
-                path: 'colaborador',
+                path: 'concorrente',
                 loadComponent: () => import('./app/pages/cadastro/cadastro.component').then(m => m.CadastroComponent),
                 data: {
-                    cadastroTipo: 'colaborador',
-                    idTipoUsuario: TIPO_USUARIO_MAP.colaborador
+                    cadastroTipo: 'concorrente',
+                    idTipoUsuario: TIPO_USUARIO_MAP.concorrente
                 }
             },
             {
@@ -186,14 +171,6 @@ export const appRoutes: Routes = [
                 }
             },
             { path: 'diretoria/login', component: DiretoriaLoginComponent },
-            {
-                path: 'diretoria/cadastro',
-                loadComponent: () => import('./app/pages/cadastro/cadastro.component').then(m => m.CadastroComponent),
-                data: {
-                    cadastroTipo: 'diretoria',
-                    idTipoUsuario: TIPO_USUARIO_MAP.diretoria
-                }
-            }
         ]
     },
     {
