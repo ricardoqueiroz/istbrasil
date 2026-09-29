@@ -293,9 +293,17 @@ const UFS = [
                                         </div>
                                     </div>
 
-                                    <div class="mt-6 flex flex-col gap-3 md:flex-row md:justify-end">
-                                        <button pButton type="button" label="Cancelar" class="p-button-outlined" (click)="cancelarEdicao()" [disabled]="salvandoPerfil"></button>
-                                        <button pButton type="submit" label="Salvar" icon="pi pi-check" [loading]="salvandoPerfil" [disabled]="salvandoPerfil"></button>
+                                    <div class="mt-6 border-t border-surface-200 pt-6 dark:border-surface-700">
+                                        <div class="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+                                            <label *ngIf="perfilTipo === 'concorrente'" for="aceiteRegulamento" class="flex items-center gap-3 text-sm font-medium text-surface-700 dark:text-surface-200">
+                                                <input id="aceiteRegulamento" name="aceiteRegulamento" type="checkbox" [(ngModel)]="aceiteRegulamento" [disabled]="aceiteRegulamentoPersistido || salvandoPerfil" class="h-4 w-4 accent-primary" />
+                                                <span>Aceito o Regulamento do Festival:</span>
+                                            </label>
+                                            <div class="flex flex-col gap-3 sm:flex-row md:ml-auto">
+                                                <button pButton type="button" label="Cancelar" class="p-button-outlined" (click)="cancelarEdicao()" [disabled]="salvandoPerfil"></button>
+                                                <button pButton type="submit" label="Salvar" icon="pi pi-check" [loading]="salvandoPerfil" [disabled]="salvandoPerfil || (perfilTipo === 'concorrente' && !aceiteRegulamento)"></button>
+                                            </div>
+                                        </div>
                                     </div>
                                 </form>
                             </ng-template>
@@ -395,8 +403,11 @@ export class PerfilComponent implements OnInit, OnDestroy {
         idObra2: null,
         tituloObra2: null,
         linkVideo2: null,
+        aceiteRegulamento: false,
         dataCadastro: null
     };
+    aceiteRegulamento = false;
+    aceiteRegulamentoPersistido = false;
     obrasElegiveis: ObraElegivel[] = [];
     carregandoObras = false;
     salvandoParticipacao = false;
@@ -556,6 +567,7 @@ export class PerfilComponent implements OnInit, OnDestroy {
     }
 
     private aplicarParticipacao(participacao: ParticipacaoConcorrente | null): void {
+        const aceiteRegulamento = participacao?.aceiteRegulamento ?? this.aceiteRegulamentoPersistido;
         this.participacao = {
             idConcorrente: participacao?.idConcorrente ?? null,
             idObra1: participacao?.idObra1 ?? null,
@@ -564,8 +576,11 @@ export class PerfilComponent implements OnInit, OnDestroy {
             idObra2: participacao?.idObra2 ?? null,
             tituloObra2: participacao?.tituloObra2 ?? null,
             linkVideo2: participacao?.linkVideo2 ?? null,
+            aceiteRegulamento,
             dataCadastro: participacao?.dataCadastro ?? null
         };
+        this.aceiteRegulamento = aceiteRegulamento;
+        this.aceiteRegulamentoPersistido = aceiteRegulamento;
         this.atualizarPreviewVideo1();
         this.atualizarPreviewVideo2();
     }
@@ -658,6 +673,7 @@ export class PerfilComponent implements OnInit, OnDestroy {
             uf: this.perfilUsuario.uf || ''
         };
         this.dataNascimentoSelecionada = this.criarDataNascimento(this.formulario.dataNascimento);
+        this.aceiteRegulamento = this.aceiteRegulamentoPersistido;
         this.dataNascimentoEmEdicaoInvalida = false;
         this.mensagemPerfil = null;
         this.editando = true;
@@ -665,6 +681,7 @@ export class PerfilComponent implements OnInit, OnDestroy {
 
     cancelarEdicao(): void {
         this.editando = false;
+        this.aceiteRegulamento = this.aceiteRegulamentoPersistido;
         this.mensagemPerfil = null;
         this.dataNascimentoEmEdicaoInvalida = false;
     }
@@ -904,8 +921,18 @@ export class PerfilComponent implements OnInit, OnDestroy {
         this.salvandoPerfil = true;
 
         try {
-            const resposta = await this.perfilService.atualizarPerfil(this.formulario);
+            const payload: PerfilAtualizacaoPayload = this.perfilTipo === 'concorrente'
+                ? { ...this.formulario, aceiteRegulamento: this.aceiteRegulamento }
+                : { ...this.formulario };
+            const resposta = await this.perfilService.atualizarPerfil(payload);
             this.perfilUsuario = resposta.usuario;
+            if (this.perfilTipo === 'concorrente' && resposta.concorrente?.aceiteRegulamento) {
+                this.aceiteRegulamento = true;
+                this.aceiteRegulamentoPersistido = true;
+                this.perfilConcorrente = this.perfilConcorrente
+                    ? { ...this.perfilConcorrente, aceiteRegulamento: true }
+                    : this.perfilConcorrente;
+            }
             this.fotoUrl = resposta.usuario.fotoUrl ?? this.fotoUrl;
             this.authService.atualizarNomeUsuarioLogado(resposta.usuario.nome);
             this.editando = false;
@@ -915,6 +942,8 @@ export class PerfilComponent implements OnInit, OnDestroy {
             this.tipoMensagemPerfil = 'error';
             if (error instanceof PerfilServiceError && error.status === 401) {
                 this.mensagemPerfil = 'Sua sessão expirou. Faça login novamente para salvar o perfil.';
+            } else if (error instanceof PerfilServiceError && error.status === 400) {
+                this.mensagemPerfil = error.message;
             } else if (error instanceof PerfilServiceError && error.status === 409) {
                 this.mensagemPerfil = error.message;
             } else {

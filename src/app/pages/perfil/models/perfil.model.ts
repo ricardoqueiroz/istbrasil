@@ -31,6 +31,7 @@ export interface PerfilConcorrente {
     idObra2: number | null;
     tituloObra2: string | null;
     linkVideo2: string | null;
+    aceiteRegulamento: boolean;
     dataCadastro: string | null;
 }
 
@@ -53,11 +54,13 @@ export interface PerfilAtualizacaoPayload {
     bairro: string;
     cidade: string;
     uf: string;
+    aceiteRegulamento?: boolean;
 }
 
 export interface PerfilAtualizacaoResponse {
     message: string;
     usuario: PerfilUsuario;
+    concorrente?: Pick<PerfilConcorrente, 'aceiteRegulamento'>;
 }
 
 export interface ObraElegivel {
@@ -79,6 +82,7 @@ export interface ParticipacaoConcorrente {
     idObra2: number | null;
     tituloObra2: string | null;
     linkVideo2: string | null;
+    aceiteRegulamento?: boolean;
     dataCadastro?: string | null;
 }
 

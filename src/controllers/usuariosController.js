@@ -594,7 +594,7 @@ const obterPerfil = async (req, res) => {
             const [concorrenteRows] = await db.query(
                 `SELECT c.id_usuario AS concorrente_usuario_id,
                         c.id_concorrente, c.id_obra_1, c.link_video_1,
-                        c.id_obra_2, c.link_video_2, c.data_cadastro,
+                    c.id_obra_2, c.link_video_2, c.aceite_regulamento, c.data_cadastro,
                         obra1.titulo AS titulo_obra_1,
                         obra2.titulo AS titulo_obra_2
                  FROM ist_concorrentes c
@@ -614,6 +614,7 @@ const obterPerfil = async (req, res) => {
                     idObra2: dadosConcorrente.id_obra_2,
                     tituloObra2: dadosConcorrente.titulo_obra_2,
                     linkVideo2: dadosConcorrente.link_video_2,
+                    aceiteRegulamento: Boolean(dadosConcorrente.aceite_regulamento),
                     dataCadastro: dadosConcorrente.data_cadastro
                 };
             }
@@ -667,7 +668,8 @@ const atualizarPerfil = async (req, res) => {
         complemento,
         bairro,
         cidade,
-        uf
+        uf,
+        aceiteRegulamento
     } = req.body || {};
 
     const dados = {
@@ -718,9 +720,12 @@ const atualizarPerfil = async (req, res) => {
         return res.status(400).json({ message: 'UF inválida.' });
     }
 
+    let connection;
+    let transacaoIniciada = false;
+
     try {
         const [usuarioRows] = await db.query(
-            'SELECT email, cpf, telefone_celular, email_confirmado, celular_confirmado FROM ist_usuarios WHERE id_usuario = ?',
+            'SELECT id_tipo_usuario, email, cpf, telefone_celular, email_confirmado, celular_confirmado FROM ist_usuarios WHERE id_usuario = ?',
             [idUsuario]
         );
 
@@ -734,21 +739,76 @@ const atualizarPerfil = async (req, res) => {
         const telefoneAtual = somenteDigitos(usuarioAtual.telefone_celular);
         const emailMudou = dados.email !== emailAtual;
         const telefoneMudou = dados.telefoneCelular !== telefoneAtual;
+        const concorrente = Number(usuarioAtual.id_tipo_usuario) === 2;
+        let aceitePersistido = false;
+        let executor = db;
 
-        const [duplicados] = await db.query(
+        if (concorrente) {
+            connection = await db.getConnection();
+            await connection.beginTransaction();
+            transacaoIniciada = true;
+            executor = connection;
+
+            const [concorrenteRows] = await connection.query(
+                `SELECT id_obra_1, link_video_1, id_obra_2, link_video_2, aceite_regulamento
+                 FROM ist_concorrentes
+                 WHERE id_usuario = ?
+                 FOR UPDATE`,
+                [idUsuario]
+            );
+
+            if (concorrenteRows.length === 0) {
+                await connection.rollback();
+                transacaoIniciada = false;
+                return res.status(409).json({ message: 'Cadastro de concorrente inconsistente.' });
+            }
+
+            const dadosConcorrente = concorrenteRows[0];
+            aceitePersistido = Boolean(dadosConcorrente.aceite_regulamento);
+
+            if (!aceitePersistido) {
+                if (aceiteRegulamento !== true) {
+                    await connection.rollback();
+                    transacaoIniciada = false;
+                    return res.status(400).json({ message: 'É necessário aceitar o Regulamento do Festival para salvar o perfil.' });
+                }
+
+                if (Number(dadosConcorrente.id_obra_1) !== 63 || !validarVideoConcorrente(dadosConcorrente.link_video_1)) {
+                    await connection.rollback();
+                    transacaoIniciada = false;
+                    return res.status(400).json({ message: 'Informe a obra obrigatória e um vídeo válido antes de aceitar o regulamento.' });
+                }
+
+                if (dadosConcorrente.id_obra_2 !== null && !validarVideoConcorrente(dadosConcorrente.link_video_2)) {
+                    await connection.rollback();
+                    transacaoIniciada = false;
+                    return res.status(400).json({ message: 'Informe um vídeo válido para a segunda obra antes de aceitar o regulamento.' });
+                }
+            }
+        }
+
+        const [duplicados] = await executor.query(
             'SELECT email, cpf FROM ist_usuarios WHERE (email = ? OR cpf = ?) AND id_usuario <> ?',
             [dados.email, dados.cpf, idUsuario]
         );
 
         if (duplicados.some((usuario) => textoNormalizado(usuario.email).toLowerCase() === dados.email)) {
+            if (transacaoIniciada) {
+                await connection.rollback();
+                transacaoIniciada = false;
+            }
             return res.status(409).json({ message: 'Este e-mail já está cadastrado.' });
         }
 
         if (duplicados.some((usuario) => somenteDigitos(usuario.cpf) === dados.cpf)) {
+            if (transacaoIniciada) {
+                await connection.rollback();
+                transacaoIniciada = false;
+            }
             return res.status(409).json({ message: 'Este CPF já está cadastrado.' });
         }
 
-        await db.query(
+        await executor.query(
             `UPDATE ist_usuarios
              SET nome = ?, email = ?, cpf = ?, identidade = ?, telefone_celular = ?,
                  data_nascimento = ?, cep = ?, logradouro = ?, numero = ?, complemento = ?,
@@ -774,7 +834,18 @@ const atualizarPerfil = async (req, res) => {
             ]
         );
 
-        const [atualizados] = await db.query(
+        if (concorrente && !aceitePersistido) {
+            await connection.query(
+                `UPDATE ist_concorrentes
+                 SET aceite_regulamento = 1
+                 WHERE id_usuario = ?
+                   AND aceite_regulamento = 0`,
+                [idUsuario]
+            );
+            aceitePersistido = true;
+        }
+
+        const [atualizados] = await executor.query(
             `SELECT id_usuario, id_tipo_usuario, id_cargo, id_situacao, nome, foto,
                     data_nascimento, cpf, identidade, curriculo, email, email_confirmado,
                     telefone_celular, celular_confirmado, cep, logradouro, numero,
@@ -783,6 +854,11 @@ const atualizarPerfil = async (req, res) => {
              WHERE id_usuario = ?`,
             [idUsuario]
         );
+
+        if (transacaoIniciada) {
+            await connection.commit();
+            transacaoIniciada = false;
+        }
 
         const usuario = atualizados[0];
         return res.status(200).json({
@@ -810,9 +886,18 @@ const atualizarPerfil = async (req, res) => {
                 bairro: usuario.bairro,
                 cidade: usuario.cidade,
                 uf: usuario.uf
-            }
+            },
+            ...(concorrente ? { concorrente: { aceiteRegulamento: aceitePersistido } } : {})
         });
     } catch (error) {
+        if (transacaoIniciada) {
+            try {
+                await connection.rollback();
+            } catch (rollbackError) {
+                console.error('Erro ao desfazer atualização do perfil do concorrente:', rollbackError);
+            }
+        }
+
         if (error.code === 'ER_DUP_ENTRY') {
             const mensagem = error.message?.toLowerCase().includes('email')
                 ? 'Este e-mail já está cadastrado.'
@@ -822,6 +907,10 @@ const atualizarPerfil = async (req, res) => {
 
         console.error('Erro ao atualizar perfil do usuário:', error);
         return res.status(500).json({ message: 'Erro ao atualizar perfil.' });
+    } finally {
+        if (connection) {
+            connection.release();
+        }
     }
 };
 
