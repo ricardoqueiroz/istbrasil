@@ -31,7 +31,7 @@ type Estado = 'verificando' | 'sucesso' | 'expirado' | 'invalido' | 'erro';
                 </div>
 
                 <div class="mt-8">
-                    <a routerLink="/cadastro/diretoria/login" pButton label="Ir para o login"></a>
+                    <a routerLink="/login" pButton label="Ir para o login"></a>
                 </div>
             </div>
         </div>
