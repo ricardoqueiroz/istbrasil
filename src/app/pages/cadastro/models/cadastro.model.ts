@@ -24,11 +24,6 @@ export const TOTAL_ETAPAS_MAP = {
     colaborador: 2
 } as const satisfies Record<CadastroTipo, number>;
 
-export const OBRA_PRINCIPAL_CONCORRENTE = {
-    idObra: 63,
-    titulo: 'Catraias'
-} as const;
-
 export interface CadastroIdentificacao {
     nome: string;
     email: string;

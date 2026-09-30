@@ -8,6 +8,9 @@ const router = express.Router();
 // POST /api/usuarios/login
 router.post('/login', limiteAutenticacao, usuariosController.login);
 
+// POST /api/usuarios/concorrente/aderir
+router.post('/concorrente/aderir', autenticarUsuario, usuariosController.aderirAoFestivalComoConcorrente);
+
 // GET /api/usuarios/cargos
 router.get('/cargos', usuariosController.listarCargos);
 

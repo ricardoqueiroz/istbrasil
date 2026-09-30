@@ -1,7 +1,6 @@
 import { CommonModule } from '@angular/common';
 import { Component, OnDestroy, OnInit, ViewChild, effect, inject } from '@angular/core';
 import { FormsModule } from '@angular/forms';
-import { DomSanitizer, SafeResourceUrl } from '@angular/platform-browser';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { ConfirmationService } from 'primeng/api';
 import { ButtonModule } from 'primeng/button';
@@ -14,7 +13,7 @@ import { CadastroTipo } from '../cadastro/models/cadastro.model';
 import { AuthService } from '../../shared/auth.service';
 import { FotoEditorComponent } from '../../shared/components/foto-editor/foto-editor.component';
 import { PerfilService, PerfilServiceError } from './services/perfil.service';
-import { ObraElegivel, ParticipacaoConcorrente, ParticipacaoConcorrentePayload, PerfilAtualizacaoPayload, PerfilConcorrente, PerfilResponse, PerfilUsuario } from './models/perfil.model';
+import { PerfilAtualizacaoPayload, PerfilResponse, PerfilUsuario } from './models/perfil.model';
 
 interface PerfilRouteData {
     perfilTipo: CadastroTipo;
@@ -114,57 +113,6 @@ const UFS = [
                                 </div>
                             </section>
 
-                            <section *ngIf="tipoCompativel && perfilUsuario.idTipoUsuario === 2" class="mt-8" aria-labelledby="participacao-festival">
-                                <div class="flex flex-col gap-3 border-b border-surface-200 pb-4 dark:border-surface-700 sm:flex-row sm:items-center sm:justify-between">
-                                    <div>
-                                        <h2 id="participacao-festival" class="text-xl font-semibold text-surface-900 dark:text-white">Obras e vídeos para o Festival</h2>
-                                        <p class="mt-1 text-sm text-surface-600 dark:text-surface-300">Selecione a segunda obra, se desejar, e informe os vídeos correspondentes.</p>
-                                    </div>
-                                    <button pButton type="button" label="Salvar obras e vídeos" icon="pi pi-save" (click)="salvarParticipacao()" [loading]="salvandoParticipacao" [disabled]="salvandoParticipacao || carregandoObras"></button>
-                                </div>
-
-                                <div *ngIf="mensagemParticipacao" class="mt-4 rounded-md border px-3 py-2 text-sm" [ngClass]="{
-                                    'border-red-200 bg-red-50 text-red-700': tipoMensagemParticipacao === 'error',
-                                    'border-green-200 bg-green-50 text-green-700': tipoMensagemParticipacao === 'success'
-                                }">
-                                    {{ mensagemParticipacao }}
-                                </div>
-
-                                <div *ngIf="carregandoObras" class="mt-6 text-sm text-surface-600 dark:text-surface-300">Carregando obras elegíveis...</div>
-
-                                <div *ngIf="!carregandoObras" class="mt-6 grid gap-5">
-                                    <div>
-                                        <label class="mb-2 block text-sm font-medium text-surface-700 dark:text-surface-200">Obra obrigatória</label>
-                                        <div class="rounded-xl border border-surface-200 bg-surface-50 p-4 dark:border-surface-700 dark:bg-surface-800">
-                                            <strong>{{ participacao.tituloObra1 || 'Catraias' }}</strong>
-                                        </div>
-                                    </div>
-
-                                    <div>
-                                        <label for="participacaoVideo1" class="mb-2 block text-sm font-medium text-surface-700 dark:text-surface-200">Vídeo da obra</label>
-                                        <input id="participacaoVideo1" pInputText type="url" name="participacaoVideo1" [(ngModel)]="participacao.linkVideo1" (ngModelChange)="atualizarPreviewVideo1()" placeholder="https://www.youtube.com/... ou https://vimeo.com/..." class="w-full" />
-                                        <p *ngIf="participacao.linkVideo1 && !previewVideo1" class="mt-2 text-sm text-red-600">Informe uma URL HTTPS válida do YouTube ou Vimeo.</p>
-                                        <div *ngIf="previewVideo1" class="mt-4 aspect-video w-full overflow-hidden rounded-xl">
-                                            <iframe [src]="previewVideo1" title="Vídeo da primeira obra" class="h-full w-full border-0" allow="autoplay; encrypted-media; picture-in-picture" allowfullscreen loading="lazy"></iframe>
-                                        </div>
-                                    </div>
-
-                                    <div>
-                                        <label for="participacaoObra2" class="mb-2 block text-sm font-medium text-surface-700 dark:text-surface-200">Segunda obra (opcional)</label>
-                                        <p-select id="participacaoObra2" name="participacaoObra2" [(ngModel)]="participacao.idObra2" (ngModelChange)="alterarObra2($event)" [options]="obrasElegiveis" optionLabel="titulo" optionValue="idObra" [showClear]="true" placeholder="Nenhuma segunda obra" styleClass="w-full"></p-select>
-                                    </div>
-
-                                    <div *ngIf="participacao.idObra2 !== null">
-                                        <label for="participacaoVideo2" class="mb-2 block text-sm font-medium text-surface-700 dark:text-surface-200">Vídeo da segunda obra</label>
-                                        <input id="participacaoVideo2" pInputText type="url" name="participacaoVideo2" [(ngModel)]="participacao.linkVideo2" (ngModelChange)="atualizarPreviewVideo2()" placeholder="https://www.youtube.com/... ou https://vimeo.com/..." class="w-full" />
-                                        <p *ngIf="participacao.linkVideo2 && !previewVideo2" class="mt-2 text-sm text-red-600">Informe uma URL HTTPS válida do YouTube ou Vimeo.</p>
-                                        <div *ngIf="previewVideo2" class="mt-4 aspect-video w-full overflow-hidden rounded-xl">
-                                            <iframe [src]="previewVideo2" title="Vídeo da segunda obra" class="h-full w-full border-0" allow="autoplay; encrypted-media; picture-in-picture" allowfullscreen loading="lazy"></iframe>
-                                        </div>
-                                    </div>
-                                </div>
-                            </section>
-
                             <ng-container *ngIf="!editando; else formularioEdicao">
                             <section class="mt-8" aria-labelledby="dados-pessoais">
                                 <h2 id="dados-pessoais" class="text-xl font-semibold text-surface-900 dark:text-white">Dados pessoais</h2>
@@ -222,18 +170,6 @@ const UFS = [
                                 </ng-template>
                             </section>
 
-                            <section *ngIf="perfilUsuario.idTipoUsuario === 2" class="mt-8" aria-labelledby="dados-festival">
-                                <div class="grid gap-4 md:grid-cols-2 md:items-end">
-                                    <div class="perfil-campo"><span>Número do concorrente</span><strong>{{ numeroConcorrente }}</strong></div>
-                                    <h2 id="dados-festival" class="text-xl font-semibold text-surface-900 dark:text-white">Obra(s) Executada(s)</h2>
-                                </div>
-                                <div class="mt-4 grid gap-4 md:grid-cols-2">
-                                    <div class="perfil-campo"><span>Primeira obra</span><strong>{{ valor(perfilConcorrente?.tituloObra1) }}</strong></div>
-                                    <div class="perfil-campo"><span>Vídeo da primeira obra</span><a *ngIf="perfilConcorrente?.linkVideo1; else video1Ausente" [href]="perfilConcorrente!.linkVideo1" target="_blank" rel="noopener noreferrer">Abrir vídeo</a><ng-template #video1Ausente><strong>Não informado</strong></ng-template></div>
-                                    <div class="perfil-campo"><span>Segunda obra (opcional)</span><strong>{{ valor(perfilConcorrente?.tituloObra2) }}</strong></div>
-                                    <div class="perfil-campo"><span>Vídeo da segunda obra</span><a *ngIf="perfilConcorrente?.linkVideo2; else video2Ausente" [href]="perfilConcorrente!.linkVideo2" target="_blank" rel="noopener noreferrer">Abrir vídeo</a><ng-template #video2Ausente><strong>Não informado</strong></ng-template></div>
-                                </div>
-                            </section>
                             </ng-container>
 
                             <ng-template #formularioEdicao>
@@ -293,17 +229,9 @@ const UFS = [
                                         </div>
                                     </div>
 
-                                    <div class="mt-6 border-t border-surface-200 pt-6 dark:border-surface-700">
-                                        <div class="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-                                            <label *ngIf="perfilTipo === 'concorrente'" for="aceiteRegulamento" class="flex items-center gap-3 text-sm font-medium text-surface-700 dark:text-surface-200">
-                                                <input id="aceiteRegulamento" name="aceiteRegulamento" type="checkbox" [(ngModel)]="aceiteRegulamento" [disabled]="aceiteRegulamentoPersistido || salvandoPerfil" class="h-4 w-4 accent-primary" />
-                                                <span>Aceito o Regulamento do Festival:</span>
-                                            </label>
-                                            <div class="flex flex-col gap-3 sm:flex-row md:ml-auto">
-                                                <button pButton type="button" label="Cancelar" class="p-button-outlined" (click)="cancelarEdicao()" [disabled]="salvandoPerfil"></button>
-                                                <button pButton type="submit" label="Salvar" icon="pi pi-check" [loading]="salvandoPerfil" [disabled]="salvandoPerfil || (perfilTipo === 'concorrente' && !aceiteRegulamento)"></button>
-                                            </div>
-                                        </div>
+                                    <div class="mt-6 flex flex-col gap-3 sm:flex-row sm:justify-end">
+                                        <button pButton type="button" label="Cancelar" class="p-button-outlined" (click)="cancelarEdicao()" [disabled]="salvandoPerfil"></button>
+                                        <button pButton type="submit" label="Salvar" icon="pi pi-check" [loading]="salvandoPerfil" [disabled]="salvandoPerfil"></button>
                                     </div>
                                 </form>
                             </ng-template>
@@ -375,7 +303,6 @@ export class PerfilComponent implements OnInit, OnDestroy {
     perfilTipoId = 0;
     usuario = this.authService.usuario();
     perfilUsuario: PerfilUsuario | null = null;
-    perfilConcorrente: PerfilConcorrente | null = null;
     carregandoPerfil = true;
     erroPerfil: string | null = null;
     editando = false;
@@ -395,26 +322,6 @@ export class PerfilComponent implements OnInit, OnDestroy {
     remocaoFotoPendente = false;
     fotoSalvando = false;
     fotoRemovendo = false;
-    participacao: PerfilConcorrente = {
-        idConcorrente: null,
-        idObra1: null,
-        tituloObra1: null,
-        linkVideo1: null,
-        idObra2: null,
-        tituloObra2: null,
-        linkVideo2: null,
-        aceiteRegulamento: false,
-        dataCadastro: null
-    };
-    aceiteRegulamento = false;
-    aceiteRegulamentoPersistido = false;
-    obrasElegiveis: ObraElegivel[] = [];
-    carregandoObras = false;
-    salvandoParticipacao = false;
-    mensagemParticipacao: string | null = null;
-    tipoMensagemParticipacao: 'success' | 'error' = 'error';
-    previewVideo1: SafeResourceUrl | null = null;
-    previewVideo2: SafeResourceUrl | null = null;
     formulario: PerfilAtualizacaoPayload = {
         nome: '',
         email: '',
@@ -440,8 +347,7 @@ export class PerfilComponent implements OnInit, OnDestroy {
         private readonly route: ActivatedRoute,
         private readonly router: Router,
         private readonly perfilService: PerfilService,
-        private readonly confirmationService: ConfirmationService,
-        private readonly sanitizer: DomSanitizer
+        private readonly confirmationService: ConfirmationService
     ) {
         effect(() => {
             this.usuario = this.authService.usuario();
@@ -469,11 +375,6 @@ export class PerfilComponent implements OnInit, OnDestroy {
         return this.perfilUsuario !== null && [1, 2, 4].includes(this.perfilUsuario.idTipoUsuario);
     }
 
-    get numeroConcorrente(): string {
-        const idUsuario = this.perfilUsuario?.idUsuario;
-        return idUsuario === null || idUsuario === undefined ? 'Não informado' : String(idUsuario).padStart(3, '0');
-    }
-
     ngOnInit(): void {
         this.route.data.subscribe((data) => {
             const perfilData = data as PerfilRouteData;
@@ -483,173 +384,6 @@ export class PerfilComponent implements OnInit, OnDestroy {
         });
 
         void this.carregarPerfil();
-    }
-
-    alterarObra2(value: number | null | undefined): void {
-        const idObra2 = value === null || value === undefined ? null : Number(value);
-
-        if (this.participacao.idObra2 === idObra2) {
-            return;
-        }
-
-        this.participacao.idObra2 = idObra2 !== null && Number.isInteger(idObra2) && idObra2 > 0 ? idObra2 : null;
-        this.participacao.linkVideo2 = null;
-        this.previewVideo2 = null;
-    }
-
-    atualizarPreviewVideo1(): void {
-        this.previewVideo1 = this.criarVideoEmbedUrl(this.participacao.linkVideo1 || '');
-    }
-
-    atualizarPreviewVideo2(): void {
-        this.previewVideo2 = this.criarVideoEmbedUrl(this.participacao.linkVideo2 || '');
-    }
-
-    async salvarParticipacao(): Promise<void> {
-        if (this.salvandoParticipacao) {
-            return;
-        }
-
-        const linkVideo1 = (this.participacao.linkVideo1 || '').trim();
-        if (!this.criarVideoEmbedUrl(linkVideo1)) {
-            this.tipoMensagemParticipacao = 'error';
-            this.mensagemParticipacao = 'Informe um vídeo HTTPS válido do YouTube ou Vimeo para a primeira obra.';
-            return;
-        }
-
-        const idObra2 = this.participacao.idObra2 === null ? null : Number(this.participacao.idObra2);
-        if (idObra2 !== null && !this.obrasElegiveis.some((obra) => obra.idObra === idObra2)) {
-            this.tipoMensagemParticipacao = 'error';
-            this.mensagemParticipacao = 'A segunda obra selecionada não é elegível.';
-            return;
-        }
-
-        const linkVideo2 = idObra2 === null ? null : (this.participacao.linkVideo2 || '').trim();
-        if (idObra2 !== null && !this.criarVideoEmbedUrl(linkVideo2 || '')) {
-            this.tipoMensagemParticipacao = 'error';
-            this.mensagemParticipacao = 'Informe um vídeo HTTPS válido do YouTube ou Vimeo para a segunda obra.';
-            return;
-        }
-
-        const payload: ParticipacaoConcorrentePayload = {
-            linkVideo1,
-            idObra2,
-            linkVideo2
-        };
-
-        this.salvandoParticipacao = true;
-        this.mensagemParticipacao = null;
-
-        try {
-            const resposta = await this.perfilService.atualizarParticipacaoConcorrente(payload);
-            this.aplicarParticipacao(resposta.concorrente);
-            this.tipoMensagemParticipacao = 'success';
-            this.mensagemParticipacao = resposta.message || 'Obras e vídeos atualizados com sucesso.';
-        } catch (error) {
-            this.tipoMensagemParticipacao = 'error';
-            this.mensagemParticipacao = this.mensagemErroParticipacao(error);
-        } finally {
-            this.salvandoParticipacao = false;
-        }
-    }
-
-    private async carregarObrasElegiveis(): Promise<void> {
-        this.carregandoObras = true;
-
-        try {
-            this.obrasElegiveis = await this.perfilService.carregarObrasElegiveis();
-        } catch {
-            this.tipoMensagemParticipacao = 'error';
-            this.mensagemParticipacao = 'Não foi possível carregar as obras elegíveis.';
-        } finally {
-            this.carregandoObras = false;
-        }
-    }
-
-    private aplicarParticipacao(participacao: ParticipacaoConcorrente | null): void {
-        const aceiteRegulamento = participacao?.aceiteRegulamento ?? this.aceiteRegulamentoPersistido;
-        this.participacao = {
-            idConcorrente: participacao?.idConcorrente ?? null,
-            idObra1: participacao?.idObra1 ?? null,
-            tituloObra1: participacao?.tituloObra1 ?? null,
-            linkVideo1: participacao?.linkVideo1 ?? null,
-            idObra2: participacao?.idObra2 ?? null,
-            tituloObra2: participacao?.tituloObra2 ?? null,
-            linkVideo2: participacao?.linkVideo2 ?? null,
-            aceiteRegulamento,
-            dataCadastro: participacao?.dataCadastro ?? null
-        };
-        this.aceiteRegulamento = aceiteRegulamento;
-        this.aceiteRegulamentoPersistido = aceiteRegulamento;
-        this.atualizarPreviewVideo1();
-        this.atualizarPreviewVideo2();
-    }
-
-    private mensagemErroParticipacao(error: unknown): string {
-        if (error instanceof PerfilServiceError) {
-            if (error.status === 400) {
-                return error.message || 'Verifique os dados das obras e vídeos.';
-            }
-            if (error.status === 401) {
-                return 'Sua sessão expirou. Faça login novamente.';
-            }
-            if (error.status === 403) {
-                return 'Esta seção está disponível apenas para concorrentes.';
-            }
-            if (error.status === 409) {
-                return 'Cadastro de concorrente inconsistente.';
-            }
-        }
-
-        return 'Não foi possível salvar as obras e vídeos. Tente novamente.';
-    }
-
-    private criarVideoEmbedUrl(url: string): SafeResourceUrl | null {
-        const valor = this.extrairVideoEmbedUrl(url);
-        return valor ? this.sanitizer.bypassSecurityTrustResourceUrl(valor) : null;
-    }
-
-    private extrairVideoEmbedUrl(url: string): string | null {
-        try {
-            const valor = new URL(url.trim());
-
-            if (valor.protocol !== 'https:') {
-                return null;
-            }
-
-            const hostname = valor.hostname.toLowerCase();
-            let videoId: string | null = null;
-
-            if (hostname === 'youtube.com' || hostname === 'www.youtube.com') {
-                if (valor.pathname === '/watch') {
-                    videoId = valor.searchParams.get('v');
-                } else if (valor.pathname.startsWith('/shorts/') || valor.pathname.startsWith('/embed/')) {
-                    videoId = valor.pathname.split('/')[2] || null;
-                }
-
-                return videoId && /^[A-Za-z0-9_-]{11}$/.test(videoId)
-                    ? `https://www.youtube.com/embed/${videoId}`
-                    : null;
-            }
-
-            if (hostname === 'youtu.be') {
-                videoId = valor.pathname.split('/')[1] || null;
-                return videoId && /^[A-Za-z0-9_-]{11}$/.test(videoId)
-                    ? `https://www.youtube.com/embed/${videoId}`
-                    : null;
-            }
-
-            if (hostname === 'vimeo.com' || hostname === 'www.vimeo.com') {
-                videoId = valor.pathname.split('/')[1] || null;
-                return videoId && /^\d+$/.test(videoId)
-                    ? `https://player.vimeo.com/video/${videoId}`
-                    : null;
-            }
-
-            return null;
-        } catch {
-            return null;
-        }
     }
 
     iniciarEdicao(): void {
@@ -673,7 +407,6 @@ export class PerfilComponent implements OnInit, OnDestroy {
             uf: this.perfilUsuario.uf || ''
         };
         this.dataNascimentoSelecionada = this.criarDataNascimento(this.formulario.dataNascimento);
-        this.aceiteRegulamento = this.aceiteRegulamentoPersistido;
         this.dataNascimentoEmEdicaoInvalida = false;
         this.mensagemPerfil = null;
         this.editando = true;
@@ -681,7 +414,6 @@ export class PerfilComponent implements OnInit, OnDestroy {
 
     cancelarEdicao(): void {
         this.editando = false;
-        this.aceiteRegulamento = this.aceiteRegulamentoPersistido;
         this.mensagemPerfil = null;
         this.dataNascimentoEmEdicaoInvalida = false;
     }
@@ -921,18 +653,8 @@ export class PerfilComponent implements OnInit, OnDestroy {
         this.salvandoPerfil = true;
 
         try {
-            const payload: PerfilAtualizacaoPayload = this.perfilTipo === 'concorrente'
-                ? { ...this.formulario, aceiteRegulamento: this.aceiteRegulamento }
-                : { ...this.formulario };
-            const resposta = await this.perfilService.atualizarPerfil(payload);
+            const resposta = await this.perfilService.atualizarPerfil(this.formulario);
             this.perfilUsuario = resposta.usuario;
-            if (this.perfilTipo === 'concorrente' && resposta.concorrente?.aceiteRegulamento) {
-                this.aceiteRegulamento = true;
-                this.aceiteRegulamentoPersistido = true;
-                this.perfilConcorrente = this.perfilConcorrente
-                    ? { ...this.perfilConcorrente, aceiteRegulamento: true }
-                    : this.perfilConcorrente;
-            }
             this.fotoUrl = resposta.usuario.fotoUrl ?? this.fotoUrl;
             this.authService.atualizarNomeUsuarioLogado(resposta.usuario.nome);
             this.editando = false;
@@ -1108,12 +830,7 @@ export class PerfilComponent implements OnInit, OnDestroy {
         try {
             const perfil: PerfilResponse = await this.perfilService.obterPerfil();
             this.perfilUsuario = perfil.usuario;
-            this.perfilConcorrente = perfil.concorrente;
             this.fotoUrl = perfil.usuario.fotoUrl;
-            if (perfil.usuario.idTipoUsuario === 2) {
-                this.aplicarParticipacao(perfil.concorrente);
-                void this.carregarObrasElegiveis();
-            }
         } catch (error) {
             if (error instanceof PerfilServiceError && error.status === 401) {
                 this.erroPerfil = 'Sua sessão expirou. Faça login novamente para consultar o perfil.';

@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
 import { pool as db } from '../config/db.js';
+import { OBRA_PRINCIPAL_CONCORRENTE } from '../config/festival.js';
 import { enviarEmail } from '../services/mailService.js';
 import { comporEmailPorChave, EmailComposicaoError } from '../services/emailTemplateService.js';
 import {
@@ -16,6 +17,8 @@ import { validarVideoConcorrente } from '../services/concorrenteVideoService.js'
 const BCRYPT_ROUNDS = 12;
 const HASH_BCRYPT_DUMMY = '$2b$12$uKNr.LozCRYbjD.wVvB0deVP/B5NKLDqhYlI3swBl4j3.3y68xLeO';
 const TOKEN_VALIDADE_MINUTOS = 30;
+const PREFIXO_INSCRICAO_FESTIVAL = 'FVST2';
+const LOCK_SEQUENCIA_INSCRICAO_FESTIVAL = `istbrasil:concorrentes:sequencia:${PREFIXO_INSCRICAO_FESTIVAL}`;
 const RESPOSTA_NEUTRA_CADASTRO = 'Se for possível concluir o cadastro, enviaremos as instruções para o e-mail informado.';
 // Acrescenta a funcao do e-mail ao nome institucional, mantendo o mesmo fallback de mailService.
 const remetenteContextual = (contexto) => `${process.env.MAIL_FROM_NAME || 'IST Brasil'} (${contexto})`;
@@ -47,6 +50,19 @@ const buildCookieOptions = () => {
     return options;
 };
 
+const definirCookieSessao = (res, usuario, maxAgeMs) => {
+    const sessionToken = jwt.sign(
+        { id_usuario: usuario.id_usuario, id_tipo_usuario: usuario.id_tipo_usuario },
+        JWT_SECRET,
+        { expiresIn: Math.max(1, Math.floor(maxAgeMs / 1000)) }
+    );
+
+    res.cookie(COOKIE_NAME, sessionToken, {
+        ...buildCookieOptions(),
+        maxAge: maxAgeMs
+    });
+};
+
 // A senha chega já em SHA-256 (calculada no front); o backend aplica bcrypt por cima antes de comparar/gravar
 const login = async (req, res) => {
     const { email, senha, id_tipo_usuario, manterConectado } = req.body;
@@ -72,16 +88,7 @@ const login = async (req, res) => {
 
         const cookieOptions = buildCookieOptions();
         const maxAgeMs = manterConectado ? cookieOptions.maxAge * 30 : cookieOptions.maxAge;
-        const sessionToken = jwt.sign(
-            { id_usuario: usuario.id_usuario, id_tipo_usuario: usuario.id_tipo_usuario },
-            JWT_SECRET,
-            { expiresIn: Math.floor(maxAgeMs / 1000) }
-        );
-
-        res.cookie(COOKIE_NAME, sessionToken, {
-            ...cookieOptions,
-            maxAge: maxAgeMs
-        });
+        definirCookieSessao(res, usuario, maxAgeMs);
 
         return res.status(200).json({
             id_usuario: usuario.id_usuario,
@@ -92,6 +99,119 @@ const login = async (req, res) => {
     } catch (error) {
         console.error('Erro no login de usuário:', error);
         return res.status(500).json({ message: 'Não foi possível processar a solicitação no momento.' });
+    }
+};
+
+const aderirAoFestivalComoConcorrente = async (req, res) => {
+    const idUsuario = req.usuario.id_usuario;
+    let connection;
+    let transacaoIniciada = false;
+
+    try {
+        connection = await db.getConnection();
+        await connection.beginTransaction();
+        transacaoIniciada = true;
+
+        const [usuarioRows] = await connection.query(
+            `SELECT id_usuario, id_tipo_usuario, id_situacao, nome, foto
+             FROM ist_usuarios
+             WHERE id_usuario = ?
+             FOR UPDATE`,
+            [idUsuario]
+        );
+
+        if (usuarioRows.length === 0) {
+            await connection.rollback();
+            transacaoIniciada = false;
+            res.clearCookie(COOKIE_NAME, buildCookieOptions());
+            return res.status(401).json({ message: 'Sessão inválida.' });
+        }
+
+        const usuario = usuarioRows[0];
+        const tipoAtual = Number(usuario.id_tipo_usuario);
+
+        if (tipoAtual !== 2 && tipoAtual !== 3) {
+            await connection.rollback();
+            transacaoIniciada = false;
+            return res.status(403).json({ message: 'Esta conta não pode aderir ao Festival por este fluxo.' });
+        }
+
+        if (tipoAtual === 3 && Number(usuario.id_situacao) !== 6) {
+            await connection.rollback();
+            transacaoIniciada = false;
+            return res.status(403).json({ message: 'Esta conta não está apta a aderir ao Festival.' });
+        }
+
+        if (tipoAtual === 3) {
+            const [promocao] = await connection.query(
+                `UPDATE ist_usuarios
+                 SET id_tipo_usuario = 2,
+                     id_situacao = 3
+                 WHERE id_usuario = ?
+                   AND id_tipo_usuario = 3`,
+                [idUsuario]
+            );
+
+            if (promocao.affectedRows !== 1) {
+                throw new Error('Não foi possível promover a conta externa para concorrente.');
+            }
+
+            usuario.id_tipo_usuario = 2;
+            usuario.id_situacao = 3;
+        }
+
+        const [concorrenteRows] = await connection.query(
+            'SELECT id_usuario FROM ist_concorrentes WHERE id_usuario = ? FOR UPDATE',
+            [idUsuario]
+        );
+
+        if (concorrenteRows.length === 0) {
+            await connection.query(
+                'INSERT INTO ist_concorrentes (id_usuario) VALUES (?)',
+                [idUsuario]
+            );
+        }
+
+        await connection.commit();
+        transacaoIniciada = false;
+
+        let maxAgeMs = buildCookieOptions().maxAge;
+        try {
+            const tokenAtual = req.cookies?.[COOKIE_NAME];
+            const payloadAtual = tokenAtual ? jwt.verify(tokenAtual, JWT_SECRET) : null;
+            const segundosRestantes = Number(payloadAtual?.exp) - Math.floor(Date.now() / 1000);
+            if (Number.isFinite(segundosRestantes) && segundosRestantes > 0) {
+                maxAgeMs = segundosRestantes * 1000;
+            }
+        } catch {
+            // O middleware já validou a sessão; em caso de dúvida, usa a duração padrão.
+        }
+
+        definirCookieSessao(res, usuario, maxAgeMs);
+
+        return res.status(200).json({
+            message: tipoAtual === 3 ? 'Adesão ao Festival realizada com sucesso.' : 'A conta já está habilitada como concorrente.',
+            usuario: {
+                id_usuario: usuario.id_usuario,
+                id_tipo_usuario: 2,
+                nome: usuario.nome,
+                foto_url: buildProfilePhotoUrl(usuario.foto)
+            }
+        });
+    } catch (error) {
+        if (transacaoIniciada) {
+            try {
+                await connection.rollback();
+            } catch (rollbackError) {
+                console.error('Erro ao desfazer adesão ao Festival:', rollbackError);
+            }
+        }
+        console.error('Erro ao aderir ao Festival:', error);
+        return res.status(500).json({ message: 'Não foi possível concluir a adesão ao Festival.' });
+    } finally {
+        if (connection) {
+            connection.release();
+        }
     }
 };
 
@@ -155,6 +275,124 @@ const dataNascimentoValida = (dataNascimento) => {
 
     const hoje = new Date().toISOString().slice(0, 10);
     return dataNascimento <= hoje;
+};
+
+const formatarDataApresentacao = (valor) => {
+    if (valor instanceof Date) {
+        const dia = String(valor.getUTCDate()).padStart(2, '0');
+        const mes = String(valor.getUTCMonth() + 1).padStart(2, '0');
+        return `${dia}/${mes}/${valor.getUTCFullYear()}`;
+    }
+
+    const dataIso = String(valor || '').slice(0, 10);
+    return /^\d{4}-\d{2}-\d{2}$/.test(dataIso)
+        ? dataIso.split('-').reverse().join('/')
+        : 'Não informada';
+};
+
+const processarConfirmacaoInscricaoPendente = async (idUsuario) => {
+    let snapshot;
+
+    try {
+        const [rows] = await db.query(
+            `SELECT u.nome, u.email, u.telefone_celular, u.data_nascimento, u.cidade, u.uf,
+                    c.id_concorrente, c.id_obra_1, c.link_video_1, c.id_obra_2, c.link_video_2,
+                    c.aceite_regulamento, c.confirmacao_inscricao_enviada,
+                    obra1.titulo AS titulo_obra_1,
+                    obra2.titulo AS titulo_obra_2
+             FROM ist_usuarios u
+             INNER JOIN ist_concorrentes c ON c.id_usuario = u.id_usuario
+             LEFT JOIN ist_composicao obra1 ON obra1.id_obra = c.id_obra_1
+             LEFT JOIN ist_composicao obra2 ON obra2.id_obra = c.id_obra_2
+             WHERE u.id_usuario = ?`,
+            [idUsuario]
+        );
+        snapshot = rows[0] || null;
+    } catch (error) {
+        console.error('[EMAIL_INSCRICAO] Erro ao carregar snapshot da inscrição:', error.message);
+        return false;
+    }
+
+    if (!snapshot || !Boolean(snapshot.aceite_regulamento)) {
+        console.error('[EMAIL_INSCRICAO] Snapshot da inscrição aceito não encontrado.');
+        return false;
+    }
+
+    if (Boolean(snapshot.confirmacao_inscricao_enviada)) {
+        return true;
+    }
+
+    const variaveis = {
+        nome: String(snapshot.nome || 'Não informado'),
+        numero_concorrente: String(snapshot.id_concorrente || 'Não informado'),
+        email: String(snapshot.email || 'Não informado'),
+        telefone: String(snapshot.telefone_celular || 'Não informado'),
+        data_nascimento: formatarDataApresentacao(snapshot.data_nascimento),
+        cidade: String(snapshot.cidade || 'Não informada'),
+        uf: String(snapshot.uf || 'Não informada'),
+        musica_1: String(snapshot.titulo_obra_1 || 'Não informada'),
+        video_1: String(snapshot.link_video_1 || 'Não informado'),
+        musica_2: String(snapshot.titulo_obra_2 || 'Não informada'),
+        video_2: String(snapshot.link_video_2 || 'Não informado')
+    };
+
+    let composicao;
+    try {
+        composicao = await comporEmailPorChave('confirmacao_inscricao_festival', variaveis);
+    } catch (error) {
+        const codigo = error instanceof EmailComposicaoError ? error.codigo : 'ERRO_INESPERADO';
+        console.error('[EMAIL_COMPOSICAO] chave=confirmacao_inscricao_festival codigo=%s', codigo);
+        return false;
+    }
+
+    try {
+        await enviarEmail({
+            to: snapshot.email,
+            fromName: remetenteContextual('Confirmação de Inscrição'),
+            subject: composicao.assunto,
+            html: composicao.html,
+            text: composicao.text
+        });
+    } catch (error) {
+        console.error('[EMAIL_ENVIO] Erro ao enviar confirmação da inscrição:', error.message);
+        return false;
+    }
+
+    try {
+        const [result] = await db.query(
+            `UPDATE ist_concorrentes
+             SET confirmacao_inscricao_enviada = 1,
+                 confirmacao_inscricao_enviada_em = NOW()
+             WHERE id_usuario = ?
+               AND aceite_regulamento = 1
+               AND confirmacao_inscricao_enviada = 0`,
+            [idUsuario]
+        );
+
+        if (result.affectedRows === 1) {
+            return true;
+        }
+
+        const [estadoRows] = await db.query(
+            'SELECT confirmacao_inscricao_enviada FROM ist_concorrentes WHERE id_usuario = ?',
+            [idUsuario]
+        );
+        return Boolean(estadoRows[0]?.confirmacao_inscricao_enviada);
+    } catch (error) {
+        console.error('[EMAIL_INSCRICAO] E-mail enviado, mas a marcação da confirmação falhou:', error.message);
+        return false;
+    }
+};
+
+const liberarLockSequenciaInscricao = async (connection) => {
+    const [rows] = await connection.query(
+        'SELECT RELEASE_LOCK(?) AS liberado',
+        [LOCK_SEQUENCIA_INSCRICAO_FESTIVAL]
+    );
+
+    if (Number(rows[0]?.liberado) !== 1) {
+        throw new Error('Não foi possível liberar o lock da sequência de inscrições.');
+    }
 };
 
 const CADASTRO_TIPO_MAP = {
@@ -773,7 +1011,7 @@ const atualizarPerfil = async (req, res) => {
                     return res.status(400).json({ message: 'É necessário aceitar o Regulamento do Festival para salvar o perfil.' });
                 }
 
-                if (Number(dadosConcorrente.id_obra_1) !== 63 || !validarVideoConcorrente(dadosConcorrente.link_video_1)) {
+                if (Number(dadosConcorrente.id_obra_1) !== OBRA_PRINCIPAL_CONCORRENTE.idObra || !validarVideoConcorrente(dadosConcorrente.link_video_1)) {
                     await connection.rollback();
                     transacaoIniciada = false;
                     return res.status(400).json({ message: 'Informe a obra obrigatória e um vídeo válido antes de aceitar o regulamento.' });
@@ -860,9 +1098,15 @@ const atualizarPerfil = async (req, res) => {
             transacaoIniciada = false;
         }
 
+        const confirmacaoInscricaoEnviada = concorrente && aceitePersistido
+            ? await processarConfirmacaoInscricaoPendente(idUsuario)
+            : null;
+
         const usuario = atualizados[0];
         return res.status(200).json({
-            message: 'Perfil atualizado com sucesso.',
+            message: confirmacaoInscricaoEnviada === false
+                ? 'Perfil atualizado com sucesso. A confirmação da inscrição permanece pendente.'
+                : 'Perfil atualizado com sucesso.',
             usuario: {
                 idUsuario: usuario.id_usuario,
                 idTipoUsuario: usuario.id_tipo_usuario,
@@ -887,7 +1131,12 @@ const atualizarPerfil = async (req, res) => {
                 cidade: usuario.cidade,
                 uf: usuario.uf
             },
-            ...(concorrente ? { concorrente: { aceiteRegulamento: aceitePersistido } } : {})
+            ...(concorrente ? {
+                concorrente: {
+                    aceiteRegulamento: aceitePersistido,
+                    confirmacaoInscricaoEnviada
+                }
+            } : {})
         });
     } catch (error) {
         if (transacaoIniciada) {
@@ -916,7 +1165,9 @@ const atualizarPerfil = async (req, res) => {
 
 const atualizarParticipacaoConcorrente = async (req, res) => {
     const idUsuario = req.usuario.id_usuario;
-    const { linkVideo1, idObra2, linkVideo2 } = req.body || {};
+    const payload = req.body || {};
+    const { linkVideo1, idObra2, linkVideo2, aceiteRegulamento } = payload;
+    const aceiteInformado = Object.prototype.hasOwnProperty.call(payload, 'aceiteRegulamento');
     const video1Normalizado = validarVideoConcorrente(linkVideo1);
 
     if (!video1Normalizado) {
@@ -944,80 +1195,245 @@ const atualizarParticipacaoConcorrente = async (req, res) => {
         return res.status(400).json({ message: 'Informe um vídeo HTTPS válido para a segunda obra.' });
     }
 
+    if (aceiteInformado && typeof aceiteRegulamento !== 'boolean') {
+        return res.status(400).json({ message: 'O aceite do regulamento deve ser verdadeiro ou falso.' });
+    }
+
+    let connection;
+    let transacaoIniciada = false;
+    let lockSequenciaAdquirido = false;
+
     try {
-        const [usuarioRows] = await db.query(
+        connection = await db.getConnection();
+        await connection.beginTransaction();
+        transacaoIniciada = true;
+
+        const [usuarioRows] = await connection.query(
             'SELECT id_tipo_usuario FROM ist_usuarios WHERE id_usuario = ?',
             [idUsuario]
         );
 
         if (usuarioRows.length === 0) {
+            await connection.rollback();
+            transacaoIniciada = false;
             res.clearCookie(COOKIE_NAME, buildCookieOptions());
             return res.status(401).json({ message: 'Sessão inválida.' });
         }
 
         if (Number(usuarioRows[0].id_tipo_usuario) !== 2) {
+            await connection.rollback();
+            transacaoIniciada = false;
             return res.status(403).json({ message: 'A participação do Festival está disponível apenas para concorrentes.' });
         }
 
-        const [concorrenteRows] = await db.query(
-            'SELECT id_usuario FROM ist_concorrentes WHERE id_usuario = ?',
+        const [concorrenteRows] = await connection.query(
+            `SELECT id_concorrente, id_obra_1, aceite_regulamento, confirmacao_inscricao_enviada
+             FROM ist_concorrentes
+             WHERE id_usuario = ?
+             FOR UPDATE`,
             [idUsuario]
         );
 
         if (concorrenteRows.length === 0) {
+            await connection.rollback();
+            transacaoIniciada = false;
             return res.status(409).json({ message: 'Cadastro de concorrente inconsistente.' });
         }
 
-        const [obraPrincipalRows] = await db.query(
-            'SELECT id_obra, titulo FROM ist_composicao WHERE id_obra = ?',
-            [63]
+        let aceitePersistido = Boolean(concorrenteRows[0].aceite_regulamento);
+        let confirmacaoInscricaoEnviada = Boolean(concorrenteRows[0].confirmacao_inscricao_enviada);
+        let idConcorrente = concorrenteRows[0].id_concorrente || null;
+
+        if (aceiteInformado && !aceitePersistido && aceiteRegulamento !== true) {
+            await connection.rollback();
+            transacaoIniciada = false;
+            return res.status(400).json({ message: 'É necessário aceitar o Regulamento do Festival para concluir a inscrição.' });
+        }
+
+        const [obraPrincipalVigenteRows] = await connection.query(
+            'SELECT id_obra, titulo, partitura, propria FROM ist_composicao WHERE id_obra = ?',
+            [OBRA_PRINCIPAL_CONCORRENTE.idObra]
         );
 
-        if (obraPrincipalRows.length === 0) {
-            console.error('Obra principal 63 não encontrada em ist_composicao.');
+        const obraPrincipalVigente = obraPrincipalVigenteRows[0];
+        if (!obraPrincipalVigente
+            || Number(obraPrincipalVigente.id_obra) !== OBRA_PRINCIPAL_CONCORRENTE.idObra
+            || Number(obraPrincipalVigente.propria) !== 1) {
+            await connection.rollback();
+            transacaoIniciada = false;
+            console.error('Obra principal do concorrente não encontrada ou inelegível em ist_composicao.');
             return res.status(500).json({ message: 'Não foi possível validar a obra principal.' });
+        }
+
+        const idObraPrincipalPersistida = aceitePersistido
+            ? Number(concorrenteRows[0].id_obra_1)
+            : OBRA_PRINCIPAL_CONCORRENTE.idObra;
+
+        if (!Number.isInteger(idObraPrincipalPersistida) || idObraPrincipalPersistida <= 0) {
+            await connection.rollback();
+            transacaoIniciada = false;
+            return res.status(409).json({ message: 'A inscrição aceita não possui obra principal válida.' });
+        }
+
+        let obraPrincipal = obraPrincipalVigente;
+        if (idObraPrincipalPersistida !== OBRA_PRINCIPAL_CONCORRENTE.idObra) {
+            const [obraPrincipalHistoricaRows] = await connection.query(
+                'SELECT id_obra, titulo, partitura, propria FROM ist_composicao WHERE id_obra = ?',
+                [idObraPrincipalPersistida]
+            );
+            obraPrincipal = obraPrincipalHistoricaRows[0];
+
+            if (!obraPrincipal || Number(obraPrincipal.id_obra) !== idObraPrincipalPersistida) {
+                await connection.rollback();
+                transacaoIniciada = false;
+                return res.status(409).json({ message: 'A obra principal histórica da inscrição não foi encontrada.' });
+            }
         }
 
         let obraSecundaria = null;
         if (segundaObraInformada) {
-            const [obraRows] = await db.query(
+            if (idObra2Normalizado === idObraPrincipalPersistida) {
+                await connection.rollback();
+                transacaoIniciada = false;
+                return res.status(400).json({ message: 'A segunda obra deve ser diferente da obra principal.' });
+            }
+
+            const [obraRows] = await connection.query(
                 `SELECT id_obra, titulo
                  FROM ist_composicao
                  WHERE id_obra = ?
                    AND propria = 1
-                   AND partitura IS NOT NULL
                    AND id_obra <> ?`,
-                [idObra2Normalizado, 63]
+                [idObra2Normalizado, OBRA_PRINCIPAL_CONCORRENTE.idObra]
             );
 
             if (obraRows.length === 0) {
+                await connection.rollback();
+                transacaoIniciada = false;
                 return res.status(400).json({ message: 'A segunda obra informada não é elegível.' });
             }
 
             obraSecundaria = obraRows[0];
         }
 
-        await db.query(
-            `UPDATE ist_concorrentes
-             SET id_obra_1 = ?, link_video_1 = ?, id_obra_2 = ?, link_video_2 = ?
-             WHERE id_usuario = ?`,
-            [63, video1Normalizado, idObra2Normalizado, segundaObraInformada ? video2Normalizado : null, idUsuario]
-        );
+        if (aceitePersistido) {
+            await connection.query(
+                `UPDATE ist_concorrentes
+                 SET link_video_1 = ?, id_obra_2 = ?, link_video_2 = ?
+                 WHERE id_usuario = ?`,
+                [video1Normalizado, idObra2Normalizado, segundaObraInformada ? video2Normalizado : null, idUsuario]
+            );
+        } else {
+            await connection.query(
+                `UPDATE ist_concorrentes
+                 SET id_obra_1 = ?, link_video_1 = ?, id_obra_2 = ?, link_video_2 = ?
+                 WHERE id_usuario = ?`,
+                [OBRA_PRINCIPAL_CONCORRENTE.idObra, video1Normalizado, idObra2Normalizado, segundaObraInformada ? video2Normalizado : null, idUsuario]
+            );
+        }
+
+        if (aceiteInformado && !aceitePersistido && aceiteRegulamento === true) {
+            if (!idConcorrente) {
+                const [lockRows] = await connection.query(
+                    'SELECT GET_LOCK(?, 10) AS adquirido',
+                    [LOCK_SEQUENCIA_INSCRICAO_FESTIVAL]
+                );
+
+                if (Number(lockRows[0]?.adquirido) !== 1) {
+                    throw new Error('Não foi possível serializar a geração do número de inscrição.');
+                }
+                lockSequenciaAdquirido = true;
+
+                const regexPrefixo = `^${PREFIXO_INSCRICAO_FESTIVAL}-[0-9]+$`;
+                const [sequenciaRows] = await connection.query(
+                    `SELECT id_concorrente
+                     FROM ist_concorrentes
+                     WHERE id_concorrente REGEXP ?
+                     FOR UPDATE`,
+                    [regexPrefixo]
+                );
+                const ultimoNumero = sequenciaRows.reduce((maior, concorrente) => {
+                    const sufixo = Number(String(concorrente.id_concorrente).slice(PREFIXO_INSCRICAO_FESTIVAL.length + 1));
+                    return Number.isInteger(sufixo) && sufixo > maior ? sufixo : maior;
+                }, 0);
+                const proximoNumero = ultimoNumero + 1;
+                idConcorrente = `${PREFIXO_INSCRICAO_FESTIVAL}-${String(proximoNumero).padStart(3, '0')}`;
+            }
+
+            const [aceiteResult] = idConcorrente === concorrenteRows[0].id_concorrente
+                ? await connection.query(
+                    `UPDATE ist_concorrentes
+                     SET aceite_regulamento = 1
+                     WHERE id_usuario = ?
+                       AND aceite_regulamento = 0`,
+                    [idUsuario]
+                )
+                : await connection.query(
+                    `UPDATE ist_concorrentes
+                     SET id_concorrente = ?, aceite_regulamento = 1
+                     WHERE id_usuario = ?
+                       AND aceite_regulamento = 0
+                       AND id_concorrente IS NULL`,
+                    [idConcorrente, idUsuario]
+                );
+            aceitePersistido = aceiteResult.affectedRows === 1;
+
+            if (!aceitePersistido) {
+                throw new Error('A primeira conclusão da inscrição não foi persistida.');
+            }
+        }
+
+        await connection.commit();
+        transacaoIniciada = false;
+
+        if (lockSequenciaAdquirido) {
+            await liberarLockSequenciaInscricao(connection);
+            lockSequenciaAdquirido = false;
+        }
+
+        if (aceiteInformado && aceiteRegulamento === true && aceitePersistido && !confirmacaoInscricaoEnviada) {
+            confirmacaoInscricaoEnviada = await processarConfirmacaoInscricaoPendente(idUsuario);
+        }
 
         return res.status(200).json({
-            message: 'Participação atualizada com sucesso.',
+            message: aceiteInformado && aceiteRegulamento === true && !confirmacaoInscricaoEnviada
+                ? 'Participação atualizada com sucesso. A confirmação da inscrição permanece pendente.'
+                : 'Participação atualizada com sucesso.',
             concorrente: {
-                idObra1: 63,
-                tituloObra1: obraPrincipalRows[0].titulo,
+                idConcorrente,
+                idObra1: idObraPrincipalPersistida,
+                tituloObra1: obraPrincipal.titulo,
                 linkVideo1: video1Normalizado,
                 idObra2: segundaObraInformada ? idObra2Normalizado : null,
                 tituloObra2: obraSecundaria?.titulo || null,
-                linkVideo2: segundaObraInformada ? video2Normalizado : null
+                linkVideo2: segundaObraInformada ? video2Normalizado : null,
+                aceiteRegulamento: aceitePersistido,
+                confirmacaoInscricaoEnviada
             }
         });
     } catch (error) {
+        if (transacaoIniciada) {
+            try {
+                await connection.rollback();
+            } catch (rollbackError) {
+                console.error('Erro ao desfazer atualização da participação:', rollbackError);
+            }
+        }
         console.error('Erro ao atualizar participação do concorrente:', error);
         return res.status(500).json({ message: 'Erro ao atualizar participação.' });
+    } finally {
+        if (connection && lockSequenciaAdquirido) {
+            try {
+                await liberarLockSequenciaInscricao(connection);
+            } catch (lockError) {
+                console.error('Erro ao liberar lock da sequência de inscrições:', lockError);
+                connection.destroy();
+                connection = null;
+            }
+        }
+        if (connection) {
+            connection.release();
+        }
     }
 };
 
@@ -1160,4 +1576,4 @@ const logout = async (_req, res) => {
     return res.status(200).json({ message: 'Logout realizado com sucesso.' });
 };
 
-export default { login, listarCargos, cadastrar, confirmarEmail, esqueciSenha, validarTokenSenha, redefinirSenha, me, obterPerfil, atualizarPerfil, atualizarParticipacaoConcorrente, atualizarCurriculo, atualizarFoto, obterFotoPublica, removerFoto, logout };
+export default { login, aderirAoFestivalComoConcorrente, listarCargos, cadastrar, confirmarEmail, esqueciSenha, validarTokenSenha, redefinirSenha, me, obterPerfil, atualizarPerfil, atualizarParticipacaoConcorrente, atualizarCurriculo, atualizarFoto, obterFotoPublica, removerFoto, logout };

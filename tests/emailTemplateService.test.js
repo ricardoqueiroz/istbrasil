@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { obterCatalogo } from '../src/config/emailPlaceholders.js';
 import { EmailComposicaoError, comporEmail } from '../src/services/emailTemplateService.js';
 
 const modeloBase = (extra = {}) => ({
@@ -13,6 +14,20 @@ const modeloBase = (extra = {}) => ({
 });
 
 const variaveisValidas = { nome: 'Joao', link: 'https://istbrasil.org.br/confirmar?token=abc' };
+
+const variaveisInscricaoFestival = {
+    nome: 'Maria da Silva',
+    numero_concorrente: '042',
+    email: 'maria@example.com',
+    telefone: '(93) 99999-9999',
+    data_nascimento: '10/05/1990',
+    cidade: 'Santarém',
+    uf: 'PA',
+    musica_1: 'Catraias',
+    video_1: 'https://www.youtube.com/watch?v=abcdefghijk',
+    musica_2: 'Não informada',
+    video_2: 'Não informado'
+};
 
 const capturarCodigo = (fn) => {
     try {
@@ -166,4 +181,54 @@ test('gera versao texto legivel com quebras', () => {
     const { text } = comporEmail({ modelo, variaveis: variaveisValidas });
     assert.doesNotMatch(text, /</);
     assert.match(text, /Ola Joao\nSegunda linha/);
+});
+
+test('catalogo da confirmacao de inscricao define todos os placeholders escalares obrigatorios', () => {
+    const catalogo = obterCatalogo('confirmacao_inscricao_festival');
+    const nomesEsperados = [
+        'nome',
+        'numero_concorrente',
+        'email',
+        'telefone',
+        'data_nascimento',
+        'cidade',
+        'uf',
+        'musica_1',
+        'video_1',
+        'musica_2',
+        'video_2'
+    ];
+
+    assert.ok(catalogo);
+    assert.deepEqual(Object.keys(catalogo), nomesEsperados);
+    for (const nome of nomesEsperados) {
+        assert.equal(catalogo[nome].tipo, 'texto');
+        assert.equal(catalogo[nome].obrigatorio, true);
+        assert.equal(typeof catalogo[nome].descricao, 'string');
+        assert.ok(catalogo[nome].descricao.length > 0);
+    }
+});
+
+test('compoe confirmacao de inscricao com fallback da segunda musica e escape dos valores', () => {
+    const modelo = modeloBase({
+        chave: 'confirmacao_inscricao_festival',
+        assunto: 'Inscrição de {{nome}} - concorrente {{numero_concorrente}}',
+        conteudoHtml: `<p>{{nome}}</p><p>{{numero_concorrente}}</p><p>{{email}}</p>
+            <p>{{telefone}}</p><p>{{data_nascimento}}</p><p>{{cidade}}/{{uf}}</p>
+            <p>{{musica_1}}</p><p>{{video_1}}</p><p>{{musica_2}}</p><p>{{video_2}}</p>`
+    });
+    const variaveis = {
+        ...variaveisInscricaoFestival,
+        nome: 'Maria <script>alert(1)</script> & Silva'
+    };
+
+    const { assunto, html, text } = comporEmail({ modelo, variaveis });
+
+    assert.equal(assunto, 'Inscrição de Maria <script>alert(1)</script> & Silva - concorrente 042');
+    assert.doesNotMatch(html, /<script>/i);
+    assert.match(html, /Maria &lt;script&gt;alert\(1\)&lt;\/script&gt; &amp; Silva/);
+    assert.match(html, /Não informada/);
+    assert.match(html, /Não informado/);
+    assert.match(text, /Catraias/);
+    assert.match(text, /Não informada/);
 });

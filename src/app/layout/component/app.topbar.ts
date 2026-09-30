@@ -78,18 +78,31 @@ export class AppTopbar {
 
     items!: MenuItem[];
 
-    itensMenuPerfil: MenuItem[] = [
-        {
-            label: 'Consultar / Alterar Dados',
-            icon: 'pi pi-user-edit',
-            command: () => this.irParaPerfil()
-        },
-        {
+    get itensMenuPerfil(): MenuItem[] {
+        const itens: MenuItem[] = [
+            {
+                label: 'Perfil',
+                icon: 'pi pi-user-edit',
+                command: () => this.irParaPerfil()
+            }
+        ];
+
+        if (this.authService.usuario()?.id_tipo_usuario === 2) {
+            itens.push({
+                label: 'Postar Vídeo Concorrente',
+                icon: 'pi pi-video',
+                command: () => this.irPostarVideos()
+            });
+        }
+
+        itens.push({
             label: 'Sair',
             icon: 'pi pi-sign-out',
             command: () => this.sair()
-        }
-    ];
+        });
+
+        return itens;
+    }
 
     constructor(
         public layoutService: LayoutService,
@@ -124,6 +137,10 @@ export class AppTopbar {
         }
 
         await this.router.navigate([rotasPorTipo[tipoUsuario] || '/']);
+    }
+
+    async irPostarVideos(): Promise<void> {
+        await this.router.navigate(['/cadastro/concorrente/videos']);
     }
 
     async sair(): Promise<void> {

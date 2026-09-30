@@ -1,7 +1,6 @@
 // Relação de Obras Musicais do Patrono Sebastião Tapajós - Controller
 import { pool as db } from '../config/db.js';
-
-const ID_OBRA_PRINCIPAL_CONCORRENTE = 63;
+import { OBRA_PRINCIPAL_CONCORRENTE } from '../config/festival.js';
 
 const getAllObras = async (req, res) => {
     try {
@@ -58,30 +57,75 @@ const getAllObras = async (req, res) => {
     }
 };
 
+const consultarObraPrincipal = async () => {
+    const [rows] = await db.execute(
+        `SELECT id_obra, titulo, partitura, propria
+         FROM ist_composicao
+         WHERE id_obra = ?`,
+        [OBRA_PRINCIPAL_CONCORRENTE.idObra]
+    );
+    const obra = rows[0];
+
+    if (!obra || Number(obra.id_obra) !== OBRA_PRINCIPAL_CONCORRENTE.idObra || Number(obra.propria) !== 1) {
+        throw new Error('Obra principal do concorrente não encontrada ou inelegível.');
+    }
+
+    return {
+        idObra: obra.id_obra,
+        titulo: obra.titulo,
+        partitura: obra.partitura
+    };
+};
+
+const consultarComposicoesElegiveis = async () => {
+    const [rows] = await db.execute(
+                `SELECT c.id_obra, c.titulo, c.partitura
+                 FROM ist_composicao c
+                 INNER JOIN (
+                         SELECT titulo, MIN(id_obra) AS id_obra
+                         FROM ist_composicao
+                         WHERE propria = 1
+                             AND id_obra <> ?
+                         GROUP BY titulo
+                 ) escolhida ON escolhida.id_obra = c.id_obra
+                 ORDER BY c.titulo`,
+        [OBRA_PRINCIPAL_CONCORRENTE.idObra]
+    );
+
+    return rows.map((obra) => ({
+        idObra: obra.id_obra,
+        titulo: obra.titulo,
+        partitura: obra.partitura
+    }));
+};
+
 const getComposicoesElegiveis = async (_req, res) => {
     try {
-        const [rows] = await db.execute(
-                        `SELECT MIN(id_obra) AS id_obra, titulo
-             FROM ist_composicao
-             WHERE propria = 1
-               AND partitura IS NOT NULL
-               AND id_obra <> ?
-                         GROUP BY titulo
-             ORDER BY titulo`,
-            [ID_OBRA_PRINCIPAL_CONCORRENTE]
-        );
+        const obrasElegiveis = await consultarComposicoesElegiveis();
 
-        return res.status(200).json(rows.map((obra) => ({
-            idObra: obra.id_obra,
-            titulo: obra.titulo
-        })));
+        return res.status(200).json(obrasElegiveis);
     } catch (error) {
         console.error('Error fetching eligible compositions:', error);
         return res.status(500).json({ error: 'Erro ao consultar composições elegíveis.' });
     }
 };
 
+const getParticipacaoConcorrente = async (_req, res) => {
+    try {
+        const [obraPrincipal, obrasElegiveis] = await Promise.all([
+            consultarObraPrincipal(),
+            consultarComposicoesElegiveis()
+        ]);
+
+        return res.status(200).json({ obraPrincipal, obrasElegiveis });
+    } catch (error) {
+        console.error('Error fetching competitor participation compositions:', error);
+        return res.status(500).json({ error: 'Erro ao consultar obras da participação.' });
+    }
+};
+
 export default {
     getAllObras,
-    getComposicoesElegiveis
+    getComposicoesElegiveis,
+    getParticipacaoConcorrente
 };

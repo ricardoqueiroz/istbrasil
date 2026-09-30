@@ -54,24 +54,33 @@ export interface PerfilAtualizacaoPayload {
     bairro: string;
     cidade: string;
     uf: string;
-    aceiteRegulamento?: boolean;
 }
 
 export interface PerfilAtualizacaoResponse {
     message: string;
     usuario: PerfilUsuario;
-    concorrente?: Pick<PerfilConcorrente, 'aceiteRegulamento'>;
 }
 
 export interface ObraElegivel {
     idObra: number;
     titulo: string;
+    partitura?: string | null;
+}
+
+export interface ObraPrincipalConcorrente extends ObraElegivel {
+    partitura: string | null;
+}
+
+export interface ObrasParticipacaoConcorrenteResponse {
+    obraPrincipal: ObraPrincipalConcorrente;
+    obrasElegiveis: ObraElegivel[];
 }
 
 export interface ParticipacaoConcorrentePayload {
     linkVideo1: string;
     idObra2: number | null;
     linkVideo2: string | null;
+    aceiteRegulamento?: boolean;
 }
 
 export interface ParticipacaoConcorrente {
@@ -83,6 +92,7 @@ export interface ParticipacaoConcorrente {
     tituloObra2: string | null;
     linkVideo2: string | null;
     aceiteRegulamento?: boolean;
+    confirmacaoInscricaoEnviada?: boolean;
     dataCadastro?: string | null;
 }
 

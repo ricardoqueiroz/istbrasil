@@ -1,18 +1,22 @@
-import { CommonModule } from '@angular/common';
-import { Component, OnInit } from '@angular/core';
+import { CommonModule, Location } from '@angular/common';
+import { Component, Injector, OnInit, inject } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
+import { toObservable } from '@angular/core/rxjs-interop';
 import { DomSanitizer, SafeResourceUrl } from '@angular/platform-browser';
 import { ButtonModule } from 'primeng/button';
 import { DatePickerModule } from 'primeng/datepicker';
+import { DialogModule } from 'primeng/dialog';
 import { InputMaskModule } from 'primeng/inputmask';
 import { InputTextModule } from 'primeng/inputtext';
 import { PasswordModule } from 'primeng/password';
 import { SelectModule } from 'primeng/select';
-import { CadastroTipo, isCadastroTipo, OBRA_PRINCIPAL_CONCORRENTE } from './models/cadastro.model';
+import { CadastroTipo, isCadastroTipo } from './models/cadastro.model';
 import { CadastroStateService } from './services/cadastro-state.service';
 import { EnderecoService } from 'src/app/shared/endereco.service';
 import { sha256 } from 'src/app/shared/crypto.util';
+import { AuthService, UsuarioLogado } from 'src/app/shared/auth.service';
+import { filter, take } from 'rxjs';
 
 interface Cargo {
     id_cargo: number;
@@ -22,6 +26,10 @@ interface Cargo {
 interface ObraOption {
     idObra: number;
     titulo: string;
+}
+
+interface ObraPrincipalOption extends ObraOption {
+    partitura: string | null;
 }
 
 interface UfOption {
@@ -42,7 +50,7 @@ const UFS: UfOption[] = [
 @Component({
     selector: 'app-diretoria-cadastro',
     standalone: true,
-    imports: [CommonModule, FormsModule, RouterLink, ButtonModule, InputTextModule, PasswordModule, SelectModule, InputMaskModule, DatePickerModule],
+    imports: [CommonModule, FormsModule, RouterLink, ButtonModule, DialogModule, InputTextModule, PasswordModule, SelectModule, InputMaskModule, DatePickerModule],
     template: `
         <div class="flex items-center justify-center py-12 px-4">
             <div class="w-full max-w-2xl rounded-3xl border border-surface-200 bg-white p-8 shadow-2xl dark:border-surface-700 dark:bg-surface-900">
@@ -79,7 +87,8 @@ const UFS: UfOption[] = [
                     <button pButton type="submit" label="Confirmar e Continuar" class="w-full" [disabled]="isLoading"></button>
 
                     <div class="mt-6 text-center">
-                        <a routerLink="/login" class="text-sm font-medium text-primary hover:underline">Já tem conta? Fazer login.</a>
+                        <button *ngIf="tipoCadastro === 'concorrente'; else loginGenerico" type="button" class="text-sm font-medium text-primary hover:underline" (click)="abrirLoginExistente()">Já possui cadastro? Usar minha conta.</button>
+                        <ng-template #loginGenerico><a routerLink="/login" class="text-sm font-medium text-primary hover:underline">Já tem conta? Fazer login.</a></ng-template>
                     </div>
                 </form>
 
@@ -181,7 +190,7 @@ const UFS: UfOption[] = [
                     <ng-container *ngIf="tipoCadastro === 'concorrente'">
                         <div class="mb-5">
                             <label for="obra1" class="mb-2 block text-sm font-medium text-surface-700 dark:text-surface-200">Primeira obra</label>
-                            <p-select id="obra1" name="obra1" [options]="[obraPrincipal]" optionLabel="titulo" optionValue="idObra" [ngModel]="obraPrincipal.idObra" [disabled]="true" styleClass="w-full"></p-select>
+                            <p-select id="obra1" name="obra1" [options]="obraPrincipal ? [obraPrincipal] : []" optionLabel="titulo" optionValue="idObra" [ngModel]="obraPrincipal?.idObra ?? null" [disabled]="true" placeholder="Obra principal" styleClass="w-full"></p-select>
                         </div>
 
                         <div class="mb-5">
@@ -215,9 +224,70 @@ const UFS: UfOption[] = [
                 </form>
             </div>
         </div>
+
+        <p-dialog header="Entrar com cadastro existente" [(visible)]="dialogLoginExistenteVisivel" [modal]="true" [closable]="!autenticandoContaExistente" [style]="{ width: 'min(92vw, 32rem)' }">
+            <form (ngSubmit)="autenticarContaExistente()" novalidate>
+                <p class="mb-5 text-sm text-surface-600 dark:text-surface-300">Informe as credenciais da sua conta no Instituto Sebastião Tapajós.</p>
+                <div class="mb-4">
+                    <label for="emailContaExistente" class="mb-2 block text-sm font-medium text-surface-700 dark:text-surface-200">E-mail</label>
+                    <input id="emailContaExistente" pInputText type="email" name="emailContaExistente" [(ngModel)]="emailLoginExistente" class="w-full" autocomplete="email" />
+                </div>
+                <div>
+                    <label for="senhaContaExistente" class="mb-2 block text-sm font-medium text-surface-700 dark:text-surface-200">Senha</label>
+                    <p-password id="senhaContaExistente" name="senhaContaExistente" [(ngModel)]="senhaLoginExistente" [toggleMask]="true" [feedback]="false" styleClass="w-full" inputStyleClass="w-full" autocomplete="current-password"></p-password>
+                </div>
+                <div class="mt-6 flex flex-col gap-3 sm:flex-row sm:justify-end">
+                    <button pButton type="button" label="Cancelar" class="p-button-outlined" (click)="dialogLoginExistenteVisivel = false" [disabled]="autenticandoContaExistente"></button>
+                    <button pButton type="submit" label="Continuar" icon="pi pi-sign-in" [loading]="autenticandoContaExistente"></button>
+                </div>
+            </form>
+        </p-dialog>
+
+        <p-dialog
+            header="Participar do Festival"
+            [(visible)]="dialogAdesaoVisivel"
+            [modal]="true"
+            [closable]="false"
+            [closeOnEscape]="false"
+            [style]="{ width: 'min(92vw, 34rem)' }">
+
+            <p class="text-surface-700 dark:text-surface-200">
+                Você já possui cadastro no Instituto Sebastião Tapajós.
+                Deseja utilizar seus dados cadastrados para participar do
+                Segundo Festival de Violões Sebastião Tapajós?
+            </p>
+
+            <div class="mt-6 flex flex-col gap-3 sm:flex-row sm:justify-end">
+                <p-button
+                    type="button"
+                    label="Não"
+                    severity="secondary"
+                    [outlined]="true"
+                    (onClick)="cancelarAdesao()"
+                    [disabled]="aderindoAoFestival">
+                </p-button>
+
+                <p-button
+                    type="button"
+                    label="Sim, quero participar"
+                    icon="pi pi-check"
+                    (onClick)="confirmarAdesao()"
+                    [loading]="aderindoAoFestival">
+                </p-button>
+            </div>
+        </p-dialog>
+
+        <p-dialog header="Inscrição no Festival" [(visible)]="dialogContaNaoPermitidaVisivel" [modal]="true" [closable]="false" [closeOnEscape]="false" [style]="{ width: 'min(92vw, 34rem)' }">
+            <p *ngIf="tipoContaNaoPermitida === 1" class="text-surface-700 dark:text-surface-200">Você faz parte da <strong>Diretoria</strong> do IST, e pelas regras, não pode se inscrever no festival.</p>
+            <p *ngIf="tipoContaNaoPermitida === 4" class="text-surface-700 dark:text-surface-200">Você é um <strong>Colaborador</strong> do IST, e pelas regras, não pode se inscrever no festival.</p>
+            <div class="mt-6 flex justify-end">
+                <button pButton type="button" label="Fechar" (click)="fecharContaNaoPermitida()"></button>
+            </div>
+        </p-dialog>
     `
 })
 export class CadastroComponent implements OnInit {
+    private readonly injector = inject(Injector);
     isLoading = false;
     private cargosSolicitados = false;
     cadastroBasicoConcluido = false;
@@ -232,9 +302,19 @@ export class CadastroComponent implements OnInit {
     fotoSelecionada: File | null = null;
     video1EmbedUrl: SafeResourceUrl | null = null;
     video2EmbedUrl: SafeResourceUrl | null = null;
-    readonly obraPrincipal = OBRA_PRINCIPAL_CONCORRENTE;
+    obraPrincipal: ObraPrincipalOption | null = null;
     obrasSecundarias: ObraOption[] = [{ idObra: 0, titulo: 'Selecione a segunda obra (opcional)' }];
     private obrasSecundariasCarregadas = false;
+    dialogLoginExistenteVisivel = false;
+    dialogAdesaoVisivel = false;
+    dialogContaNaoPermitidaVisivel = false;
+    tipoContaNaoPermitida: 1 | 4 | null = null;
+    private verificacaoContaInicialFeita = false;
+    emailLoginExistente = '';
+    senhaLoginExistente = '';
+    autenticandoContaExistente = false;
+    aderindoAoFestival = false;
+    private usuarioAdesao: UsuarioLogado | null = null;
 
     cargos: Cargo[] = [];
     ufs = UFS;
@@ -311,7 +391,7 @@ export class CadastroComponent implements OnInit {
     set segundaObraSelecionada(value: number) {
         const idObra = Number(value);
 
-        if (!idObra || idObra === this.obraPrincipal.idObra) {
+        if (!idObra || idObra === this.obraPrincipal?.idObra) {
             this.cadastroStateService.atualizarDadosComplementares({ idObra2: null, linkVideo2: '' });
             this.video2EmbedUrl = null;
             return;
@@ -330,7 +410,9 @@ export class CadastroComponent implements OnInit {
         private readonly route: ActivatedRoute,
         private readonly enderecoService: EnderecoService,
         private readonly cadastroStateService: CadastroStateService,
-        private readonly sanitizer: DomSanitizer
+        private readonly sanitizer: DomSanitizer,
+        private readonly authService: AuthService,
+        private readonly location: Location
     ) {}
 
     ngOnInit(): void {
@@ -342,17 +424,56 @@ export class CadastroComponent implements OnInit {
             const estadoAtual = this.cadastroStateService.getEstado();
 
             if (estadoAtual.tipo === cadastroTipo) {
-                this.inicializarEtapa3();
+                void this.carregarObrasParticipacao(cadastroTipo);
                 this.sincronizarDataNascimentoSelecionada();
                 this.carregarCargosSeNecessario();
+                this.verificarUsuarioLogadoNoCadastroConcorrente();
                 return;
             }
 
             this.cadastroStateService.setTipo(cadastroTipo);
-            this.inicializarEtapa3();
+            void this.carregarObrasParticipacao(cadastroTipo);
             this.sincronizarDataNascimentoSelecionada();
             this.carregarCargosSeNecessario();
+            this.verificarUsuarioLogadoNoCadastroConcorrente();
         });
+    }
+
+    private verificarUsuarioLogadoNoCadastroConcorrente(): void {
+        if (this.tipoCadastro !== 'concorrente' || this.verificacaoContaInicialFeita) {
+            return;
+        }
+
+        this.verificacaoContaInicialFeita = true;
+        if (!this.authService.carregando()) {
+            this.tratarUsuarioLogadoNoCadastroConcorrente();
+            return;
+        }
+
+        toObservable(this.authService.carregando, { injector: this.injector })
+            .pipe(filter((carregando) => !carregando), take(1))
+            .subscribe(() => this.tratarUsuarioLogadoNoCadastroConcorrente());
+    }
+
+    private tratarUsuarioLogadoNoCadastroConcorrente(): void {
+        const usuario = this.authService.usuario();
+        if (!usuario) return;
+
+        if (usuario.id_tipo_usuario === 3) {
+            this.usuarioAdesao = usuario;
+            this.dialogAdesaoVisivel = true;
+            return;
+        }
+
+        if (usuario.id_tipo_usuario === 2) {
+            void this.router.navigate(['/cadastro/concorrente/videos']);
+            return;
+        }
+
+        if (usuario.id_tipo_usuario === 1 || usuario.id_tipo_usuario === 4) {
+            this.tipoContaNaoPermitida = usuario.id_tipo_usuario;
+            this.dialogContaNaoPermitidaVisivel = true;
+        }
     }
 
     private carregarCargosSeNecessario(): void {
@@ -397,13 +518,117 @@ export class CadastroComponent implements OnInit {
         this.mensagem = '';
     }
 
+    abrirLoginExistente(): void {
+        this.mensagem = '';
+        this.emailLoginExistente = this.email.trim();
+        this.senhaLoginExistente = '';
+        this.dialogLoginExistenteVisivel = true;
+    }
+
+    async autenticarContaExistente(): Promise<void> {
+        if (this.autenticandoContaExistente) return;
+
+        const email = this.emailLoginExistente.trim();
+        const senha = this.senhaLoginExistente.trim();
+        if (!email || !senha) {
+            this.tipoMensagem = 'error';
+            this.mensagem = 'Informe e-mail e senha para continuar.';
+            return;
+        }
+
+        this.autenticandoContaExistente = true;
+        this.mensagem = '';
+
+        try {
+            const senhaCriptografada = await sha256(senha);
+            const response = await fetch('/api/usuarios/login', {
+                method: 'POST',
+                credentials: 'include',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ email, senha: senhaCriptografada, manterConectado: false })
+            });
+            const data = await response.json().catch(() => ({}));
+
+            if (!response.ok) {
+                this.tipoMensagem = 'error';
+                this.mensagem = data?.message || 'E-mail ou senha inválidos.';
+                return;
+            }
+
+            const usuario = data as UsuarioLogado;
+            this.authService.definirUsuario(usuario);
+            this.dialogLoginExistenteVisivel = false;
+            this.usuarioAdesao = usuario;
+
+            if (usuario.id_tipo_usuario === 2) {
+                await this.confirmarAdesao();
+                return;
+            }
+
+            if (usuario.id_tipo_usuario === 3) {
+                this.dialogAdesaoVisivel = true;
+                return;
+            }
+
+            this.tipoMensagem = 'error';
+            this.mensagem = 'Esta conta não pode aderir ao Festival por este fluxo.';
+        } catch {
+            this.tipoMensagem = 'error';
+            this.mensagem = 'Não foi possível autenticar a conta. Tente novamente.';
+        } finally {
+            this.autenticandoContaExistente = false;
+        }
+    }
+
+    cancelarAdesao(): void {
+        this.dialogAdesaoVisivel = false;
+        this.usuarioAdesao = null;
+        this.location.back();
+    }
+
+    fecharContaNaoPermitida(): void {
+        this.dialogContaNaoPermitidaVisivel = false;
+        this.tipoContaNaoPermitida = null;
+        this.location.back();
+    }
+
+    async confirmarAdesao(): Promise<void> {
+        if (this.aderindoAoFestival || !this.usuarioAdesao) return;
+
+        this.aderindoAoFestival = true;
+        this.mensagem = '';
+
+        try {
+            const response = await fetch('/api/usuarios/concorrente/aderir', {
+                method: 'POST',
+                credentials: 'include'
+            });
+            const data = await response.json().catch(() => ({}));
+
+            if (!response.ok) {
+                this.tipoMensagem = 'error';
+                this.mensagem = data?.message || 'Não foi possível concluir a adesão ao Festival.';
+                return;
+            }
+
+            this.authService.definirUsuario(data.usuario as UsuarioLogado);
+            this.dialogAdesaoVisivel = false;
+            await this.router.navigate(['/cadastro/concorrente/videos']);
+        } catch {
+            this.tipoMensagem = 'error';
+            this.mensagem = 'Não foi possível concluir a adesão ao Festival.';
+        } finally {
+            this.aderindoAoFestival = false;
+        }
+    }
+
     private inicializarEtapa3(): void {
-        if (this.tipoCadastro === 'concorrente' && this.idObra1 !== this.obraPrincipal.idObra) {
+        if (this.tipoCadastro === 'concorrente' && this.obraPrincipal && this.idObra1 !== this.obraPrincipal.idObra) {
             this.cadastroStateService.atualizarDadosComplementares({ idObra1: this.obraPrincipal.idObra });
         }
     }
 
-    private async carregarObrasSecundarias(tipo: CadastroTipo): Promise<void> {
+    private async carregarObrasParticipacao(tipo: CadastroTipo): Promise<void> {
         if (tipo !== 'concorrente' || this.obrasSecundariasCarregadas) {
             return;
         }
@@ -411,14 +636,20 @@ export class CadastroComponent implements OnInit {
         this.obrasSecundariasCarregadas = true;
 
         try {
-            const response = await fetch('/api/obra/composicoes-elegiveis');
+            const response = await fetch('/api/obra/participacao-concorrente');
 
             if (!response.ok) {
                 throw new Error('Falha ao carregar composições elegíveis.');
             }
 
-            const data = await response.json() as unknown;
-            const obras = Array.isArray(data) ? data.filter(this.ehObraOption) : [];
+            const data = await response.json() as Record<string, unknown>;
+            const obraPrincipal = this.ehObraPrincipalOption(data['obraPrincipal']) ? data['obraPrincipal'] : null;
+            const obras = Array.isArray(data['obrasElegiveis']) ? data['obrasElegiveis'].filter(this.ehObraOption) : [];
+            if (!obraPrincipal) {
+                throw new Error('Obra principal inválida.');
+            }
+            this.obraPrincipal = obraPrincipal;
+            this.inicializarEtapa3();
             this.obrasSecundarias = [
                 { idObra: 0, titulo: 'Selecione a segunda obra (opcional)' },
                 ...obras
@@ -437,6 +668,12 @@ export class CadastroComponent implements OnInit {
 
         const obra = value as Record<string, unknown>;
         return typeof obra['idObra'] === 'number' && typeof obra['titulo'] === 'string';
+    }
+
+    private ehObraPrincipalOption(value: unknown): value is ObraPrincipalOption {
+        if (!this.ehObraOption(value)) return false;
+        const obra = value as unknown as Record<string, unknown>;
+        return obra['partitura'] === null || typeof obra['partitura'] === 'string';
     }
 
     private sincronizarDataNascimentoSelecionada(): void {
@@ -750,9 +987,9 @@ export class CadastroComponent implements OnInit {
             return true;
         }
 
-        if (this.idObra1 !== this.obraPrincipal.idObra) {
+        if (!this.obraPrincipal || this.idObra1 !== this.obraPrincipal.idObra) {
             this.tipoMensagem = 'error';
-            this.mensagem = 'A primeira obra deve ser Catraias.';
+            this.mensagem = 'Não foi possível validar a obra principal.';
             return false;
         }
 

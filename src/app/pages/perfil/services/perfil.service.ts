@@ -1,5 +1,5 @@
 import { Injectable } from '@angular/core';
-import { CurriculoResposta, ObraElegivel, ParticipacaoConcorrentePayload, ParticipacaoConcorrenteResponse, PerfilAtualizacaoPayload, PerfilAtualizacaoResponse, PerfilFotoRespostaHttp, PerfilFotoResultado, PerfilResponse } from '../models/perfil.model';
+import { CurriculoResposta, ObrasParticipacaoConcorrenteResponse, ParticipacaoConcorrentePayload, ParticipacaoConcorrenteResponse, PerfilAtualizacaoPayload, PerfilAtualizacaoResponse, PerfilFotoRespostaHttp, PerfilFotoResultado, PerfilResponse } from '../models/perfil.model';
 
 export class PerfilServiceError extends Error {
     constructor(
@@ -102,20 +102,20 @@ export class PerfilService {
         };
     }
 
-    async carregarObrasElegiveis(): Promise<ObraElegivel[]> {
+    async carregarObrasParticipacao(): Promise<ObrasParticipacaoConcorrenteResponse> {
         let response: Response;
 
         try {
-            response = await fetch('/api/obra/composicoes-elegiveis');
+            response = await fetch('/api/obra/participacao-concorrente');
         } catch {
-            throw new PerfilServiceError('Não foi possível carregar as obras elegíveis.', 0);
+            throw new PerfilServiceError('Não foi possível carregar as obras da participação.', 0);
         }
 
         if (!response.ok) {
-            throw new PerfilServiceError('Não foi possível carregar as obras elegíveis.', response.status);
+            throw new PerfilServiceError('Não foi possível carregar as obras da participação.', response.status);
         }
 
-        return response.json() as Promise<ObraElegivel[]>;
+        return response.json() as Promise<ObrasParticipacaoConcorrenteResponse>;
     }
 
     async atualizarParticipacaoConcorrente(payload: ParticipacaoConcorrentePayload): Promise<ParticipacaoConcorrenteResponse> {

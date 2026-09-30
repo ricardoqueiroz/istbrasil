@@ -153,6 +153,15 @@ export const appRoutes: Routes = [
                 }
             },
             {
+                path: 'concorrente/videos',
+                loadComponent: () => import('./app/pages/cadastro/concorrente/videos/concorrente-videos.component').then(m => m.ConcorrenteVideosComponent),
+                canActivate: [perfilGuard],
+                data: {
+                    perfilTipo: 'concorrente',
+                    perfilTipoId: TIPO_USUARIO_MAP.concorrente
+                }
+            },
+            {
                 path: 'externo/perfil',
                 loadComponent: () => import('./app/pages/perfil/perfil.component').then(m => m.PerfilComponent),
                 canActivate: [perfilGuard],
