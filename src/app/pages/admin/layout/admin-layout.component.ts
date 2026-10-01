@@ -37,6 +37,11 @@ import { AuthService } from '../../../shared/auth.service';
                             <i class="pi pi-home" aria-hidden="true"></i>
                             <span>Dashboard</span>
                         </a>
+                        <div class="px-3 pb-1 pt-4 text-xs font-semibold uppercase tracking-wider text-surface-500">Cadastros</div>
+                        <a routerLink="/admin/cadastros/listar" routerLinkActive="bg-primary/10 text-primary" (click)="fecharMenu()" class="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-surface-700 hover:bg-surface-50 dark:text-surface-200 dark:hover:bg-surface-800">
+                            <i class="pi pi-users" aria-hidden="true"></i>
+                            <span>Listar</span>
+                        </a>
                         <div class="px-3 pb-1 pt-4 text-xs font-semibold uppercase tracking-wider text-surface-500">E-mails</div>
                         <a routerLink="/admin/emails/assinaturas" routerLinkActive="bg-primary/10 text-primary" (click)="fecharMenu()" class="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-surface-700 hover:bg-surface-50 dark:text-surface-200 dark:hover:bg-surface-800">
                             <i class="pi pi-pencil" aria-hidden="true"></i>
