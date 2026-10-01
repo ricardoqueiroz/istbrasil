@@ -3,6 +3,7 @@ import jwt from 'jsonwebtoken';
 import test from 'node:test';
 import { pool as db } from '../src/config/db.js';
 import {
+    atualizarUsuarioAdmin,
     listarOpcoesUsuariosAdmin,
     listarSituacoesUsuarioAdmin,
     listarUsuariosAdmin,
@@ -55,6 +56,100 @@ const linhaLista = {
     token_confirmacao: 'não deve vazar'
 };
 
+const payloadAtualizacao = (sobrescritas = {}) => ({
+    nome: 'Maria Atualizada',
+    cpf: '529.982.247-25',
+    identidade: null,
+    dataNascimento: '1990-01-01',
+    idTipoUsuario: 3,
+    idCargo: null,
+    idSituacao: 6,
+    telefoneCelular: '(93) 99999-9999',
+    logradouro: 'Rua Atualizada',
+    numero: '10',
+    complemento: null,
+    bairro: 'Centro',
+    cidade: 'Santarém',
+    uf: 'PA',
+    cep: '68000-000',
+    ...sobrescritas
+});
+
+const linhaDetalheAtualizada = (sobrescritas = {}) => ({
+    ...linhaLista,
+    nome: 'Maria Atualizada',
+    cpf: '52998224725',
+    identidade: null,
+    data_nascimento: '1990-01-01',
+    telefone_celular: '93999999999',
+    logradouro: 'Rua Atualizada',
+    numero: '10',
+    complemento: null,
+    bairro: 'Centro',
+    cidade: 'Santarém',
+    uf: 'PA',
+    cep: '68000000',
+    foto: null,
+    curriculo: null,
+    celular_confirmado: 0,
+    data_atualizacao: '2026-10-01T10:00:00.000Z',
+    concorrente_usuario_id: null,
+    ...sobrescritas
+});
+
+const executarAtualizacao = async ({
+    idUsuario = 8,
+    idAdministrador = 10,
+    payload = payloadAtualizacao(),
+    usuarioAtual = { id_usuario: 8, id_tipo_usuario: 3, id_situacao: 6 },
+    tipoExiste = true,
+    cargoExiste = true,
+    situacaoExiste = true,
+    situacaoTipo = payload.idTipoUsuario,
+    cpfDuplicado = false,
+    concorrenteExiste = false,
+    detalhe = linhaDetalheAtualizada(),
+    falharEmUpdate = false
+} = {}) => {
+    const consultas = [];
+    const estado = { iniciou: 0, commits: 0, rollbacks: 0, releases: 0 };
+    const connection = {
+        async beginTransaction() { estado.iniciou += 1; },
+        async commit() { estado.commits += 1; },
+        async rollback() { estado.rollbacks += 1; },
+        release() { estado.releases += 1; },
+        async query(sql, params = []) {
+            const consulta = normalizarSql(sql);
+            consultas.push({ sql: consulta, params });
+            if (consulta.startsWith('SELECT id_usuario, id_tipo_usuario, id_situacao FROM ist_usuarios')) return [usuarioAtual ? [usuarioAtual] : []];
+            if (consulta.startsWith('SELECT id_tipo FROM ist_tipo_usuario')) return [tipoExiste ? [{ id_tipo: payload.idTipoUsuario }] : []];
+            if (consulta.startsWith('SELECT id_cargo FROM ist_cargo')) return [cargoExiste ? [{ id_cargo: payload.idCargo }] : []];
+            if (consulta.startsWith('SELECT id_situacao, id_tipo FROM ist_situacao')) return [situacaoExiste ? [{ id_situacao: payload.idSituacao, id_tipo: situacaoTipo }] : []];
+            if (consulta.startsWith('SELECT id_usuario FROM ist_usuarios WHERE cpf')) return [cpfDuplicado ? [{ id_usuario: 99 }] : []];
+            if (consulta.startsWith('UPDATE ist_usuarios')) {
+                if (falharEmUpdate) throw new Error('Falha simulada');
+                return [{ affectedRows: 1 }];
+            }
+            if (consulta.startsWith('SELECT id_usuario FROM ist_concorrentes')) return [concorrenteExiste ? [{ id_usuario: idUsuario }] : []];
+            if (consulta.startsWith('INSERT INTO ist_concorrentes')) return [{ affectedRows: 1 }];
+            if (consulta.startsWith('SELECT u.id_usuario')) return [[detalhe]];
+            throw new Error(`Consulta não simulada: ${consulta}`);
+        }
+    };
+    const getConnectionOriginal = db.getConnection;
+    db.getConnection = async () => connection;
+    const res = resposta();
+    try {
+        await atualizarUsuarioAdmin(
+            { params: { id: String(idUsuario) }, usuario: { id_usuario: idAdministrador }, body: payload },
+            res
+        );
+    } finally {
+        db.getConnection = getConnectionOriginal;
+    }
+    return { res, consultas, estado };
+};
+
 const executarListagem = async (query = {}, total = 1) => {
     const consultas = [];
     const res = resposta();
@@ -90,7 +185,16 @@ const tokenAdmin = (idTipoUsuario = 1) => jwt.sign(
 
 test('todas as rotas administrativas de usuários exigem autenticação e autorização', async () => {
     const rotas = adminUsuariosRoutes.stack.filter((camada) => camada.route);
-    assert.deepEqual(rotas.map((camada) => camada.route.path), ['/', '/opcoes', '/situacoes', '/:id']);
+    assert.deepEqual(rotas.map((camada) => ({
+        path: camada.route.path,
+        metodo: Object.keys(camada.route.methods)[0]
+    })), [
+        { path: '/', metodo: 'get' },
+        { path: '/opcoes', metodo: 'get' },
+        { path: '/situacoes', metodo: 'get' },
+        { path: '/:id', metodo: 'get' },
+        { path: '/:id', metodo: 'put' }
+    ]);
     assert.equal(rotas.every((camada) => camada.route.stack.length === 3), true);
 
     let nextChamado = false;
@@ -387,4 +491,180 @@ test('listagem e detalhe nunca retornam senha ou tokens', async () => {
     assert.equal(json.includes('senha'), false);
     assert.equal(json.includes('token'), false);
     assert.doesNotMatch(sqlExecutado, /u\.senha|token_confirmacao|token_expira_em|token_tipo/);
+});
+
+test('PUT retorna 404 e rollback para usuário inexistente', async () => {
+    const resultado = await executarAtualizacao({ usuarioAtual: null });
+    assert.equal(resultado.res.statusCode, 404);
+    assert.equal(resultado.estado.rollbacks, 1);
+    assert.equal(resultado.estado.commits, 0);
+});
+
+test('PUT atualiza dados comuns em transação e retorna o contrato administrativo', async () => {
+    const resultado = await executarAtualizacao();
+    assert.equal(resultado.res.statusCode, 200);
+    assert.equal(resultado.res.body.usuario.nome, 'Maria Atualizada');
+    assert.equal(resultado.estado.iniciou, 1);
+    assert.equal(resultado.estado.commits, 1);
+    assert.equal(resultado.estado.releases, 1);
+    const update = resultado.consultas.find(({ sql }) => sql.startsWith('UPDATE ist_usuarios'));
+    assert.ok(update);
+    assert.doesNotMatch(update.sql, /email|senha|token|foto|curriculo/);
+});
+
+test('PUT rejeita CPF inválido antes de abrir transação', async () => {
+    const resultado = await executarAtualizacao({ payload: payloadAtualizacao({ cpf: '111.111.111-11' }) });
+    assert.equal(resultado.res.statusCode, 400);
+    assert.equal(resultado.estado.iniciou, 0);
+});
+
+test('PUT retorna 409 e rollback para CPF duplicado', async () => {
+    const resultado = await executarAtualizacao({ cpfDuplicado: true });
+    assert.equal(resultado.res.statusCode, 409);
+    assert.equal(resultado.estado.rollbacks, 1);
+});
+
+for (const [cenario, opcoes, status] of [
+    ['tipo inexistente', { tipoExiste: false }, 404],
+    ['cargo inexistente', { payload: payloadAtualizacao({ idCargo: 9 }), cargoExiste: false }, 404],
+    ['situação inexistente', { situacaoExiste: false }, 404],
+    ['situação incompatível', { situacaoTipo: 2 }, 400]
+]) {
+    test(`PUT rejeita ${cenario}`, async () => {
+        const resultado = await executarAtualizacao(opcoes);
+        assert.equal(resultado.res.statusCode, status);
+        assert.equal(resultado.estado.rollbacks, 1);
+    });
+}
+
+test('PUT permite cargo null sem consultar ist_cargo', async () => {
+    const resultado = await executarAtualizacao();
+    assert.equal(resultado.res.statusCode, 200);
+    assert.equal(resultado.consultas.some(({ sql }) => sql.includes('FROM ist_cargo')), false);
+});
+
+test('PUT permite mudança Externo para Colaborador', async () => {
+    const payload = payloadAtualizacao({ idTipoUsuario: 4, idSituacao: 8, idCargo: 2 });
+    const detalhe = linhaDetalheAtualizada({ id_tipo_usuario: 4, tipo: 'Colaborador', id_situacao: 8, id_cargo: 2 });
+    const resultado = await executarAtualizacao({ payload, detalhe });
+    assert.equal(resultado.res.statusCode, 200);
+    assert.equal(resultado.res.body.usuario.idTipoUsuario, 4);
+});
+
+test('PUT muda Concorrente para Externo sem alterar histórico concorrente', async () => {
+    const resultado = await executarAtualizacao({
+        usuarioAtual: { id_usuario: 8, id_tipo_usuario: 2, id_situacao: 3 },
+        concorrenteExiste: true,
+        detalhe: linhaDetalheAtualizada({ concorrente_usuario_id: 8, id_concorrente: 'FVST2-004', aceite_regulamento: 1 })
+    });
+    assert.equal(resultado.res.statusCode, 200);
+    assert.equal(resultado.consultas.some(({ sql }) => /^(UPDATE|DELETE) ist_concorrentes/.test(sql)), false);
+    assert.equal(resultado.res.body.concorrente.idConcorrente, 'FVST2-004');
+});
+
+test('PUT muda Externo para Concorrente criando somente registro mínimo', async () => {
+    const payload = payloadAtualizacao({ idTipoUsuario: 2, idSituacao: 3 });
+    const detalhe = linhaDetalheAtualizada({ id_tipo_usuario: 2, tipo: 'Concorrente', id_situacao: 3, concorrente_usuario_id: 8 });
+    const resultado = await executarAtualizacao({ payload, detalhe });
+    assert.equal(resultado.res.statusCode, 200);
+    const insert = resultado.consultas.find(({ sql }) => sql.startsWith('INSERT INTO ist_concorrentes'));
+    assert.equal(insert.sql, 'INSERT INTO ist_concorrentes (id_usuario) VALUES (?)');
+    assert.deepEqual(insert.params, [8]);
+    assert.doesNotMatch(insert.sql, /id_concorrente|aceite|obra|video|confirmacao/);
+});
+
+test('PUT retorna a Concorrente reutilizando registro histórico integralmente', async () => {
+    const payload = payloadAtualizacao({ idTipoUsuario: 2, idSituacao: 3 });
+    const detalhe = linhaDetalheAtualizada({
+        id_tipo_usuario: 2,
+        tipo: 'Concorrente',
+        id_situacao: 3,
+        concorrente_usuario_id: 8,
+        id_concorrente: 'FVST2-009',
+        id_obra_1: 22,
+        aceite_regulamento: 1,
+        confirmacao_inscricao_enviada: 1
+    });
+    const resultado = await executarAtualizacao({ payload, concorrenteExiste: true, detalhe });
+    assert.equal(resultado.res.statusCode, 200);
+    assert.equal(resultado.consultas.some(({ sql }) => sql.startsWith('INSERT INTO ist_concorrentes')), false);
+    assert.equal(resultado.res.body.concorrente.idConcorrente, 'FVST2-009');
+    assert.equal(resultado.res.body.concorrente.idObra1, 22);
+    assert.equal(resultado.res.body.concorrente.aceiteRegulamento, true);
+    assert.equal(resultado.res.body.concorrente.confirmacaoInscricaoEnviada, true);
+});
+
+test('PUT impede administrador de alterar o próprio tipo', async () => {
+    const resultado = await executarAtualizacao({
+        idUsuario: 10,
+        idAdministrador: 10,
+        usuarioAtual: { id_usuario: 10, id_tipo_usuario: 1, id_situacao: 1 }
+    });
+    assert.equal(resultado.res.statusCode, 403);
+});
+
+test('PUT impede administrador de alterar a própria situação', async () => {
+    const resultado = await executarAtualizacao({
+        idUsuario: 10,
+        idAdministrador: 10,
+        usuarioAtual: { id_usuario: 10, id_tipo_usuario: 1, id_situacao: 1 },
+        payload: payloadAtualizacao({ idTipoUsuario: 1, idSituacao: 2 })
+    });
+    assert.equal(resultado.res.statusCode, 403);
+});
+
+test('PUT permite administrador enviar o mesmo tipo e situação ao atualizar os próprios dados', async () => {
+    const payload = payloadAtualizacao({ idTipoUsuario: 1, idSituacao: 1 });
+    const resultado = await executarAtualizacao({
+        idUsuario: 10,
+        idAdministrador: 10,
+        usuarioAtual: { id_usuario: 10, id_tipo_usuario: 1, id_situacao: 1 },
+        payload
+    });
+    assert.equal(resultado.res.statusCode, 200);
+    assert.equal(resultado.estado.commits, 1);
+});
+
+test('PUT rejeita dataAtualizacao como campo não permitido', async () => {
+    const resultado = await executarAtualizacao({
+        payload: payloadAtualizacao({ dataAtualizacao: '2026-10-01T10:00:00.000Z' })
+    });
+    assert.equal(resultado.res.statusCode, 400);
+    assert.equal(resultado.estado.iniciou, 0);
+});
+
+test('PUT rejeita campos proibidos sem abrir transação', async () => {
+    for (const campo of [
+        'email', 'emailConfirmado', 'celularConfirmado', 'senha', 'foto', 'curriculo',
+        'tokenConfirmacao', 'tokenExpiraEm', 'tokenTipo', 'idConcorrente', 'idObra1',
+        'idObra2', 'linkVideo1', 'linkVideo2', 'aceiteRegulamento',
+        'confirmacaoInscricaoEnviada', 'confirmacaoInscricaoEnviadaEm', 'dataCadastro'
+    ]) {
+        const resultado = await executarAtualizacao({ payload: payloadAtualizacao({ [campo]: 'proibido' }) });
+        assert.equal(resultado.res.statusCode, 400);
+        assert.equal(resultado.estado.iniciou, 0);
+    }
+});
+
+test('PUT executa rollback e não expõe detalhes internos em falha', async () => {
+    const consoleErrorOriginal = console.error;
+    console.error = () => {};
+    let resultado;
+    try {
+        resultado = await executarAtualizacao({ falharEmUpdate: true });
+    } finally {
+        console.error = consoleErrorOriginal;
+    }
+    assert.equal(resultado.res.statusCode, 500);
+    assert.equal(resultado.estado.rollbacks, 1);
+    assert.equal(resultado.estado.commits, 0);
+    assert.deepEqual(resultado.res.body, { message: 'Não foi possível concluir a consulta administrativa.' });
+});
+
+test('resposta do PUT não expõe senha, tokens ou segredos', async () => {
+    const detalhe = linhaDetalheAtualizada({ senha: 'hash', token_confirmacao: 'token', token_tipo: 'email' });
+    const resultado = await executarAtualizacao({ detalhe });
+    const json = JSON.stringify(resultado.res.body);
+    assert.equal(json.includes('senha'), false);
+    assert.equal(json.includes('token'), false);
 });

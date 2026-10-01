@@ -1,5 +1,6 @@
 import express from 'express';
 import {
+    atualizarUsuarioAdmin,
     listarOpcoesUsuariosAdmin,
     listarSituacoesUsuarioAdmin,
     listarUsuariosAdmin,
@@ -15,5 +16,6 @@ router.get('/', ...protegerAdmin, listarUsuariosAdmin);
 router.get('/opcoes', ...protegerAdmin, listarOpcoesUsuariosAdmin);
 router.get('/situacoes', ...protegerAdmin, listarSituacoesUsuarioAdmin);
 router.get('/:id', ...protegerAdmin, obterUsuarioAdmin);
+router.put('/:id', ...protegerAdmin, atualizarUsuarioAdmin);
 
 export default router;
