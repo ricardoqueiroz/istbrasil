@@ -2,6 +2,7 @@ import { CommonModule } from '@angular/common';
 import { Component, DestroyRef, OnInit, inject } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { FormsModule } from '@angular/forms';
+import { Router } from '@angular/router';
 import { ButtonModule } from 'primeng/button';
 import { InputTextModule } from 'primeng/inputtext';
 import { SelectModule } from 'primeng/select';
@@ -111,15 +112,15 @@ const CAMPOS_ORDENACAO = new Set<UsuariosAdminSortField>([
 
                     <ng-template #body let-usuario>
                         <tr>
-                            <td class="font-medium text-surface-900 dark:text-white">{{ usuario.nome }}</td>
+                            <td class="font-medium">{{ usuario.nome }}</td>
                             <td>{{ usuario.email }}</td>
                             <td>{{ usuario.tipo }}</td>
                             <td>{{ usuario.cargo || '—' }}</td>
                             <td>{{ usuario.situacao || '—' }}</td>
                             <td>{{ formatarDataCadastro(usuario.dataCadastro) }}</td>
                             <td class="text-center">
-                                <span pTooltip="Edição disponível na próxima etapa" tooltipPosition="left" class="inline-flex">
-                                    <button pButton type="button" icon="pi pi-pencil" class="p-button-text p-button-rounded" aria-label="Editar usuário" disabled></button>
+                                <span pTooltip="Editar usuário" tooltipPosition="left" class="inline-flex">
+                                    <button pButton type="button" icon="pi pi-pencil" class="p-button-text p-button-rounded" aria-label="Editar usuário" (click)="editarUsuario(usuario.idUsuario)"></button>
                                 </span>
                             </td>
                         </tr>
@@ -139,6 +140,7 @@ const CAMPOS_ORDENACAO = new Set<UsuariosAdminSortField>([
 })
 export class ListarCadastrosComponent implements OnInit {
     private readonly service = inject(CadastrosAdminService);
+    private readonly router = inject(Router);
     private readonly destroyRef = inject(DestroyRef);
     private readonly buscaSubject = new Subject<string>();
     private requisicaoAtual = 0;
@@ -266,6 +268,10 @@ export class ListarCadastrosComponent implements OnInit {
             dateStyle: 'short',
             timeStyle: 'short'
         }).format(data);
+    }
+
+    async editarUsuario(idUsuario: number): Promise<void> {
+        await this.router.navigate(['/admin/cadastros', idUsuario, 'editar']);
     }
 
     private async carregarOpcoes(): Promise<void> {

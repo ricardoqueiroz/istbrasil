@@ -1,6 +1,8 @@
 import { Injectable } from '@angular/core';
 import {
     SituacaoAdmin,
+    UsuarioAdminAtualizacaoPayload,
+    UsuarioAdminDetalheResponse,
     UsuariosAdminFiltros,
     UsuariosAdminOpcoes,
     UsuariosAdminResponse
@@ -45,11 +47,23 @@ export class CadastrosAdminService {
         return this.requisitar<SituacaoAdmin[]>(`${this.baseUrl}/situacoes?${params.toString()}`);
     }
 
-    private async requisitar<T>(url: string): Promise<T> {
+    async obterUsuario(idUsuario: number): Promise<UsuarioAdminDetalheResponse> {
+        return this.requisitar<UsuarioAdminDetalheResponse>(`${this.baseUrl}/${idUsuario}`);
+    }
+
+    async atualizarUsuario(idUsuario: number, payload: UsuarioAdminAtualizacaoPayload): Promise<UsuarioAdminDetalheResponse> {
+        return this.requisitar<UsuarioAdminDetalheResponse>(`${this.baseUrl}/${idUsuario}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+    }
+
+    private async requisitar<T>(url: string, init?: RequestInit): Promise<T> {
         let response: Response;
 
         try {
-            response = await fetch(url, { credentials: 'include' });
+            response = await fetch(url, { ...init, credentials: 'include' });
         } catch {
             throw new CadastrosAdminServiceError('Não foi possível comunicar com o servidor.', 0);
         }

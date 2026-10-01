@@ -5,5 +5,9 @@ export default [
     {
         path: 'listar',
         loadComponent: () => import('./listar/listar.component').then((m) => m.ListarCadastrosComponent)
+    },
+    {
+        path: ':id/editar',
+        loadComponent: () => import('./editar/editar.component').then((m) => m.EditarCadastroComponent)
     }
 ] as Routes;
