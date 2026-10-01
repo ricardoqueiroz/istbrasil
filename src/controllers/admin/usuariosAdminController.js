@@ -25,7 +25,7 @@ const CAMPOS_ATUALIZACAO = new Set([
 ]);
 
 const CAMPOS_OBRIGATORIOS_ATUALIZACAO = [
-    'nome', 'cpf', 'identidade', 'dataNascimento', 'idTipoUsuario', 'idCargo',
+    'nome', 'cpf', 'dataNascimento', 'idTipoUsuario', 'idCargo',
     'idSituacao', 'telefoneCelular', 'logradouro', 'numero', 'complemento',
     'bairro', 'cidade', 'uf', 'cep'
 ];
@@ -148,7 +148,7 @@ const prepararAtualizacaoUsuario = (body) => {
     const camposTextoObrigatorios = ['nome', 'dataNascimento', 'telefoneCelular', 'logradouro', 'numero', 'bairro', 'cidade', 'uf', 'cep'];
     const camposTextoOpcionais = ['identidade', 'complemento'];
     if (camposTextoObrigatorios.some((campo) => typeof body[campo] !== 'string')
-        || camposTextoOpcionais.some((campo) => body[campo] !== null && typeof body[campo] !== 'string')
+        || camposTextoOpcionais.some((campo) => body[campo] !== undefined && body[campo] !== null && typeof body[campo] !== 'string')
         || (typeof body.cpf !== 'string' && typeof body.cpf !== 'number')) {
         return { error: 'Os dados textuais do usuário são inválidos.' };
     }

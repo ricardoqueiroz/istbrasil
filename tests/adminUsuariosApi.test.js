@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import jwt from 'jsonwebtoken';
 import test from 'node:test';
 import { pool as db } from '../src/config/db.js';
@@ -516,6 +517,47 @@ test('PUT rejeita CPF inválido antes de abrir transação', async () => {
     const resultado = await executarAtualizacao({ payload: payloadAtualizacao({ cpf: '111.111.111-11' }) });
     assert.equal(resultado.res.statusCode, 400);
     assert.equal(resultado.estado.iniciou, 0);
+});
+
+test('PUT aceita identidade válida e persiste o valor', async () => {
+    const resultado = await executarAtualizacao({ payload: payloadAtualizacao({ identidade: '038088068' }) });
+    assert.equal(resultado.res.statusCode, 200);
+    const update = resultado.consultas.find(({ sql }) => sql.startsWith('UPDATE ist_usuarios'));
+    assert.equal(update.params[2], '038088068');
+});
+
+test('PUT aceita identidade null e persiste null', async () => {
+    const resultado = await executarAtualizacao({ payload: payloadAtualizacao({ identidade: null }) });
+    assert.equal(resultado.res.statusCode, 200);
+    const update = resultado.consultas.find(({ sql }) => sql.startsWith('UPDATE ist_usuarios'));
+    assert.equal(update.params[2], null);
+});
+
+test('PUT aceita identidade vazia e normaliza para null', async () => {
+    const resultado = await executarAtualizacao({ payload: payloadAtualizacao({ identidade: '' }) });
+    assert.equal(resultado.res.statusCode, 200);
+    const update = resultado.consultas.find(({ sql }) => sql.startsWith('UPDATE ist_usuarios'));
+    assert.equal(update.params[2], null);
+});
+
+test('PUT aceita identidade ausente e normaliza para null', async () => {
+    const payload = payloadAtualizacao();
+    delete payload.identidade;
+    const resultado = await executarAtualizacao({ payload });
+    assert.equal(resultado.res.statusCode, 200);
+    const update = resultado.consultas.find(({ sql }) => sql.startsWith('UPDATE ist_usuarios'));
+    assert.equal(update.params[2], null);
+});
+
+test('formulário frontend não exige identidade e normaliza vazio para null', async () => {
+    const componente = await readFile(
+        new URL('../src/app/pages/admin/cadastros/editar/editar.component.ts', import.meta.url),
+        'utf8'
+    );
+    assert.match(componente, /Identidade \(opcional\)/);
+    assert.doesNotMatch(componente, /id="usuarioIdentidade"[^>]*required/);
+    assert.doesNotMatch(componente, /!dados\.identidade\.trim\(\)/);
+    assert.match(componente, /identidade: this\.formulario\.identidade\.trim\(\) \|\| null/);
 });
 
 test('PUT retorna 409 e rollback para CPF duplicado', async () => {
