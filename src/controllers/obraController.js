@@ -1,6 +1,6 @@
 // Relação de Obras Musicais do Patrono Sebastião Tapajós - Controller
 import { pool as db } from '../config/db.js';
-import { OBRA_PRINCIPAL_CONCORRENTE } from '../config/festival.js';
+import { FESTIVAL_II } from '../config/festival.js';
 
 const getAllObras = async (req, res) => {
     try {
@@ -62,11 +62,11 @@ const consultarObraPrincipal = async () => {
         `SELECT id_obra, titulo, partitura, propria
          FROM ist_composicao
          WHERE id_obra = ?`,
-        [OBRA_PRINCIPAL_CONCORRENTE.idObra]
+        [FESTIVAL_II.idObraPrincipal]
     );
     const obra = rows[0];
 
-    if (!obra || Number(obra.id_obra) !== OBRA_PRINCIPAL_CONCORRENTE.idObra || Number(obra.propria) !== 1) {
+    if (!obra || Number(obra.id_obra) !== FESTIVAL_II.idObraPrincipal || Number(obra.propria) !== 1) {
         throw new Error('Obra principal do concorrente não encontrada ou inelegível.');
     }
 
@@ -89,7 +89,7 @@ const consultarComposicoesElegiveis = async () => {
                          GROUP BY titulo
                  ) escolhida ON escolhida.id_obra = c.id_obra
                  ORDER BY c.titulo`,
-        [OBRA_PRINCIPAL_CONCORRENTE.idObra]
+        [FESTIVAL_II.idObraPrincipal]
     );
 
     return rows.map((obra) => ({

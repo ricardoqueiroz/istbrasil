@@ -1,3 +1,5 @@
-export const OBRA_PRINCIPAL_CONCORRENTE = Object.freeze({
-    idObra: 22
+export const FESTIVAL_II = Object.freeze({
+    slug: 'ii-festival-de-violoes-sebastiao-tapajos',
+    prefixoInscricao: 'FVST2',
+    idObraPrincipal: 22
 });

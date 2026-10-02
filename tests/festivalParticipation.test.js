@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { pool as db } from '../src/config/db.js';
-import { OBRA_PRINCIPAL_CONCORRENTE } from '../src/config/festival.js';
+import { FESTIVAL_II } from '../src/config/festival.js';
+import { resolverEventoPorSlug } from '../src/services/festivalEventoService.js';
 import obraController from '../src/controllers/obraController.js';
 import usuariosController from '../src/controllers/usuariosController.js';
 
@@ -28,7 +29,7 @@ const criarResposta = () => {
 
 const normalizarSql = (sql) => sql.replace(/\s+/g, ' ').trim();
 
-const executarAtualizacao = async ({ aceitePersistido, idObra1, idObra2, obraSecundaria }) => {
+const executarAtualizacao = async ({ aceitePersistido, idObra1, idObra2, obraSecundaria, idEvento = 1, concluir = false, sequencia = [], emailPendente = false }) => {
     const consultas = [];
     const connection = {
         async beginTransaction() {},
@@ -42,16 +43,26 @@ const executarAtualizacao = async ({ aceitePersistido, idObra1, idObra2, obraSec
             if (consulta.startsWith('SELECT id_tipo_usuario FROM ist_usuarios')) {
                 return [[{ id_tipo_usuario: 2 }]];
             }
-            if (consulta.includes('SELECT id_concorrente, id_obra_1, aceite_regulamento')) {
+            if (consulta.includes('FROM ist_eventos WHERE slug = ?')) {
+                return [[{ id: idEvento, slug: params[0], status: 'Inscricoes_Abertas' }]];
+            }
+            if (consulta.includes('SELECT id_concorrente, numero_concorrente, id_obra_1')) {
                 return [[{
-                    id_concorrente: aceitePersistido ? 'FVST2-001' : null,
+                    id_concorrente: 17,
+                    numero_concorrente: aceitePersistido ? 'FVST2-001' : null,
                     id_obra_1: idObra1,
                     aceite_regulamento: aceitePersistido ? 1 : 0,
-                    confirmacao_inscricao_enviada: 1
+                    confirmacao_inscricao_enviada: emailPendente ? 0 : 1
                 }]];
             }
+            if (consulta.startsWith('SELECT GET_LOCK') || consulta.startsWith('SELECT RELEASE_LOCK')) {
+                return [[{ adquirido: 1, liberado: 1 }]];
+            }
+            if (consulta.startsWith('SELECT numero_concorrente FROM ist_concorrentes')) {
+                return [sequencia.map((numero_concorrente) => ({ numero_concorrente }))];
+            }
             if (consulta.includes('FROM ist_composicao WHERE id_obra = ?')) {
-                if (params[0] === OBRA_PRINCIPAL_CONCORRENTE.idObra) {
+                if (params[0] === FESTIVAL_II.idObraPrincipal) {
                     return [[{ id_obra: params[0], titulo: 'Título vindo do banco', partitura: null, propria: 1 }]];
                 }
                 if (aceitePersistido && params[0] === idObra1) {
@@ -69,7 +80,21 @@ const executarAtualizacao = async ({ aceitePersistido, idObra1, idObra2, obraSec
     };
 
     const getConnectionOriginal = db.getConnection;
+    const queryOriginal = db.query;
     db.getConnection = async () => connection;
+    if (emailPendente) {
+        db.query = async (sql, params) => {
+            const consulta = normalizarSql(sql);
+            consultas.push({ sql: consulta, params });
+            if (consulta.includes('FROM ist_eventos WHERE slug = ?')) {
+                return [[{ id: idEvento, slug: params[0], status: 'Inscricoes_Abertas' }]];
+            }
+            if (consulta.includes('INNER JOIN ist_concorrentes c')) {
+                return [[{ id_concorrente: 17, numero_concorrente: 'FVST2-008', aceite_regulamento: 1, confirmacao_inscricao_enviada: 1 }]];
+            }
+            throw new Error(`Consulta de e-mail não simulada: ${consulta}`);
+        };
+    }
     const resposta = criarResposta();
     try {
         await usuariosController.atualizarParticipacaoConcorrente(
@@ -78,21 +103,167 @@ const executarAtualizacao = async ({ aceitePersistido, idObra1, idObra2, obraSec
                 body: {
                     linkVideo1: VIDEO_1,
                     idObra2,
-                    linkVideo2: idObra2 == null ? null : VIDEO_2
+                    linkVideo2: idObra2 == null ? null : VIDEO_2,
+                    ...(concluir ? { aceiteRegulamento: true } : {})
                 }
             },
             resposta
         );
     } finally {
         db.getConnection = getConnectionOriginal;
+        db.query = queryOriginal;
     }
 
     return { resposta, consultas };
 };
 
-test('configuração canônica contém somente o ID 22', () => {
-    assert.deepEqual(OBRA_PRINCIPAL_CONCORRENTE, { idObra: 22 });
-    assert.equal(Object.isFrozen(OBRA_PRINCIPAL_CONCORRENTE), true);
+test('configuração canônica contém slug, prefixo e obra do II Festival', () => {
+    assert.deepEqual(FESTIVAL_II, {
+        slug: 'ii-festival-de-violoes-sebastiao-tapajos',
+        prefixoInscricao: 'FVST2',
+        idObraPrincipal: 22
+    });
+    assert.equal(Object.isFrozen(FESTIVAL_II), true);
+});
+
+test('schema versionado identifica participação por PK e usuário/evento', async () => {
+    const [tabela, constraints] = await Promise.all([
+        readFile(new URL('../database/istbrasil_table_ist_concorrentes.sql', import.meta.url), 'utf8'),
+        readFile(new URL('../database/istbrasil_extra.sql', import.meta.url), 'utf8')
+    ]);
+    assert.match(tabela, /id_concorrente int\(10\) UNSIGNED NOT NULL/);
+    assert.match(tabela, /id_usuario int\(11\) NOT NULL/);
+    assert.match(tabela, /id_evento int\(10\) UNSIGNED NOT NULL/);
+    assert.match(tabela, /numero_concorrente varchar\(50\) DEFAULT NULL/);
+    assert.match(tabela, /INSERT INTO ist_concorrentes \(id_usuario, id_evento, numero_concorrente,/);
+    assert.match(tabela, /\(2, 1, 'FVST2-001', 22,/);
+    assert.match(constraints, /ADD PRIMARY KEY \(id_concorrente\)/);
+    assert.match(constraints, /UNIQUE KEY concorrente_usuario_evento_unico \(id_usuario, id_evento\)/);
+    assert.match(constraints, /UNIQUE KEY numero_concorrente_evento_unico \(id_evento, numero_concorrente\)/);
+    assert.match(constraints, /MODIFY id_concorrente int\(10\) UNSIGNED NOT NULL AUTO_INCREMENT/);
+    assert.match(constraints, /FOREIGN KEY \(id_evento\) REFERENCES ist_eventos \(id\)/);
+    assert.match(constraints, /FOREIGN KEY \(id_obra_[12]\) REFERENCES ist_composicao \(id_obra\)/);
+});
+
+test('resolvedor consulta o slug e rejeita evento ausente ou indisponível', async () => {
+    const consultas = [];
+    const executor = {
+        query: async (sql, params) => {
+            consultas.push({ sql: normalizarSql(sql), params });
+            return [[{ id: 5, slug: params[0], status: 'Inscricoes_Abertas' }]];
+        }
+    };
+    assert.equal((await resolverEventoPorSlug(FESTIVAL_II.slug, executor)).id, 5);
+    assert.deepEqual(consultas[0].params, [FESTIVAL_II.slug]);
+    await assert.rejects(resolverEventoPorSlug(FESTIVAL_II.slug, { query: async () => [[]] }), /indisponível/);
+    await assert.rejects(resolverEventoPorSlug(FESTIVAL_II.slug, {
+        query: async (_sql, params) => [[{ id: 5, slug: params[0], status: 'Cancelado' }]]
+    }), /indisponível/);
+});
+
+test('adesão reutiliza somente a participação do mesmo evento e cria a de outro evento', async () => {
+    const existentes = new Set([1]);
+    const consultas = [];
+    let eventoAtual = 1;
+    const connection = {
+        async beginTransaction() {},
+        async commit() {},
+        async rollback() {},
+        release() {},
+        async query(sql, params = []) {
+            const consulta = normalizarSql(sql);
+            consultas.push({ sql: consulta, params });
+            if (consulta.startsWith('SELECT id_usuario, id_tipo_usuario, id_situacao')) {
+                return [[{ id_usuario: 7, id_tipo_usuario: 2, id_situacao: 3, nome: 'Teste', foto: null }]];
+            }
+            if (consulta.includes('FROM ist_eventos WHERE slug = ?')) {
+                return [[{ id: eventoAtual, slug: params[0], status: 'Inscricoes_Abertas' }]];
+            }
+            if (consulta.startsWith('SELECT id_concorrente FROM ist_concorrentes')) {
+                return [existentes.has(params[1]) ? [{ id_concorrente: 17 }] : []];
+            }
+            if (consulta.startsWith('INSERT INTO ist_concorrentes')) {
+                existentes.add(params[1]);
+                return [{ affectedRows: 1 }];
+            }
+            throw new Error(`Consulta não simulada: ${consulta}`);
+        }
+    };
+    const getConnectionOriginal = db.getConnection;
+    db.getConnection = async () => connection;
+    const aderir = async () => {
+        const res = {
+            statusCode: 200,
+            status(codigo) { this.statusCode = codigo; return this; },
+            cookie() {},
+            json(conteudo) { this.body = conteudo; return this; }
+        };
+        await usuariosController.aderirAoFestivalComoConcorrente({ usuario: { id_usuario: 7 }, cookies: {} }, res);
+        assert.equal(res.statusCode, 200);
+    };
+    try {
+        await aderir();
+        eventoAtual = 9;
+        await aderir();
+        await aderir();
+    } finally {
+        db.getConnection = getConnectionOriginal;
+    }
+    assert.deepEqual(consultas.filter(({ sql }) => sql.startsWith('SELECT id_concorrente FROM ist_concorrentes'))
+        .map(({ params }) => params), [[7, 1], [7, 9], [7, 9]]);
+    assert.deepEqual(consultas.filter(({ sql }) => sql.startsWith('INSERT INTO ist_concorrentes'))
+        .map(({ params }) => params), [[7, 9]]);
+});
+
+test('conclusão gera FVST2 por evento e grava apenas na PK da participação', async () => {
+    const { resposta, consultas } = await executarAtualizacao({
+        aceitePersistido: false,
+        idObra1: null,
+        idObra2: null,
+        obraSecundaria: null,
+        idEvento: 9,
+        concluir: true,
+        sequencia: ['FVST2-003', 'FVST2-007']
+    });
+    assert.equal(resposta.statusCode, 200);
+    assert.equal(resposta.body.concorrente.numeroConcorrente, 'FVST2-008');
+    assert.deepEqual(consultas.find(({ sql }) => sql.startsWith('SELECT numero_concorrente FROM ist_concorrentes')).params,
+        [9, '^FVST2-[0-9]+$']);
+    const lock = consultas.find(({ sql }) => sql.startsWith('SELECT GET_LOCK')).params[0];
+    assert.match(lock, /:9:FVST2$/);
+    assert.deepEqual(consultas.find(({ sql }) => sql.startsWith('SELECT RELEASE_LOCK')).params, [lock]);
+    const aceite = consultas.find(({ sql }) => sql.includes('SET numero_concorrente = ?'));
+    assert.deepEqual(aceite.params, ['FVST2-008', 17]);
+    assert.match(aceite.sql, /WHERE id_concorrente = \?/);
+});
+
+test('confirmação carrega snapshot da participação do evento e número público', async () => {
+    const { resposta, consultas } = await executarAtualizacao({
+        aceitePersistido: false,
+        idObra1: null,
+        idObra2: null,
+        obraSecundaria: null,
+        idEvento: 9,
+        concluir: true,
+        emailPendente: true
+    });
+    assert.equal(resposta.statusCode, 200);
+    assert.equal(resposta.body.concorrente.confirmacaoInscricaoEnviada, true);
+    const snapshot = consultas.find(({ sql }) => sql.includes('INNER JOIN ist_concorrentes c'));
+    assert.deepEqual(snapshot.params, [7, 9]);
+    assert.match(snapshot.sql, /c\.numero_concorrente/);
+    assert.match(snapshot.sql, /WHERE u\.id_usuario = \? AND c\.id_evento = \?/);
+    const fonte = await readFile(new URL('../src/controllers/usuariosController.js', import.meta.url), 'utf8');
+    assert.match(fonte, /numero_concorrente: String\(snapshot\.numero_concorrente/);
+    assert.match(fonte, /SET confirmacao_inscricao_enviada = 1,[\s\S]*?WHERE id_concorrente = \?/);
+    assert.match(fonte, /\[snapshot\.id_concorrente\]/);
+});
+
+test('cadastro público cria participação com evento resolvido, não com ID fornecido pelo cliente', async () => {
+    const fonte = await readFile(new URL('../src/controllers/usuariosController.js', import.meta.url), 'utf8');
+    assert.match(fonte, /if \(tipo === 'concorrente'\) \{\s*const evento = await resolverEventoPorSlug\(FESTIVAL_II\.slug, connection\)/);
+    assert.match(fonte, /INSERT INTO ist_concorrentes\s*\(id_usuario, id_evento\)\s*VALUES \(\?, \?\)/);
+    assert.match(fonte, /\[result\.insertId, evento\.id\]/);
 });
 
 test('API obtém metadados da obra principal no banco e mantém elegíveis sem exigir partitura', async () => {
@@ -135,6 +306,10 @@ test('obra 2 própria com partitura nula é aceita e inscrição aberta grava ob
 
     assert.equal(resposta.statusCode, 200);
     assert.equal(resposta.body.concorrente.idObra1, 22);
+    assert.equal(resposta.body.concorrente.numeroConcorrente, null);
+    assert.equal(Object.hasOwn(resposta.body.concorrente, 'idConcorrente'), false);
+    const consultaParticipacao = consultas.find(({ sql }) => sql.includes('SELECT id_concorrente, numero_concorrente, id_obra_1'));
+    assert.deepEqual(consultaParticipacao.params, [7, 1]);
     const validacaoObra2 = consultas.find(({ sql }) => sql.includes('AND propria = 1'));
     assert.ok(validacaoObra2);
     assert.equal(validacaoObra2.sql.includes('partitura IS NOT NULL'), false);
@@ -142,6 +317,8 @@ test('obra 2 própria com partitura nula é aceita e inscrição aberta grava ob
     const atualizacao = consultas.find(({ sql }) => sql.startsWith('UPDATE ist_concorrentes'));
     assert.match(atualizacao.sql, /SET id_obra_1 = \?/);
     assert.equal(atualizacao.params[0], 22);
+    assert.match(atualizacao.sql, /WHERE id_concorrente = \?/);
+    assert.equal(atualizacao.params.at(-1), 17);
 });
 
 test('obra 2 não própria é rejeitada', async () => {
@@ -181,6 +358,7 @@ test('inscrição aceita preserva a obra principal histórica', async () => {
     assert.equal(resposta.body.concorrente.tituloObra1, 'Título histórico vindo do banco');
     const atualizacao = consultas.find(({ sql }) => sql.startsWith('UPDATE ist_concorrentes'));
     assert.doesNotMatch(atualizacao.sql, /id_obra_1/);
+    assert.equal(atualizacao.params.at(-1), 17);
 });
 
 test('frontend não fixa obra antiga e fluxos de e-mail e FVST2 permanecem baseados na inscrição', async () => {
@@ -200,5 +378,5 @@ test('frontend não fixa obra antiga e fluxos de e-mail e FVST2 permanecem basea
     assert.doesNotMatch([configuracao, ...controladores].join('\n'), /Ana Luiza(?:\.pdf)?/);
     assert.match(controladores[1], /c\.id_obra_1[\s\S]*LEFT JOIN ist_composicao obra1 ON obra1\.id_obra = c\.id_obra_1/);
     assert.match(controladores[1], /SELECT GET_LOCK\(\?, 10\) AS adquirido/);
-    assert.match(controladores[1], /PREFIXO_INSCRICAO_FESTIVAL = 'FVST2'/);
+    assert.match(controladores[1], /FESTIVAL_II\.prefixoInscricao/);
 });

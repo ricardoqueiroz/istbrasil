@@ -96,38 +96,14 @@ const SQL_USUARIO_DETALHE = `SELECT u.id_usuario, u.nome, u.cpf, u.identidade, u
         u.id_situacao, s.situacao, u.email, u.telefone_celular,
         u.logradouro, u.numero, u.complemento, u.bairro, u.cidade,
         u.uf, u.cep, u.foto, u.curriculo, u.email_confirmado,
-        u.celular_confirmado, u.data_cadastro, u.data_atualizacao,
-        concorrente.id_usuario AS concorrente_usuario_id,
-        concorrente.id_concorrente, concorrente.id_obra_1,
-        concorrente.link_video_1, concorrente.id_obra_2,
-        concorrente.link_video_2, concorrente.aceite_regulamento,
-        concorrente.confirmacao_inscricao_enviada,
-        concorrente.confirmacao_inscricao_enviada_em,
-        concorrente.data_cadastro AS concorrente_data_cadastro
+        u.celular_confirmado, u.data_cadastro, u.data_atualizacao
  FROM ist_usuarios u
  INNER JOIN ist_tipo_usuario tu ON tu.id_tipo = u.id_tipo_usuario
  LEFT JOIN ist_cargo c ON c.id_cargo = u.id_cargo
  LEFT JOIN ist_situacao s ON s.id_situacao = u.id_situacao
- LEFT JOIN ist_concorrentes concorrente ON concorrente.id_usuario = u.id_usuario
  WHERE u.id_usuario = ?`;
 
-const montarRespostaDetalhe = (row) => {
-    const resposta = { usuario: mapearUsuarioDetalhe(row) };
-    if (row.concorrente_usuario_id !== null && row.concorrente_usuario_id !== undefined) {
-        resposta.concorrente = {
-            idConcorrente: row.id_concorrente,
-            idObra1: row.id_obra_1,
-            linkVideo1: row.link_video_1,
-            idObra2: row.id_obra_2,
-            linkVideo2: row.link_video_2,
-            aceiteRegulamento: Boolean(row.aceite_regulamento),
-            confirmacaoInscricaoEnviada: Boolean(row.confirmacao_inscricao_enviada),
-            confirmacaoInscricaoEnviadaEm: row.confirmacao_inscricao_enviada_em,
-            dataCadastro: row.concorrente_data_cadastro
-        };
-    }
-    return resposta;
-};
+const montarRespostaDetalhe = (row) => ({ usuario: mapearUsuarioDetalhe(row) });
 
 const buscarUsuarioDetalhe = async (executor, idUsuario) => {
     const [rows] = await executor.query(SQL_USUARIO_DETALHE, [idUsuario]);
@@ -418,16 +394,6 @@ export const atualizarUsuarioAdmin = async (req, res) => {
                 dados.logradouro, dados.numero, dados.complemento, dados.bairro,
                 dados.cidade, dados.uf, dados.cep, idUsuario]
         );
-
-        if (dados.idTipoUsuario === 2) {
-            const [concorrenteRows] = await connection.query(
-                'SELECT id_usuario FROM ist_concorrentes WHERE id_usuario = ? FOR UPDATE',
-                [idUsuario]
-            );
-            if (concorrenteRows.length === 0) {
-                await connection.query('INSERT INTO ist_concorrentes (id_usuario) VALUES (?)', [idUsuario]);
-            }
-        }
 
         const usuarioAtualizado = await buscarUsuarioDetalhe(connection, idUsuario);
         await connection.commit();

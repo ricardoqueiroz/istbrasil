@@ -116,7 +116,7 @@ import { PerfilService, PerfilServiceError } from '../../../perfil/services/perf
 export class ConcorrenteVideosComponent implements OnInit {
     usuario: PerfilUsuario | null = null;
     participacao: ParticipacaoConcorrente = {
-        idConcorrente: null,
+        numeroConcorrente: null,
         idObra1: null,
         tituloObra1: null,
         linkVideo1: null,
@@ -144,7 +144,7 @@ export class ConcorrenteVideosComponent implements OnInit {
     ) {}
 
     get numeroConcorrente(): string {
-        return this.participacao.idConcorrente || 'Não atribuído';
+        return this.participacao.numeroConcorrente || 'Não atribuído';
     }
 
     ngOnInit(): void {

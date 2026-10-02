@@ -24,7 +24,7 @@ export interface PerfilUsuario {
 }
 
 export interface PerfilConcorrente {
-    idConcorrente: string | null;
+    numeroConcorrente: string | null;
     idObra1: number | null;
     tituloObra1: string | null;
     linkVideo1: string | null;
@@ -84,7 +84,7 @@ export interface ParticipacaoConcorrentePayload {
 }
 
 export interface ParticipacaoConcorrente {
-    idConcorrente?: string | null;
+    numeroConcorrente?: string | null;
     idObra1: number | null;
     tituloObra1: string | null;
     linkVideo1: string | null;

@@ -2,7 +2,8 @@ import crypto from 'crypto';
 import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
 import { pool as db } from '../config/db.js';
-import { OBRA_PRINCIPAL_CONCORRENTE } from '../config/festival.js';
+import { FESTIVAL_II } from '../config/festival.js';
+import { resolverEventoPorSlug } from '../services/festivalEventoService.js';
 import { enviarEmail } from '../services/mailService.js';
 import { comporEmailPorChave, EmailComposicaoError } from '../services/emailTemplateService.js';
 import {
@@ -24,8 +25,6 @@ import {
 const BCRYPT_ROUNDS = 12;
 const HASH_BCRYPT_DUMMY = '$2b$12$uKNr.LozCRYbjD.wVvB0deVP/B5NKLDqhYlI3swBl4j3.3y68xLeO';
 const TOKEN_VALIDADE_MINUTOS = 30;
-const PREFIXO_INSCRICAO_FESTIVAL = 'FVST2';
-const LOCK_SEQUENCIA_INSCRICAO_FESTIVAL = `istbrasil:concorrentes:sequencia:${PREFIXO_INSCRICAO_FESTIVAL}`;
 const RESPOSTA_NEUTRA_CADASTRO = 'Se for possível concluir o cadastro, enviaremos as instruções para o e-mail informado.';
 // Acrescenta a funcao do e-mail ao nome institucional, mantendo o mesmo fallback de mailService.
 const remetenteContextual = (contexto) => `${process.env.MAIL_FROM_NAME || 'IST Brasil'} (${contexto})`;
@@ -167,15 +166,17 @@ const aderirAoFestivalComoConcorrente = async (req, res) => {
             usuario.id_situacao = 3;
         }
 
+        const evento = await resolverEventoPorSlug(FESTIVAL_II.slug, connection);
+
         const [concorrenteRows] = await connection.query(
-            'SELECT id_usuario FROM ist_concorrentes WHERE id_usuario = ? FOR UPDATE',
-            [idUsuario]
+            'SELECT id_concorrente FROM ist_concorrentes WHERE id_usuario = ? AND id_evento = ? FOR UPDATE',
+            [idUsuario, evento.id]
         );
 
         if (concorrenteRows.length === 0) {
             await connection.query(
-                'INSERT INTO ist_concorrentes (id_usuario) VALUES (?)',
-                [idUsuario]
+                'INSERT INTO ist_concorrentes (id_usuario, id_evento) VALUES (?, ?)',
+                [idUsuario, evento.id]
             );
         }
 
@@ -250,9 +251,10 @@ const processarConfirmacaoInscricaoPendente = async (idUsuario) => {
     let snapshot;
 
     try {
+        const evento = await resolverEventoPorSlug(FESTIVAL_II.slug);
         const [rows] = await db.query(
             `SELECT u.nome, u.email, u.telefone_celular, u.data_nascimento, u.cidade, u.uf,
-                    c.id_concorrente, c.id_obra_1, c.link_video_1, c.id_obra_2, c.link_video_2,
+                    c.id_concorrente, c.numero_concorrente, c.id_obra_1, c.link_video_1, c.id_obra_2, c.link_video_2,
                     c.aceite_regulamento, c.confirmacao_inscricao_enviada,
                     obra1.titulo AS titulo_obra_1,
                     obra2.titulo AS titulo_obra_2
@@ -260,8 +262,8 @@ const processarConfirmacaoInscricaoPendente = async (idUsuario) => {
              INNER JOIN ist_concorrentes c ON c.id_usuario = u.id_usuario
              LEFT JOIN ist_composicao obra1 ON obra1.id_obra = c.id_obra_1
              LEFT JOIN ist_composicao obra2 ON obra2.id_obra = c.id_obra_2
-             WHERE u.id_usuario = ?`,
-            [idUsuario]
+             WHERE u.id_usuario = ? AND c.id_evento = ?`,
+            [idUsuario, evento.id]
         );
         snapshot = rows[0] || null;
     } catch (error) {
@@ -280,7 +282,7 @@ const processarConfirmacaoInscricaoPendente = async (idUsuario) => {
 
     const variaveis = {
         nome: String(snapshot.nome || 'Não informado'),
-        numero_concorrente: String(snapshot.id_concorrente || 'Não informado'),
+        numero_concorrente: String(snapshot.numero_concorrente || 'Não informado'),
         email: String(snapshot.email || 'Não informado'),
         telefone: String(snapshot.telefone_celular || 'Não informado'),
         data_nascimento: formatarDataApresentacao(snapshot.data_nascimento),
@@ -319,10 +321,10 @@ const processarConfirmacaoInscricaoPendente = async (idUsuario) => {
             `UPDATE ist_concorrentes
              SET confirmacao_inscricao_enviada = 1,
                  confirmacao_inscricao_enviada_em = NOW()
-             WHERE id_usuario = ?
+             WHERE id_concorrente = ?
                AND aceite_regulamento = 1
                AND confirmacao_inscricao_enviada = 0`,
-            [idUsuario]
+            [snapshot.id_concorrente]
         );
 
         if (result.affectedRows === 1) {
@@ -330,8 +332,8 @@ const processarConfirmacaoInscricaoPendente = async (idUsuario) => {
         }
 
         const [estadoRows] = await db.query(
-            'SELECT confirmacao_inscricao_enviada FROM ist_concorrentes WHERE id_usuario = ?',
-            [idUsuario]
+            'SELECT confirmacao_inscricao_enviada FROM ist_concorrentes WHERE id_concorrente = ?',
+            [snapshot.id_concorrente]
         );
         return Boolean(estadoRows[0]?.confirmacao_inscricao_enviada);
     } catch (error) {
@@ -340,10 +342,10 @@ const processarConfirmacaoInscricaoPendente = async (idUsuario) => {
     }
 };
 
-const liberarLockSequenciaInscricao = async (connection) => {
+const liberarLockSequenciaInscricao = async (connection, lockName) => {
     const [rows] = await connection.query(
         'SELECT RELEASE_LOCK(?) AS liberado',
-        [LOCK_SEQUENCIA_INSCRICAO_FESTIVAL]
+        [lockName]
     );
 
     if (Number(rows[0]?.liberado) !== 1) {
@@ -513,11 +515,12 @@ const cadastrar = async (req, res) => {
         );
 
         if (tipo === 'concorrente') {
+            const evento = await resolverEventoPorSlug(FESTIVAL_II.slug, connection);
             await connection.query(
                 `INSERT INTO ist_concorrentes
-                    (id_usuario, id_concorrente, id_obra_1, link_video_1, id_obra_2, link_video_2)
-                 VALUES (?, NULL, NULL, NULL, NULL, NULL)`,
-                [result.insertId]
+                    (id_usuario, id_evento)
+                 VALUES (?, ?)`,
+                [result.insertId, evento.id]
             );
         }
 
@@ -785,23 +788,24 @@ const obterPerfil = async (req, res) => {
         let concorrente = null;
 
         if (Number(usuario.id_tipo_usuario) === 2) {
+            const evento = await resolverEventoPorSlug(FESTIVAL_II.slug);
             const [concorrenteRows] = await db.query(
                 `SELECT c.id_usuario AS concorrente_usuario_id,
-                        c.id_concorrente, c.id_obra_1, c.link_video_1,
+                        c.numero_concorrente, c.id_obra_1, c.link_video_1,
                     c.id_obra_2, c.link_video_2, c.aceite_regulamento, c.data_cadastro,
                         obra1.titulo AS titulo_obra_1,
                         obra2.titulo AS titulo_obra_2
                  FROM ist_concorrentes c
                  LEFT JOIN ist_composicao obra1 ON obra1.id_obra = c.id_obra_1
                  LEFT JOIN ist_composicao obra2 ON obra2.id_obra = c.id_obra_2
-                 WHERE c.id_usuario = ?`,
-                [idUsuario]
+                 WHERE c.id_usuario = ? AND c.id_evento = ?`,
+                [idUsuario, evento.id]
             );
 
             if (concorrenteRows.length > 0 && concorrenteRows[0].concorrente_usuario_id !== null) {
                 const dadosConcorrente = concorrenteRows[0];
                 concorrente = {
-                    idConcorrente: dadosConcorrente.id_concorrente,
+                    numeroConcorrente: dadosConcorrente.numero_concorrente,
                     idObra1: dadosConcorrente.id_obra_1,
                     tituloObra1: dadosConcorrente.titulo_obra_1,
                     linkVideo1: dadosConcorrente.link_video_1,
@@ -935,6 +939,7 @@ const atualizarPerfil = async (req, res) => {
         const telefoneMudou = dados.telefoneCelular !== telefoneAtual;
         const concorrente = Number(usuarioAtual.id_tipo_usuario) === 2;
         let aceitePersistido = false;
+        let idEventoConcorrente;
         let executor = db;
 
         if (concorrente) {
@@ -942,13 +947,15 @@ const atualizarPerfil = async (req, res) => {
             await connection.beginTransaction();
             transacaoIniciada = true;
             executor = connection;
+            const evento = await resolverEventoPorSlug(FESTIVAL_II.slug, connection);
+            idEventoConcorrente = evento.id;
 
             const [concorrenteRows] = await connection.query(
                 `SELECT id_obra_1, link_video_1, id_obra_2, link_video_2, aceite_regulamento
                  FROM ist_concorrentes
-                 WHERE id_usuario = ?
+                 WHERE id_usuario = ? AND id_evento = ?
                  FOR UPDATE`,
-                [idUsuario]
+                [idUsuario, evento.id]
             );
 
             if (concorrenteRows.length === 0) {
@@ -967,7 +974,7 @@ const atualizarPerfil = async (req, res) => {
                     return res.status(400).json({ message: 'É necessário aceitar o Regulamento do Festival para salvar o perfil.' });
                 }
 
-                if (Number(dadosConcorrente.id_obra_1) !== OBRA_PRINCIPAL_CONCORRENTE.idObra || !validarVideoConcorrente(dadosConcorrente.link_video_1)) {
+                if (Number(dadosConcorrente.id_obra_1) !== FESTIVAL_II.idObraPrincipal || !validarVideoConcorrente(dadosConcorrente.link_video_1)) {
                     await connection.rollback();
                     transacaoIniciada = false;
                     return res.status(400).json({ message: 'Informe a obra obrigatória e um vídeo válido antes de aceitar o regulamento.' });
@@ -1032,9 +1039,9 @@ const atualizarPerfil = async (req, res) => {
             await connection.query(
                 `UPDATE ist_concorrentes
                  SET aceite_regulamento = 1
-                 WHERE id_usuario = ?
+                 WHERE id_usuario = ? AND id_evento = ?
                    AND aceite_regulamento = 0`,
-                [idUsuario]
+                [idUsuario, idEventoConcorrente]
             );
             aceitePersistido = true;
         }
@@ -1158,6 +1165,7 @@ const atualizarParticipacaoConcorrente = async (req, res) => {
     let connection;
     let transacaoIniciada = false;
     let lockSequenciaAdquirido = false;
+    let lockSequenciaNome;
 
     try {
         connection = await db.getConnection();
@@ -1182,12 +1190,15 @@ const atualizarParticipacaoConcorrente = async (req, res) => {
             return res.status(403).json({ message: 'A participação do Festival está disponível apenas para concorrentes.' });
         }
 
+        const evento = await resolverEventoPorSlug(FESTIVAL_II.slug, connection);
+        lockSequenciaNome = `istbrasil:concorrentes:sequencia:${evento.id}:${FESTIVAL_II.prefixoInscricao}`;
+
         const [concorrenteRows] = await connection.query(
-            `SELECT id_concorrente, id_obra_1, aceite_regulamento, confirmacao_inscricao_enviada
+            `SELECT id_concorrente, numero_concorrente, id_obra_1, aceite_regulamento, confirmacao_inscricao_enviada
              FROM ist_concorrentes
-             WHERE id_usuario = ?
+             WHERE id_usuario = ? AND id_evento = ?
              FOR UPDATE`,
-            [idUsuario]
+            [idUsuario, evento.id]
         );
 
         if (concorrenteRows.length === 0) {
@@ -1198,7 +1209,8 @@ const atualizarParticipacaoConcorrente = async (req, res) => {
 
         let aceitePersistido = Boolean(concorrenteRows[0].aceite_regulamento);
         let confirmacaoInscricaoEnviada = Boolean(concorrenteRows[0].confirmacao_inscricao_enviada);
-        let idConcorrente = concorrenteRows[0].id_concorrente || null;
+        const idParticipacao = concorrenteRows[0].id_concorrente;
+        let numeroConcorrente = concorrenteRows[0].numero_concorrente || null;
 
         if (aceiteInformado && !aceitePersistido && aceiteRegulamento !== true) {
             await connection.rollback();
@@ -1208,12 +1220,12 @@ const atualizarParticipacaoConcorrente = async (req, res) => {
 
         const [obraPrincipalVigenteRows] = await connection.query(
             'SELECT id_obra, titulo, partitura, propria FROM ist_composicao WHERE id_obra = ?',
-            [OBRA_PRINCIPAL_CONCORRENTE.idObra]
+            [FESTIVAL_II.idObraPrincipal]
         );
 
         const obraPrincipalVigente = obraPrincipalVigenteRows[0];
         if (!obraPrincipalVigente
-            || Number(obraPrincipalVigente.id_obra) !== OBRA_PRINCIPAL_CONCORRENTE.idObra
+            || Number(obraPrincipalVigente.id_obra) !== FESTIVAL_II.idObraPrincipal
             || Number(obraPrincipalVigente.propria) !== 1) {
             await connection.rollback();
             transacaoIniciada = false;
@@ -1223,7 +1235,7 @@ const atualizarParticipacaoConcorrente = async (req, res) => {
 
         const idObraPrincipalPersistida = aceitePersistido
             ? Number(concorrenteRows[0].id_obra_1)
-            : OBRA_PRINCIPAL_CONCORRENTE.idObra;
+            : FESTIVAL_II.idObraPrincipal;
 
         if (!Number.isInteger(idObraPrincipalPersistida) || idObraPrincipalPersistida <= 0) {
             await connection.rollback();
@@ -1232,7 +1244,7 @@ const atualizarParticipacaoConcorrente = async (req, res) => {
         }
 
         let obraPrincipal = obraPrincipalVigente;
-        if (idObraPrincipalPersistida !== OBRA_PRINCIPAL_CONCORRENTE.idObra) {
+        if (idObraPrincipalPersistida !== FESTIVAL_II.idObraPrincipal) {
             const [obraPrincipalHistoricaRows] = await connection.query(
                 'SELECT id_obra, titulo, partitura, propria FROM ist_composicao WHERE id_obra = ?',
                 [idObraPrincipalPersistida]
@@ -1260,7 +1272,7 @@ const atualizarParticipacaoConcorrente = async (req, res) => {
                  WHERE id_obra = ?
                    AND propria = 1
                    AND id_obra <> ?`,
-                [idObra2Normalizado, OBRA_PRINCIPAL_CONCORRENTE.idObra]
+                [idObra2Normalizado, FESTIVAL_II.idObraPrincipal]
             );
 
             if (obraRows.length === 0) {
@@ -1276,23 +1288,23 @@ const atualizarParticipacaoConcorrente = async (req, res) => {
             await connection.query(
                 `UPDATE ist_concorrentes
                  SET link_video_1 = ?, id_obra_2 = ?, link_video_2 = ?
-                 WHERE id_usuario = ?`,
-                [video1Normalizado, idObra2Normalizado, segundaObraInformada ? video2Normalizado : null, idUsuario]
+                 WHERE id_concorrente = ?`,
+                [video1Normalizado, idObra2Normalizado, segundaObraInformada ? video2Normalizado : null, idParticipacao]
             );
         } else {
             await connection.query(
                 `UPDATE ist_concorrentes
                  SET id_obra_1 = ?, link_video_1 = ?, id_obra_2 = ?, link_video_2 = ?
-                 WHERE id_usuario = ?`,
-                [OBRA_PRINCIPAL_CONCORRENTE.idObra, video1Normalizado, idObra2Normalizado, segundaObraInformada ? video2Normalizado : null, idUsuario]
+                 WHERE id_concorrente = ?`,
+                [FESTIVAL_II.idObraPrincipal, video1Normalizado, idObra2Normalizado, segundaObraInformada ? video2Normalizado : null, idParticipacao]
             );
         }
 
         if (aceiteInformado && !aceitePersistido && aceiteRegulamento === true) {
-            if (!idConcorrente) {
+            if (!numeroConcorrente) {
                 const [lockRows] = await connection.query(
                     'SELECT GET_LOCK(?, 10) AS adquirido',
-                    [LOCK_SEQUENCIA_INSCRICAO_FESTIVAL]
+                    [lockSequenciaNome]
                 );
 
                 if (Number(lockRows[0]?.adquirido) !== 1) {
@@ -1300,37 +1312,37 @@ const atualizarParticipacaoConcorrente = async (req, res) => {
                 }
                 lockSequenciaAdquirido = true;
 
-                const regexPrefixo = `^${PREFIXO_INSCRICAO_FESTIVAL}-[0-9]+$`;
+                const regexPrefixo = `^${FESTIVAL_II.prefixoInscricao}-[0-9]+$`;
                 const [sequenciaRows] = await connection.query(
-                    `SELECT id_concorrente
+                    `SELECT numero_concorrente
                      FROM ist_concorrentes
-                     WHERE id_concorrente REGEXP ?
+                     WHERE id_evento = ? AND numero_concorrente REGEXP ?
                      FOR UPDATE`,
-                    [regexPrefixo]
+                    [evento.id, regexPrefixo]
                 );
                 const ultimoNumero = sequenciaRows.reduce((maior, concorrente) => {
-                    const sufixo = Number(String(concorrente.id_concorrente).slice(PREFIXO_INSCRICAO_FESTIVAL.length + 1));
+                    const sufixo = Number(String(concorrente.numero_concorrente).slice(FESTIVAL_II.prefixoInscricao.length + 1));
                     return Number.isInteger(sufixo) && sufixo > maior ? sufixo : maior;
                 }, 0);
                 const proximoNumero = ultimoNumero + 1;
-                idConcorrente = `${PREFIXO_INSCRICAO_FESTIVAL}-${String(proximoNumero).padStart(3, '0')}`;
+                numeroConcorrente = `${FESTIVAL_II.prefixoInscricao}-${String(proximoNumero).padStart(3, '0')}`;
             }
 
-            const [aceiteResult] = idConcorrente === concorrenteRows[0].id_concorrente
+            const [aceiteResult] = numeroConcorrente === concorrenteRows[0].numero_concorrente
                 ? await connection.query(
                     `UPDATE ist_concorrentes
                      SET aceite_regulamento = 1
-                     WHERE id_usuario = ?
+                     WHERE id_concorrente = ?
                        AND aceite_regulamento = 0`,
-                    [idUsuario]
+                    [idParticipacao]
                 )
                 : await connection.query(
                     `UPDATE ist_concorrentes
-                     SET id_concorrente = ?, aceite_regulamento = 1
-                     WHERE id_usuario = ?
+                     SET numero_concorrente = ?, aceite_regulamento = 1
+                     WHERE id_concorrente = ?
                        AND aceite_regulamento = 0
-                       AND id_concorrente IS NULL`,
-                    [idConcorrente, idUsuario]
+                       AND numero_concorrente IS NULL`,
+                    [numeroConcorrente, idParticipacao]
                 );
             aceitePersistido = aceiteResult.affectedRows === 1;
 
@@ -1343,7 +1355,7 @@ const atualizarParticipacaoConcorrente = async (req, res) => {
         transacaoIniciada = false;
 
         if (lockSequenciaAdquirido) {
-            await liberarLockSequenciaInscricao(connection);
+            await liberarLockSequenciaInscricao(connection, lockSequenciaNome);
             lockSequenciaAdquirido = false;
         }
 
@@ -1356,7 +1368,7 @@ const atualizarParticipacaoConcorrente = async (req, res) => {
                 ? 'Participação atualizada com sucesso. A confirmação da inscrição permanece pendente.'
                 : 'Participação atualizada com sucesso.',
             concorrente: {
-                idConcorrente,
+                numeroConcorrente,
                 idObra1: idObraPrincipalPersistida,
                 tituloObra1: obraPrincipal.titulo,
                 linkVideo1: video1Normalizado,
@@ -1380,7 +1392,7 @@ const atualizarParticipacaoConcorrente = async (req, res) => {
     } finally {
         if (connection && lockSequenciaAdquirido) {
             try {
-                await liberarLockSequenciaInscricao(connection);
+                await liberarLockSequenciaInscricao(connection, lockSequenciaNome);
             } catch (lockError) {
                 console.error('Erro ao liberar lock da sequência de inscrições:', lockError);
                 connection.destroy();

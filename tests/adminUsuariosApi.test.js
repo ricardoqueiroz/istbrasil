@@ -131,8 +131,6 @@ const executarAtualizacao = async ({
                 if (falharEmUpdate) throw new Error('Falha simulada');
                 return [{ affectedRows: 1 }];
             }
-            if (consulta.startsWith('SELECT id_usuario FROM ist_concorrentes')) return [concorrenteExiste ? [{ id_usuario: idUsuario }] : []];
-            if (consulta.startsWith('INSERT INTO ist_concorrentes')) return [{ affectedRows: 1 }];
             if (consulta.startsWith('SELECT u.id_usuario')) return [[detalhe]];
             throw new Error(`Consulta não simulada: ${consulta}`);
         }
@@ -391,9 +389,12 @@ test('detalhe rejeita ID de usuário inválido', async () => {
     assert.equal(consultas, 0);
 });
 
-test('detalhe inclui bloco concorrente somente quando o registro existe', async () => {
+test('detalhe administrativo não seleciona participações mesmo para concorrente', async () => {
     const res = resposta();
-    await comQuerySimulada(async () => [[{
+    let sqlExecutado;
+    await comQuerySimulada(async (sql) => {
+        sqlExecutado = normalizarSql(sql);
+        return [[{
         ...linhaLista,
         cpf: '12345678901',
         identidade: null,
@@ -411,7 +412,8 @@ test('detalhe inclui bloco concorrente somente quando o registro existe', async 
         celular_confirmado: 0,
         data_atualizacao: null,
         concorrente_usuario_id: 8,
-        id_concorrente: 'FVST2-001',
+        id_concorrente: 17,
+        numero_concorrente: 'FVST2-001',
         id_obra_1: 22,
         link_video_1: 'https://youtu.be/abcdefghijk',
         id_obra_2: null,
@@ -420,12 +422,13 @@ test('detalhe inclui bloco concorrente somente quando o registro existe', async 
         confirmacao_inscricao_enviada: 1,
         confirmacao_inscricao_enviada_em: '2026-09-30T12:00:00.000Z',
         concorrente_data_cadastro: '2026-09-30T10:00:00.000Z'
-    }]], () => obterUsuarioAdmin({ params: { id: '8' } }, res));
+        }]];
+    }, () => obterUsuarioAdmin({ params: { id: '8' } }, res));
 
     assert.equal(res.statusCode, 200);
-    assert.equal(res.body.concorrente.idConcorrente, 'FVST2-001');
-    assert.equal(res.body.concorrente.idObra1, 22);
-    assert.equal(res.body.concorrente.aceiteRegulamento, true);
+    assert.equal(res.body.usuario.idUsuario, 8);
+    assert.equal(Object.hasOwn(res.body, 'concorrente'), false);
+    assert.doesNotMatch(sqlExecutado, /ist_concorrentes|id_concorrente/);
 });
 
 test('detalhe de usuário sem registro concorrente omite a propriedade concorrente', async () => {
@@ -597,43 +600,39 @@ test('PUT muda Concorrente para Externo sem alterar histórico concorrente', asy
     const resultado = await executarAtualizacao({
         usuarioAtual: { id_usuario: 8, id_tipo_usuario: 2, id_situacao: 3 },
         concorrenteExiste: true,
-        detalhe: linhaDetalheAtualizada({ concorrente_usuario_id: 8, id_concorrente: 'FVST2-004', aceite_regulamento: 1 })
+        detalhe: linhaDetalheAtualizada({ concorrente_usuario_id: 8, id_concorrente: 17, numero_concorrente: 'FVST2-004', aceite_regulamento: 1 })
     });
     assert.equal(resultado.res.statusCode, 200);
-    assert.equal(resultado.consultas.some(({ sql }) => /^(UPDATE|DELETE) ist_concorrentes/.test(sql)), false);
-    assert.equal(resultado.res.body.concorrente.idConcorrente, 'FVST2-004');
+    assert.equal(resultado.consultas.some(({ sql }) => sql.includes('ist_concorrentes')), false);
+    assert.equal(resultado.res.body.usuario.idUsuario, 8);
 });
 
-test('PUT muda Externo para Concorrente criando somente registro mínimo', async () => {
+test('PUT muda Externo para Concorrente sem criar participação sem contexto de evento', async () => {
     const payload = payloadAtualizacao({ idTipoUsuario: 2, idSituacao: 3 });
     const detalhe = linhaDetalheAtualizada({ id_tipo_usuario: 2, tipo: 'Concorrente', id_situacao: 3, concorrente_usuario_id: 8 });
     const resultado = await executarAtualizacao({ payload, detalhe });
     assert.equal(resultado.res.statusCode, 200);
-    const insert = resultado.consultas.find(({ sql }) => sql.startsWith('INSERT INTO ist_concorrentes'));
-    assert.equal(insert.sql, 'INSERT INTO ist_concorrentes (id_usuario) VALUES (?)');
-    assert.deepEqual(insert.params, [8]);
-    assert.doesNotMatch(insert.sql, /id_concorrente|aceite|obra|video|confirmacao/);
+    assert.equal(resultado.res.body.usuario.idTipoUsuario, 2);
+    assert.equal(resultado.consultas.some(({ sql }) => sql.includes('ist_concorrentes')), false);
 });
 
-test('PUT retorna a Concorrente reutilizando registro histórico integralmente', async () => {
+test('PUT retorna a Concorrente sem tocar em participação histórica', async () => {
     const payload = payloadAtualizacao({ idTipoUsuario: 2, idSituacao: 3 });
     const detalhe = linhaDetalheAtualizada({
         id_tipo_usuario: 2,
         tipo: 'Concorrente',
         id_situacao: 3,
         concorrente_usuario_id: 8,
-        id_concorrente: 'FVST2-009',
+        id_concorrente: 17,
+        numero_concorrente: 'FVST2-009',
         id_obra_1: 22,
         aceite_regulamento: 1,
         confirmacao_inscricao_enviada: 1
     });
     const resultado = await executarAtualizacao({ payload, concorrenteExiste: true, detalhe });
     assert.equal(resultado.res.statusCode, 200);
-    assert.equal(resultado.consultas.some(({ sql }) => sql.startsWith('INSERT INTO ist_concorrentes')), false);
-    assert.equal(resultado.res.body.concorrente.idConcorrente, 'FVST2-009');
-    assert.equal(resultado.res.body.concorrente.idObra1, 22);
-    assert.equal(resultado.res.body.concorrente.aceiteRegulamento, true);
-    assert.equal(resultado.res.body.concorrente.confirmacaoInscricaoEnviada, true);
+    assert.equal(resultado.res.body.usuario.idTipoUsuario, 2);
+    assert.equal(resultado.consultas.some(({ sql }) => sql.includes('ist_concorrentes')), false);
 });
 
 test('PUT impede administrador de alterar o próprio tipo', async () => {
