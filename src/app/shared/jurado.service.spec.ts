@@ -1,7 +1,7 @@
 import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { TestBed } from '@angular/core/testing';
-import { JuradoService } from './jurado.service';
+import { FilaJuradoResponse, JuradoService } from './jurado.service';
 
 describe('JuradoService', () => {
     let service: JuradoService;
@@ -29,6 +29,57 @@ describe('JuradoService', () => {
         const request = http.expectOne('/api/jurado/eventos/evento%2Fteste');
         expect(request.request.withCredentials).toBeTrue();
         request.flush({ evento });
+    });
+
+    it('consulta fila com slug codificado, credenciais e defaults', () => {
+        const resposta: FilaJuradoResponse = { evento, concorrentes: [], pagination: { page: 1, limit: 25, total: 0, totalPages: 0 } };
+        service.listarConcorrentes('evento/teste').subscribe((fila) => expect(fila).toEqual(resposta));
+        const request = http.expectOne((req) => req.url === '/api/jurado/eventos/evento%2Fteste/concorrentes');
+        expect(request.request.method).toBe('GET');
+        expect(request.request.withCredentials).toBeTrue();
+        expect(request.request.params.keys()).toEqual(['page', 'limit', 'sort', 'order']);
+        expect(request.request.params.get('page')).toBe('1');
+        expect(request.request.params.get('limit')).toBe('25');
+        expect(request.request.params.get('sort')).toBe('numeroConcorrente');
+        expect(request.request.params.get('order')).toBe('asc');
+        request.flush(resposta);
+    });
+
+    it('envia os quatro parametros fornecidos sem alterar o contrato', () => {
+        const resposta: FilaJuradoResponse = {
+            evento,
+            concorrentes: [{
+                idParticipacao: 20, numeroConcorrente: 'FVST2-020', nome: 'Concorrente', cidade: null, uf: null,
+                dataInscricao: '2026-10-02T12:00:00.000Z', obraPrincipal: { id: 22, titulo: 'Obra' },
+                linkVideoPrincipal: 'https://youtu.be/abcdefghijk', obraOpcional: null, linkVideoOpcional: null
+            }],
+            pagination: { page: 3, limit: 50, total: 101, totalPages: 3 }
+        };
+        service.listarConcorrentes(evento.slug, { page: 3, limit: 50, sort: 'nome', order: 'desc' }).subscribe((fila) => expect(fila).toEqual(resposta));
+        const request = http.expectOne((req) => req.url.endsWith('/concorrentes'));
+        expect(request.request.params.get('page')).toBe('3');
+        expect(request.request.params.get('limit')).toBe('50');
+        expect(request.request.params.get('sort')).toBe('nome');
+        expect(request.request.params.get('order')).toBe('desc');
+        request.flush(resposta);
+    });
+
+    it('envia ordenacao por data e preserva defaults nao fornecidos', () => {
+        service.listarConcorrentes(evento.slug, { sort: 'dataInscricao', limit: 100 }).subscribe();
+        const request = http.expectOne((req) => req.url.endsWith('/concorrentes'));
+        expect(request.request.params.get('page')).toBe('1');
+        expect(request.request.params.get('limit')).toBe('100');
+        expect(request.request.params.get('sort')).toBe('dataInscricao');
+        expect(request.request.params.get('order')).toBe('asc');
+        request.flush({ evento, concorrentes: [], pagination: { page: 1, limit: 100, total: 0, totalPages: 0 } });
+    });
+
+    it('propaga falha da fila sem transforma-la em lista vazia', () => {
+        service.listarConcorrentes(evento.slug).subscribe({
+            next: () => fail('Erro HTTP nao deve emitir fila vazia'),
+            error: (error) => expect(error.status).toBe(500)
+        });
+        http.expectOne((req) => req.url.endsWith('/concorrentes')).flush({}, { status: 500, statusText: 'Erro' });
     });
 
     it('zero eventos direciona para a raiz', () => {
