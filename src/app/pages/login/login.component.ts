@@ -6,7 +6,9 @@ import { ButtonModule } from 'primeng/button';
 import { CheckboxModule } from 'primeng/checkbox';
 import { InputTextModule } from 'primeng/inputtext';
 import { PasswordModule } from 'primeng/password';
+import { firstValueFrom } from 'rxjs';
 import { AuthService } from 'src/app/shared/auth.service';
+import { JuradoService } from 'src/app/shared/jurado.service';
 
 @Component({
     selector: 'app-login',
@@ -97,7 +99,8 @@ export class LoginComponent {
 
     constructor(
         private readonly router: Router,
-        private readonly authService: AuthService
+        private readonly authService: AuthService,
+        private readonly juradoService: JuradoService
     ) {}
 
     validarCampos(): boolean {
@@ -158,7 +161,8 @@ export class LoginComponent {
             this.tipoMensagem = 'success';
             this.mensagem = 'Login realizado com sucesso.';
             this.authService.definirUsuario(data);
-            await this.router.navigate(['/']);
+            const destino = await firstValueFrom(this.juradoService.destinoAposLogin());
+            await this.router.navigate(destino);
         } catch (error) {
             this.tipoMensagem = 'error';
             this.mensagem = 'Erro ao consultar o banco de dados. Tente novamente.';

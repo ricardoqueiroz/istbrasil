@@ -11,10 +11,24 @@ export interface UsuarioLogado {
 export class AuthService {
     readonly usuario = signal<UsuarioLogado | null>(null);
     readonly carregando = signal<boolean>(true);
+    private restauracaoSessao: Promise<void> | null = null;
 
     async verificarSessao(): Promise<void> {
-        this.carregando.set(true);
+        if (this.restauracaoSessao) {
+            return this.restauracaoSessao;
+        }
 
+        this.carregando.set(true);
+        this.restauracaoSessao = this.carregarSessao();
+
+        try {
+            await this.restauracaoSessao;
+        } finally {
+            this.restauracaoSessao = null;
+        }
+    }
+
+    private async carregarSessao(): Promise<void> {
         try {
             const response = await fetch('/api/usuarios/me', { credentials: 'include' });
 

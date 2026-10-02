@@ -25,6 +25,7 @@ import contactRoutes from './src/routes/contact.routes.js';
 import usuariosRoutes from './src/routes/usuarios.routes.js';
 import eventosRoutes from './src/routes/eventos.routes.js';
 import adminRoutes from './src/routes/admin.routes.js';
+import juradoRoutes from './src/routes/jurado.routes.js';
 
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
@@ -103,6 +104,7 @@ app.use('/api/obra', obraRoutes);
 app.use('/api/usuarios', usuariosRoutes);
 app.use('/api/eventos', eventosRoutes);
 app.use('/api/admin', adminRoutes);
+app.use('/api/jurado', juradoRoutes);
 
 // --- Arquivos Estáticos ---
 const __filename = fileURLToPath(import.meta.url);

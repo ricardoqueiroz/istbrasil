@@ -12,6 +12,7 @@ import { DiretoriaLoginComponent } from './app/pages/cadastro/diretoria/diretori
 import { TIPO_USUARIO_MAP } from './app/pages/cadastro/models/cadastro.model';
 import { perfilGuard } from './app/guards/perfil.guard';
 import { adminGuard } from './app/guards/admin.guard';
+import { juradoGuard } from './app/guards/jurado.guard';
 // import { LivroComponent } from './app/pages/editora/livro/livro.component';
 
 export const appRoutes: Routes = [
@@ -80,6 +81,23 @@ export const appRoutes: Routes = [
         path: 'admin',
         canActivate: [adminGuard],
         loadChildren: () => import('./app/pages/admin/admin.routes')
+    },
+    {
+        path: 'jurado',
+        component: AppLayout,
+        children: [
+            {
+                path: '',
+                pathMatch: 'full',
+                canActivate: [juradoGuard],
+                loadComponent: () => import('./app/pages/jurado/jurado-eventos.component').then(m => m.JuradoEventosComponent)
+            },
+            {
+                path: ':slug/avaliacoes',
+                canActivate: [juradoGuard],
+                loadComponent: () => import('./app/pages/jurado/jurado-avaliacoes.component').then(m => m.JuradoAvaliacoesComponent)
+            }
+        ]
     },
     {
         path: 'patrono',
