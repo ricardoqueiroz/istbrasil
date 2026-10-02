@@ -93,6 +93,11 @@ export const appRoutes: Routes = [
                 loadComponent: () => import('./app/pages/jurado/jurado-eventos.component').then(m => m.JuradoEventosComponent)
             },
             {
+                path: ':slug/avaliacoes/:idParticipacao',
+                canActivate: [juradoGuard],
+                loadComponent: () => import('./app/pages/jurado/jurado-concorrente.component').then(m => m.JuradoConcorrenteComponent)
+            },
+            {
                 path: ':slug/avaliacoes',
                 canActivate: [juradoGuard],
                 loadComponent: () => import('./app/pages/jurado/jurado-avaliacoes.component').then(m => m.JuradoAvaliacoesComponent)

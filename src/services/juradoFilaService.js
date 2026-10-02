@@ -18,6 +18,12 @@ const SQL_BASE_FILA = `FROM ist_concorrentes c
       AND c.link_video_1 IS NOT NULL
       AND TRIM(c.link_video_1) <> ''`;
 
+const SQL_PROJECAO_CONCORRENTE = `SELECT c.id_concorrente, c.numero_concorrente, u.nome, u.cidade, u.uf,
+        c.data_cadastro, c.id_obra_1,
+        COALESCE(obra1.titulo, obra1.obra) AS titulo_obra_1, c.link_video_1,
+        c.id_obra_2, COALESCE(obra2.titulo, obra2.obra) AS titulo_obra_2,
+        c.link_video_2`;
+
 export const consultarFilaJurado = async (idEvento, { page, limit, sort, order }, executor = db) => {
     if (!Object.prototype.hasOwnProperty.call(CAMPOS_ORDENACAO_FILA, sort)) {
         throw new Error('Ordenacao da fila invalida.');
@@ -26,11 +32,7 @@ export const consultarFilaJurado = async (idEvento, { page, limit, sort, order }
     const direcao = order === 'desc' ? 'DESC' : 'ASC';
     const [totalRows] = await executor.query(`SELECT COUNT(*) AS total ${SQL_BASE_FILA}`, [idEvento]);
     const [rows] = await executor.query(
-        `SELECT c.id_concorrente, c.numero_concorrente, u.nome, u.cidade, u.uf,
-                c.data_cadastro, c.id_obra_1,
-                COALESCE(obra1.titulo, obra1.obra) AS titulo_obra_1, c.link_video_1,
-                c.id_obra_2, COALESCE(obra2.titulo, obra2.obra) AS titulo_obra_2,
-                c.link_video_2
+        `${SQL_PROJECAO_CONCORRENTE}
          ${SQL_BASE_FILA}
          ORDER BY ${coluna} ${direcao}, c.id_concorrente ASC
          LIMIT ? OFFSET ?`,
@@ -38,4 +40,12 @@ export const consultarFilaJurado = async (idEvento, { page, limit, sort, order }
     );
 
     return { rows, total: Number(totalRows[0]?.total) || 0 };
+};
+
+export const consultarConcorrenteJurado = async (idEvento, idParticipacao, executor = db) => {
+    const [rows] = await executor.query(
+        `${SQL_PROJECAO_CONCORRENTE} ${SQL_BASE_FILA} AND c.id_concorrente = ?`,
+        [idEvento, idParticipacao]
+    );
+    return rows[0] || null;
 };

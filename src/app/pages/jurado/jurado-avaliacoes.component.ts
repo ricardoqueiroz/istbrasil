@@ -1,7 +1,7 @@
 import { HttpErrorResponse } from '@angular/common/http';
 import { Component, inject, signal } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
-import { ActivatedRoute, Router } from '@angular/router';
+import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { ButtonModule } from 'primeng/button';
 import { TableLazyLoadEvent, TableModule } from 'primeng/table';
 import { Subject, catchError, distinctUntilChanged, map, of, startWith, switchMap } from 'rxjs';
@@ -14,7 +14,7 @@ const CAMPOS_ORDENACAO: FilaJuradoSort[] = ['numeroConcorrente', 'nome', 'dataIn
 @Component({
     selector: 'p-jurado-avaliacoes',
     standalone: true,
-    imports: [ButtonModule, TableModule],
+    imports: [ButtonModule, TableModule, RouterLink],
     styles: [':host { display: block; min-width: 0; max-width: 100%; }'],
     template: `
         <section class="min-w-0 w-full max-w-full space-y-6 py-6">
@@ -77,7 +77,9 @@ const CAMPOS_ORDENACAO: FilaJuradoSort[] = ['numeroConcorrente', 'nome', 'dataIn
                     </ng-template>
                     <ng-template #body let-concorrente>
                         <tr>
-                            <td class="whitespace-normal break-words font-medium">{{ concorrente.numeroConcorrente }}</td>
+                            <td class="whitespace-normal break-words font-medium">
+                                <a class="text-primary underline underline-offset-4 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2" [routerLink]="['/jurado', fila()?.evento?.slug, 'avaliacoes', concorrente.idParticipacao]" [attr.aria-label]="'Abrir concorrente ' + concorrente.numeroConcorrente">{{ concorrente.numeroConcorrente }}</a>
+                            </td>
                             <td class="whitespace-normal break-words">{{ concorrente.nome }}</td>
                             <td class="whitespace-normal break-words">{{ formatarLocalidade(concorrente.cidade, concorrente.uf) }}</td>
                             <td>{{ formatarDataInscricao(concorrente.dataInscricao) }}</td>

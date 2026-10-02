@@ -184,7 +184,13 @@ describe('Paginas de entrada do jurado', () => {
         expect(fixture.nativeElement.textContent).toContain('Segunda Musica');
         expect(fixture.nativeElement.textContent).not.toMatch(/\b(avaliados|pendentes|notas|m\u00e9dias)\b/i);
         expect(fixture.nativeElement.querySelector('thead').textContent).not.toContain('A\u00e7\u00e3o');
-        expect(fixture.nativeElement.querySelector('tbody a, tbody button, iframe, video')).toBeNull();
+        expect(fixture.nativeElement.querySelector('tbody button, iframe, video')).toBeNull();
+        const link = fixture.nativeElement.querySelector('tbody a') as HTMLAnchorElement;
+        expect(link.getAttribute('href')).toBe(`/jurado/${evento.slug}/avaliacoes/${concorrente.idParticipacao}`);
+        expect(link.textContent?.trim()).toBe(concorrente.numeroConcorrente);
+        expect(link.getAttribute('aria-label')).toBe(`Abrir concorrente ${concorrente.numeroConcorrente}`);
+        expect(link.className).toContain('focus-visible:');
+        expect(fixture.nativeElement.querySelectorAll('tbody a').length).toBe(1);
         expect(fixture.nativeElement.innerHTML).not.toContain('youtu.be');
     });
 

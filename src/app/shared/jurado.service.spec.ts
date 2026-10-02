@@ -1,7 +1,7 @@
 import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { TestBed } from '@angular/core/testing';
-import { FilaJuradoResponse, JuradoService } from './jurado.service';
+import { ConcorrenteJuradoResponse, FilaJuradoResponse, JuradoService } from './jurado.service';
 
 describe('JuradoService', () => {
     let service: JuradoService;
@@ -80,6 +80,28 @@ describe('JuradoService', () => {
             error: (error) => expect(error.status).toBe(500)
         });
         http.expectOne((req) => req.url.endsWith('/concorrentes')).flush({}, { status: 500, statusText: 'Erro' });
+    });
+
+    it('consulta detalhe pela PK, codifica slug e envia credenciais sem id_evento', () => {
+        const resposta: ConcorrenteJuradoResponse = {
+            evento,
+            concorrente: {
+                idParticipacao: 20, numeroConcorrente: 'FVST2-020', nome: 'Concorrente', cidade: null, uf: null,
+                dataInscricao: '2026-10-02T12:00:00.000Z', obraPrincipal: { id: 22, titulo: 'Obra' },
+                linkVideoPrincipal: 'https://youtu.be/abcdefghijk', obraOpcional: null, linkVideoOpcional: null
+            }
+        };
+        service.obterConcorrente('evento/teste', 20).subscribe((detalhe) => expect(detalhe).toEqual(resposta));
+        const request = http.expectOne('/api/jurado/eventos/evento%2Fteste/concorrentes/20');
+        expect(request.request.method).toBe('GET');
+        expect(request.request.withCredentials).toBeTrue();
+        expect(request.request.params.keys()).toEqual([]);
+        request.flush(resposta);
+    });
+
+    it('propaga 404 do detalhe sem fabricar concorrente', () => {
+        service.obterConcorrente(evento.slug, 20).subscribe({ next: () => fail('Erro nao pode emitir concorrente'), error: (error) => expect(error.status).toBe(404) });
+        http.expectOne(`/api/jurado/eventos/${evento.slug}/concorrentes/20`).flush({}, { status: 404, statusText: 'Not Found' });
     });
 
     it('zero eventos direciona para a raiz', () => {

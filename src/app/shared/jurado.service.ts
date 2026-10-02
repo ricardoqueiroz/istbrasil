@@ -47,6 +47,11 @@ export interface FilaJuradoResponse {
     pagination: PaginacaoJurado;
 }
 
+export interface ConcorrenteJuradoResponse {
+    evento: EventoJurado;
+    concorrente: ConcorrenteJurado;
+}
+
 export type FilaJuradoSort = 'numeroConcorrente' | 'nome' | 'dataInscricao';
 export type FilaJuradoOrder = 'asc' | 'desc';
 
@@ -76,6 +81,10 @@ export class JuradoService {
             .set('sort', parametros.sort ?? 'numeroConcorrente')
             .set('order', parametros.order ?? 'asc');
         return this.http.get<FilaJuradoResponse>(`/api/jurado/eventos/${encodeURIComponent(slug)}/concorrentes`, { params, withCredentials: true });
+    }
+
+    obterConcorrente(slug: string, idParticipacao: number): Observable<ConcorrenteJuradoResponse> {
+        return this.http.get<ConcorrenteJuradoResponse>(`/api/jurado/eventos/${encodeURIComponent(slug)}/concorrentes/${idParticipacao}`, { withCredentials: true });
     }
 
     destinoAposLogin(): Observable<string[]> {

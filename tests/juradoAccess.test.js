@@ -61,6 +61,7 @@ before(async () => {
         }
         const countFila = consulta.startsWith('SELECT COUNT(*) AS total FROM ist_concorrentes c');
         const selectFila = consulta.startsWith('SELECT c.id_concorrente, c.numero_concorrente');
+        const selectDetalhe = selectFila && consulta.endsWith('AND c.id_concorrente = ?');
         if (countFila || selectFila) {
             assert.match(consulta, /INNER JOIN ist_usuarios u ON u\.id_usuario = c\.id_usuario/);
             assert.match(consulta, /INNER JOIN ist_composicao obra1 ON obra1\.id_obra = c\.id_obra_1/);
@@ -70,9 +71,9 @@ before(async () => {
                 'c.numero_concorrente IS NOT NULL', "TRIM(c.numero_concorrente) <> ''",
                 'c.id_obra_1 IS NOT NULL', 'c.link_video_1 IS NOT NULL', "TRIM(c.link_video_1) <> ''"
             ]) assert.ok(consulta.includes(criterio));
-            assert.doesNotMatch(consulta, /SELECT \*|cpf|identidade|email|telefone|logradouro|senha|token|id_tipo_usuario|id_situacao|confirmacao_inscricao_enviada/);
-            assert.equal(params.length, countFila ? 1 : 3);
-            if (falharFila === (countFila ? 'count' : 'select')) throw new Error('Falha simulada de SQL na fila');
+            assert.doesNotMatch(consulta, /SELECT \*|cpf|identidade|email|telefone|logradouro|data_nascimento|curriculo|senha|token|id_tipo_usuario|id_situacao|confirmacao_inscricao_enviada/);
+            assert.equal(params.length, countFila ? 1 : selectDetalhe ? 2 : 3);
+            if (falharFila === (countFila ? 'count' : selectDetalhe ? 'detalhe' : 'select')) throw new Error('Falha simulada de SQL na fila');
 
             const elegiveis = participacoes.filter((participacao) => participacao.id_evento === params[0]
                 && participacao.aceite_regulamento === 1
@@ -85,13 +86,6 @@ before(async () => {
 
             assert.match(consulta, /COALESCE\(obra1\.titulo, obra1\.obra\) AS titulo_obra_1/);
             assert.match(consulta, /COALESCE\(obra2\.titulo, obra2\.obra\) AS titulo_obra_2/);
-            const count = consultas.find(({ sql: sqlCount }) => sqlCount.startsWith('SELECT COUNT(*) AS total FROM ist_concorrentes c'));
-            assert.equal(count.sql.slice(count.sql.indexOf('FROM ist_concorrentes')),
-                consulta.slice(consulta.indexOf('FROM ist_concorrentes')).split(' ORDER BY ')[0]);
-            const ordenacao = consulta.match(/ORDER BY (c\.numero_concorrente|c\.data_cadastro|u\.nome) (ASC|DESC), c\.id_concorrente ASC LIMIT \? OFFSET \?$/);
-            assert.ok(ordenacao);
-            const campo = ordenacao[1].split('.')[1];
-            const direcao = ordenacao[2] === 'ASC' ? 1 : -1;
             const rows = elegiveis.map((participacao) => {
                 const inscrito = usuariosFila.find((item) => item.id_usuario === participacao.id_usuario);
                 const principal = composicoes.find((obra) => obra.id_obra === participacao.id_obra_1);
@@ -101,7 +95,19 @@ before(async () => {
                     titulo_obra_1: principal.titulo ?? principal.obra,
                     titulo_obra_2: opcional ? opcional.titulo ?? opcional.obra : null
                 };
-            }).sort((primeira, segunda) => String(primeira[campo]).localeCompare(String(segunda[campo])) * direcao
+            });
+            if (selectDetalhe) {
+                assert.doesNotMatch(consulta, /COUNT\(|ORDER BY|LIMIT|OFFSET/);
+                return [rows.filter((row) => row.id_concorrente === params[1])];
+            }
+            const count = consultas.find(({ sql: sqlCount }) => sqlCount.startsWith('SELECT COUNT(*) AS total FROM ist_concorrentes c'));
+            assert.equal(count.sql.slice(count.sql.indexOf('FROM ist_concorrentes')),
+                consulta.slice(consulta.indexOf('FROM ist_concorrentes')).split(' ORDER BY ')[0]);
+            const ordenacao = consulta.match(/ORDER BY (c\.numero_concorrente|c\.data_cadastro|u\.nome) (ASC|DESC), c\.id_concorrente ASC LIMIT \? OFFSET \?$/);
+            assert.ok(ordenacao);
+            const campo = ordenacao[1].split('.')[1];
+            const direcao = ordenacao[2] === 'ASC' ? 1 : -1;
+            rows.sort((primeira, segunda) => String(primeira[campo]).localeCompare(String(segunda[campo])) * direcao
                 || primeira.id_concorrente - segunda.id_concorrente);
             return [rows.slice(params[2], params[2] + params[1])];
         }
@@ -127,7 +133,8 @@ beforeEach(() => {
         id_usuario: 20, id_tipo_usuario: 3, id_situacao: 99,
         nome: 'Concorrente Teste', cidade: null, uf: null,
         cpf: 'dado-privado', identidade: 'dado-privado', email: 'privado@example.com',
-        telefone_celular: 'dado-privado', logradouro: 'dado-privado', senha: 'dado-privado', token_confirmacao: 'dado-privado'
+        telefone_celular: 'dado-privado', logradouro: 'dado-privado', senha: 'dado-privado', token_confirmacao: 'dado-privado',
+        data_nascimento: 'dado-privado', curriculo: 'dado-privado'
     }];
     composicoes = [
         { id_obra: 22, titulo: null, obra: 'Obra Principal' },
@@ -156,8 +163,9 @@ const criarParticipacao = (campos = {}) => ({
 });
 
 const caminhoFila = '/api/jurado/eventos/festival-teste/concorrentes';
+const caminhoDetalhe = `${caminhoFila}/17`;
 
-for (const path of ['/api/jurado/acessos', '/api/jurado/eventos/festival-teste', caminhoFila]) {
+for (const path of ['/api/jurado/acessos', '/api/jurado/eventos/festival-teste', caminhoFila, caminhoDetalhe]) {
     test(`${path}: sem autenticação retorna 401 antes de consultar banco`, async () => {
         const resposta = await requisitar(path, null);
         assert.equal(resposta.status, 401);
@@ -262,7 +270,7 @@ test('jurado não herda política de status própria da inscrição', async () =
     assert.equal((await requisitar('/api/jurado/eventos/outro-evento')).status, 200);
 });
 
-for (const path of ['/api/jurado/acessos', '/api/jurado/eventos/festival-teste', caminhoFila]) {
+for (const path of ['/api/jurado/acessos', '/api/jurado/eventos/festival-teste', caminhoFila, caminhoDetalhe]) {
     test(`${path}: falha de banco retorna 500 neutro`, async () => {
         falharBanco = true;
         const consoleErrorOriginal = console.error;
@@ -492,3 +500,95 @@ for (const etapa of ['count', 'select']) {
         }
     });
 }
+
+test('detalhe: autorizado recebe somente o mesmo contrato publico da fila', async () => {
+    const fila = await requisitar(caminhoFila);
+    const baseFila = consultas[3].sql.slice(consultas[3].sql.indexOf('FROM ist_concorrentes')).split(' ORDER BY ')[0];
+    consultas = [];
+    const detalhe = await requisitar(caminhoDetalhe);
+    assert.equal(detalhe.status, 200);
+    assert.deepEqual(detalhe.body, { evento: fila.body.evento, concorrente: fila.body.concorrentes[0] });
+    assert.equal(consultas.length, 3);
+    assert.deepEqual(consultas[2].params, [1, 17]);
+    assert.equal(consultas[2].sql.slice(consultas[2].sql.indexOf('FROM ist_concorrentes')).replace(/ AND c\.id_concorrente = \?$/, ''), baseFila);
+    assert.doesNotMatch(JSON.stringify(detalhe.body), /dado-privado|cpf|identidade|email|telefone|logradouro|senha|token|curriculo|data_nascimento/);
+});
+
+for (const id of ['0', '-1', 'abc', '1.5', '1e2', '9007199254740992', '17%20OR%201=1']) {
+    test(`detalhe: ID ${id} invalido retorna 400 sem consulta individual`, async () => {
+        assert.equal((await requisitar(`${caminhoFila}/${id}`)).status, 400);
+        assert.equal(consultas.length, 2);
+    });
+}
+
+test('detalhe: inexistente e de outro evento retornam exatamente o mesmo 404', async () => {
+    const inexistente = await requisitar(`${caminhoFila}/99`);
+    assert.deepEqual(inexistente, { status: 404, body: { message: 'Concorrente indisponível.' } });
+    assert.equal(consultas.length, 3);
+    participacoes.push(criarParticipacao({ id_concorrente: 28, id_evento: 2 }));
+    consultas = [];
+    assert.deepEqual(await requisitar(`${caminhoFila}/28?id_evento=2`), inexistente);
+    assert.equal(consultas.length, 3);
+    assert.deepEqual(consultas[2].params, [1, 28]);
+});
+
+test('detalhe: evento do slug autorizado governa a consulta mesmo com query forjada', async () => {
+    designacoes.push({ id_evento: 2, id_usuario: 10, ativo: 1 });
+    participacoes.push(criarParticipacao({ id_concorrente: 28, id_evento: 2 }));
+    const resposta = await requisitar('/api/jurado/eventos/outro-evento/concorrentes/28?id_evento=1');
+    assert.equal(resposta.status, 200);
+    assert.equal(resposta.body.evento.id, 2);
+    assert.equal(resposta.body.concorrente.idParticipacao, 28);
+    assert.deepEqual(consultas[2].params, [2, 28]);
+});
+
+for (const [campo, valor] of [
+    ['aceite_regulamento', 0], ['numero_concorrente', null], ['numero_concorrente', ''],
+    ['numero_concorrente', '   '], ['id_obra_1', null], ['link_video_1', null],
+    ['link_video_1', ''], ['link_video_1', '   ']
+]) {
+    test(`detalhe: ${campo}=${JSON.stringify(valor)} retorna 404 uniforme`, async () => {
+        participacoes[0][campo] = valor;
+        assert.deepEqual(await requisitar(caminhoDetalhe), { status: 404, body: { message: 'Concorrente indisponível.' } });
+        assert.equal(consultas.length, 3);
+    });
+}
+
+test('detalhe: nao exige tipo/situacao do concorrente, email enviado ou video opcional', async () => {
+    usuariosFila[0].id_tipo_usuario = 1;
+    usuariosFila[0].id_situacao = null;
+    participacoes[0].id_obra_2 = 40;
+    composicoes[1].titulo = null;
+    const resposta = await requisitar(caminhoDetalhe);
+    assert.equal(resposta.status, 200);
+    assert.deepEqual(resposta.body.concorrente.obraPrincipal, { id: 22, titulo: 'Obra Principal' });
+    assert.deepEqual(resposta.body.concorrente.obraOpcional, { id: 40, titulo: 'Nome Original' });
+    assert.equal(resposta.body.concorrente.linkVideoOpcional, null);
+});
+
+test('detalhe: evento inexistente e recusado antes da consulta individual', async () => {
+    assert.equal((await requisitar('/api/jurado/eventos/inexistente/concorrentes/17')).status, 404);
+    assert.equal(consultas.length, 1);
+});
+
+for (const estado of ['ausente', 'inativa', 'tipo', 'situacao', 'cargo']) {
+    test(`detalhe: cadeia rejeita autorizacao ${estado}`, async () => {
+        if (estado === 'ausente') designacoes = [];
+        else if (estado === 'inativa') designacoes[0].ativo = 0;
+        else usuario[{ tipo: 'id_tipo_usuario', situacao: 'id_situacao', cargo: 'id_cargo' }[estado]] = 99;
+        assert.equal((await requisitar(caminhoDetalhe)).status, 403);
+        assert.equal(consultas.length, 2);
+    });
+}
+
+test('detalhe: falha do lookup retorna 500 sem expor SQL', async () => {
+    falharFila = 'detalhe';
+    const consoleErrorOriginal = console.error;
+    console.error = () => {};
+    try {
+        const resposta = await requisitar(caminhoDetalhe);
+        assert.deepEqual(resposta, { status: 500, body: { message: 'Não foi possível consultar o concorrente.' } });
+    } finally {
+        console.error = consoleErrorOriginal;
+    }
+});
