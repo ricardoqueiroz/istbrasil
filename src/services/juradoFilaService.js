@@ -6,17 +6,20 @@ export const CAMPOS_ORDENACAO_FILA = Object.freeze({
     nome: 'u.nome'
 });
 
-const SQL_BASE_FILA = `FROM ist_concorrentes c
+export const SQL_JOINS_CONCORRENTE = `FROM ist_concorrentes c
     INNER JOIN ist_usuarios u ON u.id_usuario = c.id_usuario
     INNER JOIN ist_composicao obra1 ON obra1.id_obra = c.id_obra_1
-    LEFT JOIN ist_composicao obra2 ON obra2.id_obra = c.id_obra_2
-    WHERE c.id_evento = ?
+    LEFT JOIN ist_composicao obra2 ON obra2.id_obra = c.id_obra_2`;
+
+export const SQL_ELEGIBILIDADE_CONCORRENTE = `c.id_evento = ?
       AND c.aceite_regulamento = 1
       AND c.numero_concorrente IS NOT NULL
       AND TRIM(c.numero_concorrente) <> ''
       AND c.id_obra_1 IS NOT NULL
       AND c.link_video_1 IS NOT NULL
       AND TRIM(c.link_video_1) <> ''`;
+
+const SQL_BASE_FILA = `${SQL_JOINS_CONCORRENTE} WHERE ${SQL_ELEGIBILIDADE_CONCORRENTE}`;
 
 const SQL_PROJECAO_CONCORRENTE = `SELECT c.id_concorrente, c.numero_concorrente, u.nome, u.cidade, u.uf,
         c.data_cadastro, c.id_obra_1,
