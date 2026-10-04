@@ -1,12 +1,40 @@
 import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { TestBed } from '@angular/core/testing';
-import { ConcorrenteJuradoResponse, FilaJuradoResponse, JuradoService } from './jurado.service';
+import { AvaliacaoJuradoResponse, ConcorrenteJuradoResponse, FilaJuradoResponse, JuradoService, SalvarAvaliacaoJuradoPayload } from './jurado.service';
 
 describe('JuradoService', () => {
     let service: JuradoService;
     let http: HttpTestingController;
     const evento = { id: 17, slug: 'evento-teste', nome: 'Evento Teste' };
+    const dadosAvaliacao = {
+        evento,
+        concorrente: { idParticipacao: 20, numeroConcorrente: 'FVST2-020' },
+        escala: { min: 0, max: 100, passo: 1 },
+        criterios: [
+            { idCriterio: 11, nome: 'Primeiro criterio', descricao: null, ordem: 1, peso: '40.00' },
+            { idCriterio: 28, nome: 'Segundo criterio', descricao: 'Descricao do criterio', ordem: 2, peso: '60.00' }
+        ]
+    };
+    const respostasPersistidas: AvaliacaoJuradoResponse[] = (['rascunho', 'concluida'] as const).map((estado) => ({
+        ...dadosAvaliacao,
+        estado,
+        versao: 3,
+        avaliacao: {
+            idAvaliacao: 50,
+            notas: [{ idCriterio: 11, nota: 35 }, { idCriterio: 28, nota: 65 }],
+            possivelDesclassificacao: true,
+            motivoDesclassificacao: 'Analise do video',
+            media: '53.00',
+            dataInclusao: '2026-10-03T12:00:00.000Z',
+            dataAtualizacao: '2026-10-04T12:00:00.000Z',
+            dataConclusao: estado === 'concluida' ? '2026-10-04T12:00:00.000Z' : null
+        }
+    }));
+    const respostasAvaliacao: AvaliacaoJuradoResponse[] = [
+        { ...dadosAvaliacao, estado: 'pendente', versao: 0, avaliacao: null },
+        ...respostasPersistidas
+    ];
 
     beforeEach(() => {
         TestBed.configureTestingModule({ providers: [provideHttpClient(), provideHttpClientTesting()] });
@@ -103,6 +131,79 @@ describe('JuradoService', () => {
         service.obterConcorrente(evento.slug, 20).subscribe({ next: () => fail('Erro nao pode emitir concorrente'), error: (error) => expect(error.status).toBe(404) });
         http.expectOne(`/api/jurado/eventos/${evento.slug}/concorrentes/20`).flush({}, { status: 404, statusText: 'Not Found' });
     });
+
+    for (const respostaEsperada of respostasAvaliacao) {
+        it(`consulta avaliacao ${respostaEsperada.estado} com slug codificado e retorna DTO sem transformar`, () => {
+            service.obterAvaliacao('evento/teste', 20).subscribe((resposta) => expect(resposta).toBe(respostaEsperada));
+            const request = http.expectOne('/api/jurado/eventos/evento%2Fteste/concorrentes/20/avaliacao');
+            expect(request.request.method).toBe('GET');
+            expect(request.request.withCredentials).toBeTrue();
+            expect(request.request.params.keys()).toEqual([]);
+            expect(request.request.body).toBeNull();
+            request.flush(respostaEsperada);
+            http.expectNone((req) => req.url.includes('/api/jurado'));
+        });
+    }
+
+    for (const respostaEsperada of respostasPersistidas) {
+        it(`salva avaliacao ${respostaEsperada.estado} sem modificar payload nem consultar novamente`, () => {
+            if (respostaEsperada.estado === 'pendente') throw new Error('Fixture deve representar uma avaliacao persistida');
+            const payload: SalvarAvaliacaoJuradoPayload = {
+                versao: 2,
+                estado: respostaEsperada.estado,
+                notas: [{ idCriterio: 11, nota: 35 }, { idCriterio: 28, nota: 65 }],
+                possivelDesclassificacao: true,
+                motivoDesclassificacao: '  Analise do video  '
+            };
+            const antes = JSON.stringify(payload);
+            payload.notas.forEach((nota) => Object.freeze(nota));
+            Object.freeze(payload.notas);
+            Object.freeze(payload);
+            service.salvarAvaliacao('evento/teste', 20, payload).subscribe((resposta) => expect(resposta).toBe(respostaEsperada));
+            const request = http.expectOne('/api/jurado/eventos/evento%2Fteste/concorrentes/20/avaliacao');
+            expect(request.request.method).toBe('PUT');
+            expect(request.request.withCredentials).toBeTrue();
+            expect(request.request.params.keys()).toEqual([]);
+            expect(request.request.body).toBe(payload);
+            expect(request.request.body).toEqual({
+                versao: 2,
+                estado: respostaEsperada.estado,
+                notas: [{ idCriterio: 11, nota: 35 }, { idCriterio: 28, nota: 65 }],
+                possivelDesclassificacao: true,
+                motivoDesclassificacao: '  Analise do video  '
+            });
+            request.flush(respostaEsperada);
+            expect(JSON.stringify(payload)).toBe(antes);
+            http.expectNone((req) => req.url.includes('/api/jurado'));
+        });
+    }
+
+    for (const status of [400, 401, 403, 404, 409, 500]) {
+        it(`GET avaliacao propaga ${status} sem fallback ou retry`, () => {
+            const erro = jasmine.createSpy('erro');
+            service.obterAvaliacao(evento.slug, 20).subscribe({ next: () => fail('Erro nao deve emitir avaliacao'), error: erro });
+            const request = http.expectOne(`/api/jurado/eventos/${evento.slug}/concorrentes/20/avaliacao`);
+            request.flush({ message: 'Falha de avaliacao' }, { status, statusText: 'Erro' });
+            expect(erro).toHaveBeenCalledTimes(1);
+            expect(erro.calls.mostRecent().args[0].status).toBe(status);
+            expect(erro.calls.mostRecent().args[0].error).toEqual({ message: 'Falha de avaliacao' });
+            http.expectNone((req) => req.url.includes('/api/jurado'));
+        });
+
+        it(`PUT avaliacao propaga ${status} sem retry ou GET automatico`, () => {
+            const payload: SalvarAvaliacaoJuradoPayload = { versao: 0, estado: 'rascunho', notas: [], possivelDesclassificacao: false, motivoDesclassificacao: null };
+            const erro = jasmine.createSpy('erro');
+            service.salvarAvaliacao(evento.slug, 20, payload).subscribe({ next: () => fail('Erro nao deve emitir avaliacao'), error: erro });
+            const request = http.expectOne(`/api/jurado/eventos/${evento.slug}/concorrentes/20/avaliacao`);
+            expect(request.request.method).toBe('PUT');
+            expect(request.request.body).toBe(payload);
+            request.flush({ message: 'Falha de avaliacao' }, { status, statusText: 'Erro' });
+            expect(erro).toHaveBeenCalledTimes(1);
+            expect(erro.calls.mostRecent().args[0].status).toBe(status);
+            expect(erro.calls.mostRecent().args[0].error).toEqual({ message: 'Falha de avaliacao' });
+            http.expectNone((req) => req.url.includes('/api/jurado'));
+        });
+    }
 
     it('zero eventos direciona para a raiz', () => {
         service.destinoAposLogin().subscribe((destino) => expect(destino).toEqual(['/']));

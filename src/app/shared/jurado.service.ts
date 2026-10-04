@@ -52,6 +52,52 @@ export interface ConcorrenteJuradoResponse {
     concorrente: ConcorrenteJurado;
 }
 
+export type EstadoAvaliacaoJurado = 'pendente' | 'rascunho' | 'concluida';
+
+export interface CriterioAvaliacaoJurado {
+    idCriterio: number;
+    nome: string;
+    descricao: string | null;
+    ordem: number;
+    peso: string;
+}
+
+export interface NotaAvaliacaoJurado {
+    idCriterio: number;
+    nota: number;
+}
+
+export interface AvaliacaoJurado {
+    idAvaliacao: number;
+    notas: NotaAvaliacaoJurado[];
+    possivelDesclassificacao: boolean;
+    motivoDesclassificacao: string | null;
+    media: string | null;
+    dataInclusao: string;
+    dataAtualizacao: string;
+    dataConclusao: string | null;
+}
+
+interface DadosAvaliacaoJuradoResponse {
+    evento: EventoJurado;
+    concorrente: Pick<ConcorrenteJurado, 'idParticipacao' | 'numeroConcorrente'>;
+    escala: { min: number; max: number; passo: number };
+    criterios: CriterioAvaliacaoJurado[];
+}
+
+export type AvaliacaoJuradoResponse = DadosAvaliacaoJuradoResponse & (
+    { estado: 'pendente'; versao: 0; avaliacao: null }
+    | { estado: Exclude<EstadoAvaliacaoJurado, 'pendente'>; versao: number; avaliacao: AvaliacaoJurado }
+);
+
+export interface SalvarAvaliacaoJuradoPayload {
+    versao: number;
+    estado: Exclude<EstadoAvaliacaoJurado, 'pendente'>;
+    notas: NotaAvaliacaoJurado[];
+    possivelDesclassificacao: boolean;
+    motivoDesclassificacao: string | null;
+}
+
 export type FilaJuradoSort = 'numeroConcorrente' | 'nome' | 'dataInscricao';
 export type FilaJuradoOrder = 'asc' | 'desc';
 
@@ -85,6 +131,14 @@ export class JuradoService {
 
     obterConcorrente(slug: string, idParticipacao: number): Observable<ConcorrenteJuradoResponse> {
         return this.http.get<ConcorrenteJuradoResponse>(`/api/jurado/eventos/${encodeURIComponent(slug)}/concorrentes/${idParticipacao}`, { withCredentials: true });
+    }
+
+    obterAvaliacao(slug: string, idParticipacao: number): Observable<AvaliacaoJuradoResponse> {
+        return this.http.get<AvaliacaoJuradoResponse>(`/api/jurado/eventos/${encodeURIComponent(slug)}/concorrentes/${idParticipacao}/avaliacao`, { withCredentials: true });
+    }
+
+    salvarAvaliacao(slug: string, idParticipacao: number, payload: SalvarAvaliacaoJuradoPayload): Observable<AvaliacaoJuradoResponse> {
+        return this.http.put<AvaliacaoJuradoResponse>(`/api/jurado/eventos/${encodeURIComponent(slug)}/concorrentes/${idParticipacao}/avaliacao`, payload, { withCredentials: true });
     }
 
     destinoAposLogin(): Observable<string[]> {
