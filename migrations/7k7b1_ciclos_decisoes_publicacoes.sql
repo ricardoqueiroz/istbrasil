@@ -123,17 +123,92 @@ SELECT e.id, e.slug,
          WHERE c.id_evento = e.id) AS criterios_ii_festival
 FROM ist_eventos e
 WHERE e.slug = 'ii-festival-de-violoes-sebastiao-tapajos';
--- Exigir exatamente um evento e ao menos um criterio para o II Festival.
+-- Exigir exatamente um evento; a configuracao ativa e validada abaixo.
 -- Se a consulta anterior retornar zero/mais de uma linha ou criterios = 0: PARE.
 
--- Cada evento que ja tem avaliacoes, e o II Festival alvo, precisa ter
--- criterios para formar um ciclo julgavel. A contagem deve ser zero.
+-- Cada evento que ja tem avaliacoes precisa ter criterios cadastrados.
+-- A configuracao ativa de TODOS os candidatos a ciclo e validada abaixo.
 SELECT e.id, e.slug, COUNT(a.id_avaliacao) AS avaliacoes
 FROM ist_eventos e
 JOIN ist_eventos_avaliacoes a ON a.id_evento = e.id
 LEFT JOIN ist_eventos_criterios_avaliacao c ON c.id_evento = e.id
 GROUP BY e.id, e.slug
 HAVING COUNT(c.id_criterio) = 0;
+
+-- Snapshots iniciais representam o conjunto admitido pelas regras 7K.6.
+-- Historico fora desse conjunto BLOQUEIA antes do DDL; nao reparar/excluir
+-- linhas nem ampliar snapshots para acomodar referencias incompativeis.
+-- Todos os contadores abaixo devem ser zero, em TODOS os eventos.
+SELECT 'avaliacao_jurado_fora_conjunto_admitido' AS problema, COUNT(*) AS quantidade
+FROM ist_eventos_avaliacoes a
+WHERE NOT EXISTS (
+  SELECT 1
+  FROM ist_eventos_jurados j
+  JOIN ist_usuarios u ON u.id_usuario = j.id_usuario
+  WHERE j.id_evento = a.id_evento AND j.id_usuario = a.id_jurado
+    AND j.ativo = 1 AND u.id_tipo_usuario = 4
+    AND u.id_situacao = 8 AND u.id_cargo = 11
+)
+UNION ALL
+SELECT 'avaliacao_concorrente_fora_conjunto_admitido', COUNT(*)
+FROM ist_eventos_avaliacoes a
+WHERE NOT EXISTS (
+  SELECT 1
+  FROM ist_concorrentes p
+  JOIN ist_usuarios u ON u.id_usuario = p.id_usuario
+  JOIN ist_composicao o1 ON o1.id_obra = p.id_obra_1
+  LEFT JOIN ist_composicao o2 ON o2.id_obra = p.id_obra_2
+  WHERE p.id_evento = a.id_evento AND p.id_concorrente = a.id_concorrente
+    AND p.aceite_regulamento = 1
+    AND p.numero_concorrente IS NOT NULL AND TRIM(p.numero_concorrente) <> ''
+    AND p.id_obra_1 IS NOT NULL
+    AND p.link_video_1 IS NOT NULL AND TRIM(p.link_video_1) <> ''
+)
+UNION ALL
+SELECT 'nota_criterio_fora_configuracao_ativa', COUNT(*)
+FROM ist_eventos_avaliacoes_notas n
+WHERE NOT EXISTS (
+  SELECT 1
+  FROM ist_eventos_avaliacoes a
+  JOIN ist_eventos_criterios_avaliacao cr
+    ON cr.id_evento = a.id_evento AND cr.id_criterio = n.id_criterio
+  WHERE a.id_avaliacao = n.id_avaliacao AND a.id_evento = n.id_evento
+    AND cr.ativo = 1
+);
+-- Se um contador divergir, diagnosticar os IDs na mesma fonte antes de DDL.
+
+-- Nao excluir candidatos sem configuracao ativa para fazer o gate passar.
+-- Zero linhas: cada candidato tem configuracao efetiva valida e soma 100.
+SELECT e.id, e.slug,
+       SUM(CASE WHEN cr.ativo = 1 THEN 1 ELSE 0 END) AS criterios_ativos,
+       COALESCE(SUM(CASE WHEN cr.ativo = 1 THEN cr.peso ELSE 0 END), 0)
+         AS soma_pesos_ativos
+FROM ist_eventos e
+LEFT JOIN ist_eventos_criterios_avaliacao cr ON cr.id_evento = e.id
+WHERE EXISTS (SELECT 1 FROM ist_eventos_criterios_avaliacao ca
+              WHERE ca.id_evento = e.id)
+   OR EXISTS (SELECT 1 FROM ist_eventos_avaliacoes av
+              WHERE av.id_evento = e.id)
+   OR e.slug = 'ii-festival-de-violoes-sebastiao-tapajos'
+GROUP BY e.id, e.slug
+HAVING SUM(CASE WHEN cr.ativo = 1 THEN 1 ELSE 0 END) = 0
+    OR COALESCE(SUM(CASE WHEN cr.ativo = 1 THEN cr.peso ELSE 0 END), 0) <> 100
+    OR SUM(CASE WHEN cr.id_criterio IS NOT NULL
+                     AND (cr.ativo IS NULL OR cr.ativo NOT IN (0, 1))
+                THEN 1 ELSE 0 END) > 0
+    OR SUM(CASE WHEN cr.ativo = 1 AND (
+                     cr.id_criterio <= 0
+                     OR cr.ordem IS NULL OR cr.ordem <= 0
+                     OR cr.nome IS NULL OR CHAR_LENGTH(TRIM(cr.nome)) = 0
+                     OR cr.peso IS NULL OR cr.peso <= 0 OR cr.peso > 100
+                   ) THEN 1 ELSE 0 END) > 0;
+
+-- Zero linhas: ordens nao podem conflitar no conjunto ativo.
+SELECT id_evento, ordem, COUNT(*) AS quantidade
+FROM ist_eventos_criterios_avaliacao
+WHERE ativo = 1
+GROUP BY id_evento, ordem
+HAVING COUNT(*) > 1;
 
 -- Todos os resultados abaixo devem ser zero. Se nao forem, PARE antes do DDL.
 SELECT 'avaliacao_sem_evento' AS problema, COUNT(*) AS quantidade
@@ -433,6 +508,7 @@ JOIN ist_eventos_ciclos c
   ON c.id_evento = j.id_evento AND c.numero_ciclo = 1
 SET j.id_ciclo_atual = c.id_ciclo;
 
+-- Apenas membros admitidos; campos de origem preservam a evidencia capturada.
 INSERT INTO ist_eventos_ciclos_jurados
   (id_ciclo, id_evento, id_usuario, nome_publico, assignment_ativo,
    tipo_usuario_origem, situacao_usuario_origem, cargo_usuario_origem,
@@ -442,7 +518,9 @@ SELECT c.id_ciclo, j.id_evento, j.id_usuario, u.nome, j.ativo,
 FROM ist_eventos_ciclos c
 JOIN ist_eventos_jurados j ON j.id_evento = c.id_evento
 JOIN ist_usuarios u ON u.id_usuario = j.id_usuario
-WHERE c.numero_ciclo = 1;
+WHERE c.numero_ciclo = 1
+  AND j.ativo = 1 AND u.id_tipo_usuario = 4
+  AND u.id_situacao = 8 AND u.id_cargo = 11;
 
 INSERT INTO ist_eventos_ciclos_concorrentes
   (id_ciclo, id_evento, id_concorrente, id_usuario, numero_concorrente,
@@ -469,16 +547,21 @@ SELECT c.id_ciclo, p.id_evento, p.id_concorrente, p.id_usuario,
 FROM ist_eventos_ciclos c
 JOIN ist_concorrentes p ON p.id_evento = c.id_evento
 JOIN ist_usuarios u ON u.id_usuario = p.id_usuario
-LEFT JOIN ist_composicao o1 ON o1.id_obra = p.id_obra_1
+JOIN ist_composicao o1 ON o1.id_obra = p.id_obra_1
 LEFT JOIN ist_composicao o2 ON o2.id_obra = p.id_obra_2
-WHERE c.numero_ciclo = 1;
+WHERE c.numero_ciclo = 1
+  AND p.aceite_regulamento = 1
+  AND p.numero_concorrente IS NOT NULL AND TRIM(p.numero_concorrente) <> ''
+  AND p.id_obra_1 IS NOT NULL
+  AND p.link_video_1 IS NOT NULL AND TRIM(p.link_video_1) <> '';
 
+-- Existencia no snapshot significa criterio da configuracao efetiva ativa.
 INSERT INTO ist_eventos_ciclos_criterios
   (id_evento, id_ciclo, id_criterio_origem, nome, descricao, ordem, peso)
 SELECT c.id_evento, c.id_ciclo, a.id_criterio, a.nome, a.descricao, a.ordem, a.peso
 FROM ist_eventos_ciclos c
 JOIN ist_eventos_criterios_avaliacao a ON a.id_evento = c.id_evento
-WHERE c.numero_ciclo = 1;
+WHERE c.numero_ciclo = 1 AND a.ativo = 1;
 
 UPDATE ist_eventos_avaliacoes a
 JOIN ist_eventos_ciclos c
@@ -536,17 +619,158 @@ SELECT
   (SELECT COUNT(*)
    FROM ist_eventos_ciclos c
    JOIN ist_eventos_jurados j ON j.id_evento = c.id_evento
-   WHERE c.numero_ciclo = 1) AS roster_jurados_esperado,
+   JOIN ist_usuarios u ON u.id_usuario = j.id_usuario
+   WHERE c.numero_ciclo = 1
+     AND j.ativo = 1 AND u.id_tipo_usuario = 4
+     AND u.id_situacao = 8 AND u.id_cargo = 11) AS roster_jurados_esperado,
   (SELECT COUNT(*) FROM ist_eventos_ciclos_concorrentes) AS participantes_depois,
   (SELECT COUNT(*)
    FROM ist_eventos_ciclos c
    JOIN ist_concorrentes p ON p.id_evento = c.id_evento
-   WHERE c.numero_ciclo = 1) AS participantes_esperado,
+   JOIN ist_usuarios u ON u.id_usuario = p.id_usuario
+   JOIN ist_composicao o1 ON o1.id_obra = p.id_obra_1
+   LEFT JOIN ist_composicao o2 ON o2.id_obra = p.id_obra_2
+   WHERE c.numero_ciclo = 1
+     AND p.aceite_regulamento = 1
+     AND p.numero_concorrente IS NOT NULL AND TRIM(p.numero_concorrente) <> ''
+     AND p.id_obra_1 IS NOT NULL
+     AND p.link_video_1 IS NOT NULL AND TRIM(p.link_video_1) <> '') AS participantes_esperado,
   (SELECT COUNT(*) FROM ist_eventos_ciclos_criterios) AS criterios_depois,
   (SELECT COUNT(*)
    FROM ist_eventos_ciclos c
    JOIN ist_eventos_criterios_avaliacao a ON a.id_evento = c.id_evento
-   WHERE c.numero_ciclo = 1) AS criterios_esperado;
+   WHERE c.numero_ciclo = 1 AND a.ativo = 1) AS criterios_esperado;
+
+-- Igualdade por identidade, nao apenas COUNT. Janela SEM escritores mantida.
+-- Todos os contadores devem ser zero, com ciclo inicial do evento correto.
+SELECT 'jurado_admitido_ausente' AS problema, COUNT(*) AS quantidade
+FROM ist_eventos_ciclos c
+JOIN ist_eventos_jurados j ON j.id_evento = c.id_evento
+JOIN ist_usuarios u ON u.id_usuario = j.id_usuario
+WHERE c.numero_ciclo = 1
+  AND j.ativo = 1 AND u.id_tipo_usuario = 4
+  AND u.id_situacao = 8 AND u.id_cargo = 11
+  AND NOT EXISTS (
+    SELECT 1 FROM ist_eventos_ciclos_jurados s
+    WHERE s.id_ciclo = c.id_ciclo AND s.id_evento = c.id_evento
+      AND s.id_usuario = j.id_usuario
+  )
+UNION ALL
+SELECT 'jurado_snapshot_excedente', COUNT(*)
+FROM ist_eventos_ciclos_jurados s
+WHERE NOT EXISTS (
+  SELECT 1
+  FROM ist_eventos_ciclos c
+  JOIN ist_eventos_jurados j ON j.id_evento = c.id_evento
+  JOIN ist_usuarios u ON u.id_usuario = j.id_usuario
+  WHERE c.numero_ciclo = 1 AND c.id_ciclo = s.id_ciclo
+    AND c.id_evento = s.id_evento AND j.id_usuario = s.id_usuario
+    AND j.ativo = 1 AND u.id_tipo_usuario = 4
+    AND u.id_situacao = 8 AND u.id_cargo = 11
+)
+UNION ALL
+SELECT 'concorrente_admitido_ausente', COUNT(*)
+FROM ist_eventos_ciclos c
+JOIN ist_concorrentes p ON p.id_evento = c.id_evento
+JOIN ist_usuarios u ON u.id_usuario = p.id_usuario
+JOIN ist_composicao o1 ON o1.id_obra = p.id_obra_1
+LEFT JOIN ist_composicao o2 ON o2.id_obra = p.id_obra_2
+WHERE c.numero_ciclo = 1
+  AND p.aceite_regulamento = 1
+  AND p.numero_concorrente IS NOT NULL AND TRIM(p.numero_concorrente) <> ''
+  AND p.id_obra_1 IS NOT NULL
+  AND p.link_video_1 IS NOT NULL AND TRIM(p.link_video_1) <> ''
+  AND NOT EXISTS (
+    SELECT 1 FROM ist_eventos_ciclos_concorrentes s
+    WHERE s.id_ciclo = c.id_ciclo AND s.id_evento = c.id_evento
+      AND s.id_concorrente = p.id_concorrente
+  )
+UNION ALL
+SELECT 'concorrente_snapshot_excedente', COUNT(*)
+FROM ist_eventos_ciclos_concorrentes s
+WHERE NOT EXISTS (
+  SELECT 1
+  FROM ist_eventos_ciclos c
+  JOIN ist_concorrentes p ON p.id_evento = c.id_evento
+  JOIN ist_usuarios u ON u.id_usuario = p.id_usuario
+  JOIN ist_composicao o1 ON o1.id_obra = p.id_obra_1
+  LEFT JOIN ist_composicao o2 ON o2.id_obra = p.id_obra_2
+  WHERE c.numero_ciclo = 1 AND c.id_ciclo = s.id_ciclo
+    AND c.id_evento = s.id_evento AND p.id_concorrente = s.id_concorrente
+    AND p.aceite_regulamento = 1
+    AND p.numero_concorrente IS NOT NULL AND TRIM(p.numero_concorrente) <> ''
+    AND p.id_obra_1 IS NOT NULL
+    AND p.link_video_1 IS NOT NULL AND TRIM(p.link_video_1) <> ''
+)
+UNION ALL
+SELECT 'criterio_ativo_ausente', COUNT(*)
+FROM ist_eventos_ciclos c
+JOIN ist_eventos_criterios_avaliacao a ON a.id_evento = c.id_evento
+WHERE c.numero_ciclo = 1 AND a.ativo = 1
+  AND NOT EXISTS (
+    SELECT 1 FROM ist_eventos_ciclos_criterios s
+    WHERE s.id_ciclo = c.id_ciclo AND s.id_evento = c.id_evento
+      AND s.id_criterio_origem = a.id_criterio
+  )
+UNION ALL
+SELECT 'criterio_snapshot_excedente', COUNT(*)
+FROM ist_eventos_ciclos_criterios s
+WHERE NOT EXISTS (
+  SELECT 1
+  FROM ist_eventos_ciclos c
+  JOIN ist_eventos_criterios_avaliacao a ON a.id_evento = c.id_evento
+  WHERE c.numero_ciclo = 1 AND c.id_ciclo = s.id_ciclo
+    AND c.id_evento = s.id_evento AND a.id_criterio = s.id_criterio_origem
+    AND a.ativo = 1
+);
+
+-- Campos congelados devem reproduzir as fontes nesta janela sem escritores.
+-- Comparar bytes em utf8mb4: fontes live podem usar latin1, snapshots utf8mb4.
+SELECT 'jurado_snapshot_campos_divergentes' AS problema, COUNT(*) AS quantidade
+FROM ist_eventos_ciclos_jurados s
+JOIN ist_eventos_ciclos c ON c.id_ciclo = s.id_ciclo AND c.id_evento = s.id_evento
+JOIN ist_eventos_jurados j ON j.id_evento = s.id_evento AND j.id_usuario = s.id_usuario
+JOIN ist_usuarios u ON u.id_usuario = j.id_usuario
+WHERE c.numero_ciclo = 1 AND (
+  NOT (BINARY s.nome_publico <=> BINARY CONVERT(u.nome USING utf8mb4))
+  OR NOT (s.assignment_ativo <=> j.ativo)
+  OR NOT (s.tipo_usuario_origem <=> u.id_tipo_usuario)
+  OR NOT (s.situacao_usuario_origem <=> u.id_situacao)
+  OR NOT (s.cargo_usuario_origem <=> u.id_cargo)
+  OR s.estado_participacao <> 'incluido'
+)
+UNION ALL
+SELECT 'concorrente_snapshot_campos_divergentes', COUNT(*)
+FROM ist_eventos_ciclos_concorrentes s
+JOIN ist_eventos_ciclos c ON c.id_ciclo = s.id_ciclo AND c.id_evento = s.id_evento
+JOIN ist_concorrentes p ON p.id_concorrente = s.id_concorrente AND p.id_evento = s.id_evento
+JOIN ist_usuarios u ON u.id_usuario = p.id_usuario
+JOIN ist_composicao o1 ON o1.id_obra = p.id_obra_1
+LEFT JOIN ist_composicao o2 ON o2.id_obra = p.id_obra_2
+WHERE c.numero_ciclo = 1 AND (
+  NOT (s.id_usuario <=> p.id_usuario)
+  OR NOT (BINARY s.numero_concorrente <=> BINARY CONVERT(p.numero_concorrente USING utf8mb4))
+  OR NOT (BINARY s.nome_publico <=> BINARY CONVERT(u.nome USING utf8mb4))
+  OR NOT (s.id_obra_1 <=> p.id_obra_1)
+  OR NOT (BINARY s.obra_1_publica <=> BINARY CONVERT(o1.obra USING utf8mb4))
+  OR NOT (BINARY s.link_video_1 <=> BINARY CONVERT(p.link_video_1 USING utf8mb4))
+  OR NOT (s.id_obra_2 <=> p.id_obra_2)
+  OR NOT (BINARY s.obra_2_publica <=> BINARY CONVERT(o2.obra USING utf8mb4))
+  OR NOT (BINARY s.link_video_2 <=> BINARY CONVERT(p.link_video_2 USING utf8mb4))
+  OR s.estado_participacao <> 'incluido'
+)
+UNION ALL
+SELECT 'criterio_snapshot_campos_divergentes', COUNT(*)
+FROM ist_eventos_ciclos_criterios s
+JOIN ist_eventos_ciclos c ON c.id_ciclo = s.id_ciclo AND c.id_evento = s.id_evento
+JOIN ist_eventos_criterios_avaliacao a
+  ON a.id_evento = s.id_evento AND a.id_criterio = s.id_criterio_origem
+WHERE c.numero_ciclo = 1 AND (
+  NOT (BINARY s.nome <=> BINARY CONVERT(a.nome USING utf8mb4))
+  OR NOT (BINARY s.descricao <=> BINARY CONVERT(a.descricao USING utf8mb4))
+  OR NOT (s.ordem <=> a.ordem)
+  OR NOT (s.peso <=> a.peso)
+);
 
 SELECT COUNT(*) AS avaliacoes_com_ciclo_evento_divergente
 FROM ist_eventos_avaliacoes a
@@ -634,7 +858,8 @@ WHERE (e.slug = 'ii-festival-de-violoes-sebastiao-tapajos'
 -- Esperado: contagens de avaliacoes/notas inalteradas; zero avaliacoes/notas
 -- sem mapeamento; zero avaliacoes sem jurado no roster; zero ciclos atuais
 -- ausentes; totais de roster/participantes/criterios "depois" iguais aos
--- "esperados"; zero divergencias de evento/ciclo/criterio; zero origens de
+-- "esperados" admitidos; igualdade bidirecional e campos congelados sem
+-- divergencias; zero divergencias de evento/ciclo/criterio; zero origens de
 -- avaliacao invalidas; somente o II Festival com quantidade_classificados=3.
 -- Contagens de erro devem ser zero; contagens antes/depois devem ser iguais.
 -- Timestamps data_atualizacao devem ser identicos ao baseline por ID.
