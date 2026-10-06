@@ -5,6 +5,7 @@ import {
     interpretarTentativasCiclo
 } from './julgamentoContextService.js';
 import { calcularMediaPonderada } from './juradoAvaliacaoService.js';
+import { avaliarAutorizacaoGravacao, carregarElegibilidadeLiveGravacao } from './juradoAvaliacaoAutorizacaoService.js';
 
 const idValido = (valor, maximo = 4294967295) => Number.isSafeInteger(valor) && valor > 0 && valor <= maximo;
 const exigir = (condicao, etapa) => {
@@ -57,14 +58,14 @@ const mapearNotas = (rows, avaliacao, criterios) => {
     return notas.sort((a, b) => a.idCriterio - b.idCriterio);
 };
 
-// Service interno, sem cutover. O caller fornece identidade autenticada e
-// autorizacao operacional live; inclusao snapshot nao substitui essa autorizacao.
+// Service interno, sem cutover. O caller fornece identidade autenticada.
+// Leitura historica nao concede gravacao: a politica revalida elegibilidade live.
 // O executor e compartilhado em toda a leitura. Consistencia multiconsulta exige
 // isolamento adequado pelo caller; este service nao gerencia transacao ou locks.
 export const obterAvaliacaoJuradoCycleAware = async (evento, idParticipacao, idUsuarioAutenticado, executor = db) => {
     exigir(idValido(idParticipacao) && idValido(idUsuarioAutenticado, 2147483647), 'entrada');
     const contexto = await resolverContextoJulgamento(evento, executor);
-    await resolverJuradoCiclo(contexto, idUsuarioAutenticado, executor, { exigirIncluido: true });
+    const jurado = await resolverJuradoCiclo(contexto, idUsuarioAutenticado, executor, { exigirIncluido: true });
     const participante = await resolverConcorrenteCiclo(contexto, idParticipacao, executor, { exigirIncluido: true });
     const snapshots = await carregarCriteriosCiclo(contexto, executor);
     const criterios = snapshots.map(row => ({
@@ -88,6 +89,10 @@ export const obterAvaliacaoJuradoCycleAware = async (evento, idParticipacao, idU
         [par.id_evento, par.id_ciclo, par.id_jurado, par.id_concorrente]
     );
     const efetiva = interpretarTentativasCiclo(tentativas, par);
+    const autorizacao = await avaliarAutorizacaoGravacao({
+        contexto, idUsuario: idUsuarioAutenticado, idParticipacao, jurado, participante, criterios: snapshots, efetiva,
+        live: () => carregarElegibilidadeLiveGravacao(executor, contexto.id_evento, idUsuarioAutenticado)
+    });
     let avaliacao = null;
     if (efetiva) {
         validarAvaliacaoEfetiva(efetiva);
@@ -114,9 +119,8 @@ export const obterAvaliacaoJuradoCycleAware = async (evento, idParticipacao, idU
             idCiclo: contexto.id_ciclo_atual, numeroCiclo: contexto.numero_ciclo,
             numeroTentativa: efetiva ? efetiva.numero_tentativa : null
         },
-        // Conservador: autorizacao final de gravacao nao foi avaliada nesta slice.
-        podeGravar: false,
-        autorizacaoGravacao: { estado: 'nao_avaliada' },
+        podeGravar: autorizacao.podeGravar,
+        autorizacaoGravacao: { estado: autorizacao.estado, code: autorizacao.code, motivo: autorizacao.motivo },
         concorrente: {
             idParticipacao: participante.id_concorrente,
             idSnapshot: participante.id_ciclo_concorrente,

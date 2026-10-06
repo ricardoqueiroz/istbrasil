@@ -11,6 +11,9 @@ import {
 import { obterAvaliacaoJuradoCycleAware as leitura } from '../src/services/juradoAvaliacaoLeituraService.js';
 import { salvarAvaliacaoJuradoCycleAware as gravar } from '../src/services/juradoAvaliacaoGravacaoService.js';
 import {
+    avaliarAutorizacaoGravacao, carregarElegibilidadeLiveGravacao
+} from '../src/services/juradoAvaliacaoAutorizacaoService.js';
+import {
     listarAcessosJuradoCycleAware as acessos, obterEventoJuradoCycleAware as evento,
     listarConcorrentesJuradoCycleAware as fila, obterConcorrenteJuradoCycleAware as detalhe
 } from '../src/services/juradoNavegacaoCycleAwareService.js';
@@ -167,6 +170,10 @@ integration('B: legacy draft/completed, effective attempt, snapshot notes and we
         const completed = await leitura(101, 3002, 1001, c);
         assert.equal(draft.estado, 'rascunho');
         assert.equal(completed.estado, 'concluida');
+        assert.equal(draft.podeGravar, true);
+        assert.equal(draft.autorizacaoGravacao.estado, 'autorizada');
+        assert.equal(completed.podeGravar, false);
+        assert.equal(completed.autorizacaoGravacao.code, 'AVALIACAO_CONCLUIDA');
         assert.equal(draft.contexto.numeroTentativa, 1);
         assert.equal(completed.contexto.numeroTentativa, 1);
         assert.equal(draft.avaliacao.notas.length, 1);
@@ -190,7 +197,10 @@ integration('C/D: sealed publication history and reopened cycle 2 resolve withou
     await readonly(async c => {
         assert.equal(contextB.estado_ciclo, 'selado');
         assert.equal(contextB.id_publicacao_vigente, 7001);
-        assert.equal((await leitura(102, 3101, 1001, c)).contexto.idCiclo, contextB.id_ciclo_atual);
+        const sealed = await leitura(102, 3101, 1001, c);
+        assert.equal(sealed.contexto.idCiclo, contextB.id_ciclo_atual);
+        assert.equal(sealed.podeGravar, false);
+        assert.equal(sealed.autorizacaoGravacao.estado, 'ciclo_fechado');
         assert.equal(contextC.id_publicacao_vigente, 7002);
         assert.equal(contextC.id_publicacao_origem, 7002);
         const oldContext = { id_evento: 103, id_ciclo_atual: contextC.id_ciclo_origem };
@@ -202,6 +212,7 @@ integration('C/D: sealed publication history and reopened cycle 2 resolve withou
         assert.equal(dto.contexto.idCiclo, 8001);
         assert.equal(dto.contexto.numeroTentativa, null);
         assert.equal(dto.estado, 'pendente');
+        assert.equal(dto.podeGravar, true);
         const [[history]] = await c.query('SELECT estado FROM ist_eventos_ciclos WHERE id_ciclo=?', [contextC.id_ciclo_origem]);
         assert.equal(history.estado, 'selado');
     });
@@ -211,6 +222,9 @@ integration('E: live revocation denies navigation while frozen roster remains re
     await readonly(async c => {
         assert.equal((await resolverJuradoCiclo(contextB, 1002, c, { exigirIncluido: true })).estado_participacao, 'incluido');
         assert.equal((await leitura(102, 3101, 1002, c)).estado, 'pendente');
+        const revoked = await leitura(101, 3001, 1002, c);
+        assert.equal(revoked.podeGravar, false);
+        assert.equal(revoked.autorizacaoGravacao.estado, 'jurado_inelegivel');
     });
     assert.deepEqual((await acessos(1002, pool)).eventos, []);
     await assert.rejects(evento(slugA, 1002, pool), code('ACESSO_OPERACIONAL_NEGADO'));
@@ -222,6 +236,47 @@ integration('F: absent and explicitly ineligible participants never gain frozen 
     });
     for (const id of [3103, 3104])
         await assert.rejects(detalhe(slugA, id, 1001, pool), code('CONCORRENTE_AUSENTE'));
+});
+
+integration('shared authorization: real A/B/C, live revocation, exclusion and completed decisions match reader', async () => {
+    await readonly(async c => {
+        const decision = async (idEvento, idParticipacao, idUsuario) => {
+            const contexto = await resolverContextoJulgamento(idEvento, c);
+            const par = { id_evento: idEvento, id_ciclo: contexto.id_ciclo_atual,
+                id_jurado: idUsuario, id_concorrente: idParticipacao };
+            return avaliarAutorizacaoGravacao({
+                contexto, idUsuario, idParticipacao,
+                live: () => carregarElegibilidadeLiveGravacao(c, idEvento, idUsuario),
+                jurado: () => resolverJuradoCiclo(contexto, idUsuario, c, { exigirIncluido: true }),
+                participante: () => resolverConcorrenteCiclo(contexto, idParticipacao, c, { exigirIncluido: true }),
+                criterios: () => carregarCriteriosCiclo(contexto, c),
+                efetiva: async () => {
+                    const [rows] = await c.query(`SELECT * FROM ist_eventos_avaliacoes
+                        WHERE id_evento=? AND id_ciclo=? AND id_jurado=? AND id_concorrente=?
+                        ORDER BY numero_tentativa, id_avaliacao`,
+                    [idEvento, par.id_ciclo, idUsuario, idParticipacao]);
+                    return interpretarTentativasCiclo(rows, par);
+                }
+            });
+        };
+        for (const [event, participant, juror, estado, podeGravar] of [
+            [101, 3001, 1001, 'autorizada', true], [101, 3002, 1001, 'avaliacao_concluida', false],
+            [102, 3101, 1001, 'ciclo_fechado', false], [103, 3102, 1001, 'autorizada', true],
+            [101, 3001, 1002, 'jurado_inelegivel', false]
+        ]) {
+            const authorization = await decision(event, participant, juror);
+            const dto = await leitura(event, participant, juror, c);
+            assert.equal(authorization.estado, estado);
+            assert.equal(authorization.podeGravar, podeGravar);
+            assert.equal(dto.podeGravar, podeGravar);
+            assert.deepEqual(dto.autorizacaoGravacao, {
+                estado, code: authorization.code, motivo: authorization.motivo
+            });
+        }
+        assert.equal((await decision(101, 3104, 1001)).code, 'CONCORRENTE_NAO_INCLUIDO');
+        assert.equal((await decision(101, 3103, 1001)).code, 'CONCORRENTE_AUSENTE');
+        assert.equal((await resolverJuradoCiclo(contextA, 1002, c)).estado_participacao, 'incluido');
+    });
 });
 
 // The writer owns its transaction. Map only its boundaries to real SAVEPOINT SQL
@@ -261,6 +316,7 @@ integration('G: real draft replacement, server criteria, optimistic version and 
         assert.equal(written.avaliacao.media, '50.00');
         assert.equal(written.avaliacao.notas.length, 4);
         assert.equal(written.avaliacao.idAvaliacao, 6001);
+        assert.equal(written.podeGravar, true);
         await assert.rejects(gravar(101, 3001, 1001, payload(before, notes), adapter), code('VERSAO_DESATUALIZADA'));
         const replaced = await gravar(101, 3001, 1001, payload(written, [notes[1]]), adapter);
         assert.equal(replaced.avaliacao.notas.length, 1);
@@ -317,6 +373,8 @@ integration('G: nonuniform frozen weights, live criteria changes and full comple
         assert.equal(finished.versao, dto.versao + 2);
         assert.equal(finished.avaliacao.media, '60.00');
         assert.ok(finished.avaliacao.dataConclusao);
+        assert.equal(finished.podeGravar, false);
+        assert.equal(finished.autorizacaoGravacao.code, 'AVALIACAO_CONCLUIDA');
         await assert.rejects(gravar(101, 3001, 1001, payload(finished, notes), adapter), code('AVALIACAO_CONCLUIDA'));
     });
 });

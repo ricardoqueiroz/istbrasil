@@ -31,7 +31,7 @@ test('sucesso encaminha exatamente quatro argumentos e retorna DTO intacto uma u
     const req = request();
     const dto = {
         evento, contexto: { idCiclo: 20, numeroCiclo: 1, numeroTentativa: 1 }, versao: 1,
-        podeGravar: false, autorizacaoGravacao: { estado: 'nao_avaliada' },
+        podeGravar: true, autorizacaoGravacao: { estado: 'autorizada', code: null, motivo: null },
         estado: 'rascunho', avaliacao: { media: null }, criterios: [{ idCriterioCiclo: 501 }]
     };
     const antes = structuredClone(dto);

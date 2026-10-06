@@ -42,6 +42,8 @@ function executor(dados = {}) {
         julgamentos: [{ id_evento: 17, id_ciclo_atual: 20, id_publicacao_vigente: null, quantidade_classificados: null, versao: 1 }],
         ciclos: [ciclo()],
         publicacoes: [],
+        usuarios: [{ id_usuario: 10, id_tipo_usuario: 4, id_situacao: 8, id_cargo: 11 }],
+        designacoes: [{ id_evento: 17, id_usuario: 10, ativo: 1 }],
         jurados: [{ id_ciclo: 20, id_evento: 17, id_usuario: 10, nome_publico: 'Jurado snapshot', estado_participacao: 'incluido' }],
         participantes: [participante()],
         criterios: criterios(),
@@ -60,9 +62,16 @@ function executor(dados = {}) {
             consultas.push({ sql: normalized, params });
             assert.match(normalized, /^SELECT /);
             assert.doesNotMatch(normalized, /\b(INSERT|UPDATE|DELETE|REPLACE|CREATE|ALTER|DROP|MAX|COMMIT|ROLLBACK|START TRANSACTION|LOCK IN SHARE MODE)\b/);
-            assert.doesNotMatch(normalized, /\bist_eventos_(jurados|criterios_avaliacao)\b|\bist_concorrentes\b|\bist_usuarios\b|\bist_composicao\b/);
-            assert.doesNotMatch(normalized, /\bativo\b/);
+            assert.doesNotMatch(normalized, /\bist_eventos_criterios_avaliacao\b|\bist_concorrentes\b|\bist_composicao\b/);
             if (state.falha && normalized.includes(state.falha.trecho)) throw state.falha.error;
+            if (normalized.includes('FROM ist_usuarios')) {
+                assert.equal(normalized, 'SELECT id_usuario, id_tipo_usuario, id_situacao, id_cargo FROM ist_usuarios WHERE id_usuario = ?');
+                return [state.usuarios.filter(u => u.id_usuario === params[0])];
+            }
+            if (normalized.includes('FROM ist_eventos_jurados')) {
+                assert.equal(normalized, 'SELECT id_evento, id_usuario, ativo FROM ist_eventos_jurados WHERE id_evento = ? AND id_usuario = ?');
+                return [state.designacoes.filter(j => j.id_evento === params[0] && j.id_usuario === params[1])];
+            }
             if (normalized.includes('FROM ist_eventos WHERE')) return [state.eventos.filter(e => e.id === params[0])];
             if (normalized.includes('FROM ist_eventos_julgamentos')) {
                 assert.deepEqual(params, [17]);
@@ -98,7 +107,7 @@ function executor(dados = {}) {
 }
 const ler = db => obterAvaliacaoJuradoCycleAware(evento, 40, 10, db);
 
-test('pendente usa somente ponteiro atual, snapshots e DTO exato sem notas ou escrita', async () => {
+test('pendente usa ponteiro atual/snapshots e consulta live apenas para autorizacao, sem escrita', async () => {
     const db = executor({
         ciclos: [ciclo(), ciclo({ id_ciclo: 999, numero_ciclo: 99 })],
         avaliacoes: [tentativa({ id_ciclo: 999, numero_tentativa: 99 })],
@@ -108,8 +117,8 @@ test('pendente usa somente ponteiro atual, snapshots e DTO exato sem notas ou es
     assert.deepEqual(resposta, {
         evento,
         contexto: { idCiclo: 20, numeroCiclo: 1, numeroTentativa: null },
-        podeGravar: false,
-        autorizacaoGravacao: { estado: 'nao_avaliada' },
+        podeGravar: true,
+        autorizacaoGravacao: { estado: 'autorizada', code: null, motivo: null },
         concorrente: {
             idParticipacao: 40, idSnapshot: 30, numeroConcorrente: 'SNAP-040', nome: 'Nome congelado',
             obraPrincipal: { id: 22, titulo: 'Obra congelada' }, linkVideoPrincipal: 'video-congelado-1',
@@ -122,7 +131,7 @@ test('pendente usa somente ponteiro atual, snapshots e DTO exato sem notas ou es
         ],
         avaliacao: null
     });
-    assert.equal(db.consultas.length, 7);
+    assert.equal(db.consultas.length, 9);
     assert(!db.consultas.some(c => c.sql.includes('FROM ist_eventos_avaliacoes_notas')));
     assert.deepEqual(db.consultas.find(c => c.sql.includes('FROM ist_eventos_avaliacoes ')).params, [17, 20, 10, 40]);
 });
@@ -178,8 +187,10 @@ for (const [nome, avaliacao, notas, media] of [
         possivelDesclassificacao: false, motivoDesclassificacao: null, media,
         dataInclusao: avaliacao.data_inclusao, dataAtualizacao: avaliacao.data_atualizacao, dataConclusao: avaliacao.data_conclusao
     });
-    assert.equal(resposta.podeGravar, false);
-    assert.deepEqual(resposta.autorizacaoGravacao, { estado: 'nao_avaliada' });
+    assert.equal(resposta.podeGravar, avaliacao.estado !== 'concluida');
+    assert.deepEqual(resposta.autorizacaoGravacao, avaliacao.estado === 'concluida'
+        ? { estado: 'avaliacao_concluida', code: 'AVALIACAO_CONCLUIDA', motivo: 'AVALIACAO_CONCLUIDA' }
+        : { estado: 'autorizada', code: null, motivo: null });
 });
 for (const notas of [[], [nota()]]) test('concluida incompleta com ' + notas.length + ' notas rejeitada', async () => {
     await assert.rejects(ler(executor({
@@ -331,7 +342,9 @@ test('ciclo selado pode ser lido, mas nunca concede gravacao', async () => {
             ciclo_evento: 17, numero_ciclo: 1, estado_ciclo: 'selado', ciclo_publicado_em: data }]
     }));
     assert.equal(resposta.podeGravar, false);
-    assert.equal(resposta.autorizacaoGravacao.estado, 'nao_avaliada');
+    assert.deepEqual(resposta.autorizacaoGravacao, {
+        estado: 'ciclo_fechado', code: 'CONTEXTO_NAO_GRAVAVEL', motivo: 'CONTEXTO_NAO_GRAVAVEL'
+    });
 });
 test('evento numerico compativel com resolver e evento inexistente distinto', async () => {
     assert.deepEqual((await obterAvaliacaoJuradoCycleAware(17, 40, 10, executor())).evento, evento);
@@ -371,4 +384,24 @@ test('leitura nao modifica fixtures nem seus arrays', async () => {
     const anterior = structuredClone(dados);
     await ler(executor(dados));
     assert.deepEqual(dados, anterior);
+});
+
+test('live revogado preserva DTO historico, mas politica nega gravacao em ciclo aberto', async () => {
+    const db = executor({ usuarios: [{ id_usuario: 10, id_tipo_usuario: 4, id_situacao: 9, id_cargo: 11 }] });
+    const dto = await ler(db);
+    assert.equal(dto.concorrente.nome, 'Nome congelado');
+    assert.equal(dto.podeGravar, false);
+    assert.deepEqual(dto.autorizacaoGravacao, {
+        estado: 'jurado_inelegivel', code: 'ACESSO_OPERACIONAL_NEGADO', motivo: 'ACESSO_OPERACIONAL_NEGADO'
+    });
+    assert.equal(db.consultas.filter(q => q.sql.includes('FROM ist_eventos_jurados')).length, 0);
+});
+test('designacao inativa nega gravacao sem alterar snapshots e sem locks no reader', async () => {
+    const dto = await ler(executor({ designacoes: [{ id_evento: 17, id_usuario: 10, ativo: 0 }] }));
+    assert.equal(dto.podeGravar, false);
+    assert.equal(dto.autorizacaoGravacao.estado, 'jurado_inelegivel');
+});
+test('falha SQL na consulta live permanece erro explicito, nao podeGravar=false', async () => {
+    const error = new Error('driver unavailable');
+    await assert.rejects(ler(executor({ falha: { trecho: 'FROM ist_usuarios', error } })), e => e === error);
 });

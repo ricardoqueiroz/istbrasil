@@ -6,6 +6,7 @@ import {
     duplicidadeTentativa
 } from '../src/services/juradoAvaliacaoGravacaoService.js';
 import { JulgamentoContextError, JULGAMENTO_ERROS } from '../src/services/julgamentoContextService.js';
+import { obterAvaliacaoJuradoCycleAware } from '../src/services/juradoAvaliacaoLeituraService.js';
 
 const evento = { id: 17, slug: 'evento-teste', nome: 'Evento Teste' };
 const par = { id_evento: 17, id_ciclo: 20, id_jurado: 10, id_concorrente: 40 };
@@ -201,8 +202,8 @@ test('primeira tentativa: uma connection, isolamento/locks em ordem, reader real
     assert.equal(dto.versao, 1);
     assert.equal(dto.estado, 'rascunho');
     assert.equal(dto.avaliacao.media, '55.00');
-    assert.equal(dto.podeGravar, false);
-    assert.deepEqual(dto.autorizacaoGravacao, { estado: 'nao_avaliada' });
+    assert.equal(dto.podeGravar, true);
+    assert.deepEqual(dto.autorizacaoGravacao, { estado: 'autorizada', code: null, motivo: null });
     assert.equal(dto.concorrente.nome, 'Nome congelado');
     assert.equal(f.state.avaliacoes[0].id_avaliacao_origem, null);
     assert.deepEqual(f.state.notas.map(n => [n.id_criterio_ciclo, n.id_criterio]), [[501, 101], [502, 102]]);
@@ -380,7 +381,8 @@ for (const [nome, p, a, code] of [
     ['numero errado', edicao({ contexto: { idCiclo: 20, numeroTentativa: 2 } }), tentativa(), 'TENTATIVA_DESATUALIZADA'],
     ['versao antiga', edicao({ versao: 2 }), tentativa(), 'VERSAO_DESATUALIZADA'],
     ['concluida', edicao(), tentativa({ estado: 'concluida', data_conclusao: data }), 'AVALIACAO_CONCLUIDA'],
-    ['overflow', edicao({ versao: 4294967295 }), tentativa({ versao: 4294967295 }), 'CONTEXTO_NAO_GRAVAVEL']
+    ['overflow', edicao({ versao: 4294967295 }), tentativa({ versao: 4294967295 }), 'CONTEXTO_NAO_GRAVAVEL'],
+    ['overflow com token stale', edicao({ versao: 3 }), tentativa({ versao: 4294967295 }), 'VERSAO_DESATUALIZADA']
 ]) {
     test(`stale/imutabilidade: ${nome}`, async () => {
         const f = fixture({ state: { avaliacoes: [a] } });
@@ -412,6 +414,8 @@ test('conclusao de rascunho persiste notas e estado atomicamente', async () => {
     assert.equal(dto.versao, 4);
     assert.equal(dto.estado, 'concluida');
     assert.equal(dto.avaliacao.dataConclusao, data);
+    assert.equal(dto.podeGravar, false);
+    assert.equal(dto.autorizacaoGravacao.code, GRAVACAO_ERROS.AVALIACAO_CONCLUIDA);
 });
 test('tentativa N>1 materializada: lacunas aceitas, origem preservada, nenhum N+1', async () => {
     const f = fixture({ state: { avaliacoes: [
@@ -639,4 +643,34 @@ test('arquivo nao integra HTTP nem modifica outras autoridades; todos os executo
     assert.match(source, /resolverConcorrenteCiclo\(contexto, idParticipacao, connection,/);
     assert.match(source, /carregarCriteriosCiclo\(contexto, connection\)/);
     assert.match(source, /obterAvaliacaoJuradoCycleAware\(identificado, idParticipacao, idUsuarioAutenticado, connection\)/);
+});
+test('reader permite draft, stale version continua conflito concreto e nao altera autorizacao', async () => {
+    const f = fixture({ state: { avaliacoes: [tentativa()] } });
+    const readerExecutor = { query: async (sql, params) => {
+        const normalized = sql.replace(/\s+/g, ' ').trim();
+        if (normalized.includes('FROM ist_eventos_julgamentos')) return [f.state.julgamentos];
+        if (normalized.includes('FROM ist_eventos_ciclos WHERE')) return [f.state.ciclos];
+        if (normalized.includes('FROM ist_eventos_publicacoes')) return [[]];
+        if (normalized.includes('FROM ist_eventos_ciclos_jurados')) return [f.state.jurados];
+        if (normalized.includes('FROM ist_eventos_ciclos_concorrentes')) return [f.state.participantes];
+        if (normalized.includes('FROM ist_eventos_ciclos_criterios')) return [f.state.criterios];
+        if (normalized.includes('FROM ist_eventos_avaliacoes_notas')) return [f.state.notas];
+        if (normalized.includes('FROM ist_eventos_avaliacoes')) return [f.state.avaliacoes];
+        if (normalized.includes('FROM ist_usuarios')) return [f.state.usuarios];
+        if (normalized.includes('FROM ist_eventos_jurados')) return [f.state.designacoes];
+        assert.fail('Unexpected SQL');
+    } };
+    assert.equal((await obterAvaliacaoJuradoCycleAware(evento, 40, 10, readerExecutor)).podeGravar, true);
+    await assert.rejects(f.save(edicao({ versao: 2 })), erroWriter('VERSAO_DESATUALIZADA'));
+    assert.equal(f.writes().length, 0);
+    assert.equal((await obterAvaliacaoJuradoCycleAware(evento, 40, 10, readerExecutor)).podeGravar, true);
+});
+test('live revocation after BEGIN is seen by shared policy under existing locks before DML', async () => {
+    const f = fixture({ onQuery(call, state) {
+        if (call.sql.includes('FROM ist_usuarios') && call.sql.endsWith('LOCK IN SHARE MODE')) state.usuarios[0].id_situacao = 9;
+    } });
+    await assert.rejects(f.save(), erroWriter('ACESSO_OPERACIONAL_NEGADO'));
+    assert.equal(f.acquired, 1);
+    assert.equal(f.writes().length, 0);
+    assert.deepEqual(f.calls.slice(-2).map(c => c.sql), ['ROLLBACK', 'RELEASE']);
 });

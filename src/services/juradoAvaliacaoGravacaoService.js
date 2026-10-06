@@ -6,6 +6,9 @@ import {
     interpretarTentativasCiclo
 } from './julgamentoContextService.js';
 import { obterAvaliacaoJuradoCycleAware } from './juradoAvaliacaoLeituraService.js';
+import {
+    AUTORIZACAO_ERROS, avaliarAutorizacaoGravacao, carregarElegibilidadeLiveGravacao
+} from './juradoAvaliacaoAutorizacaoService.js';
 
 const UINT_MAX = 4294967295;
 const idValido = (valor, maximo = UINT_MAX) => Number.isSafeInteger(valor) && valor > 0 && valor <= maximo;
@@ -16,12 +19,12 @@ const textoValido = (valor, limite) => typeof valor === 'string' && valor.trim()
 
 export const GRAVACAO_ERROS = Object.freeze({
     PAYLOAD_INVALIDO: 'PAYLOAD_INVALIDO',
-    ACESSO_OPERACIONAL_NEGADO: 'ACESSO_OPERACIONAL_NEGADO',
+    ACESSO_OPERACIONAL_NEGADO: AUTORIZACAO_ERROS.ACESSO_OPERACIONAL_NEGADO,
     CICLO_DESATUALIZADO: 'CICLO_DESATUALIZADO',
     TENTATIVA_DESATUALIZADA: 'TENTATIVA_DESATUALIZADA',
     VERSAO_DESATUALIZADA: 'VERSAO_DESATUALIZADA',
-    AVALIACAO_CONCLUIDA: 'AVALIACAO_CONCLUIDA',
-    CONTEXTO_NAO_GRAVAVEL: 'CONTEXTO_NAO_GRAVAVEL',
+    AVALIACAO_CONCLUIDA: AUTORIZACAO_ERROS.AVALIACAO_CONCLUIDA,
+    CONTEXTO_NAO_GRAVAVEL: AUTORIZACAO_ERROS.CONTEXTO_NAO_GRAVAVEL,
     CONFLITO_CONCORRENCIA: 'CONFLITO_CONCORRENCIA'
 });
 const MENSAGENS = Object.freeze({
@@ -94,33 +97,16 @@ const COLUNAS_AVALIACAO = `id_avaliacao, id_evento, id_ciclo, id_jurado, id_conc
     numero_tentativa, id_avaliacao_origem, estado, versao, possivel_desclassificacao,
     motivo_desclassificacao, data_inclusao, data_atualizacao, data_conclusao`;
 
-const revalidarLive = async (connection, idEvento, idUsuario) => {
-    const [usuarios] = await connection.query(
-        `SELECT id_usuario, id_tipo_usuario, id_situacao, id_cargo
-         FROM ist_usuarios WHERE id_usuario = ? LOCK IN SHARE MODE`, [idUsuario]
-    );
-    if (usuarios.length !== 1 || usuarios[0].id_usuario !== idUsuario || usuarios[0].id_tipo_usuario !== 4
-        || usuarios[0].id_situacao !== 8 || usuarios[0].id_cargo !== 11) falhar(GRAVACAO_ERROS.ACESSO_OPERACIONAL_NEGADO);
-    const [designacoes] = await connection.query(
-        `SELECT id_evento, id_usuario, ativo FROM ist_eventos_jurados
-         WHERE id_evento = ? AND id_usuario = ? LOCK IN SHARE MODE`, [idEvento, idUsuario]
-    );
-    if (designacoes.length !== 1 || designacoes[0].id_evento !== idEvento
-        || designacoes[0].id_usuario !== idUsuario || designacoes[0].ativo !== 1) falhar(GRAVACAO_ERROS.ACESSO_OPERACIONAL_NEGADO);
-};
-
-const resolverInclusao = async (resolver) => {
-    try {
-        return await resolver();
-    } catch (error) {
-        if (error instanceof JulgamentoContextError) {
-            if (error.code === JULGAMENTO_ERROS.JURADO_FORA_ROSTER) falhar(GRAVACAO_ERROS.ACESSO_OPERACIONAL_NEGADO);
-            if ([JULGAMENTO_ERROS.JURADO_NAO_INCLUIDO, JULGAMENTO_ERROS.CONCORRENTE_NAO_INCLUIDO].includes(error.code)) {
-                falhar(GRAVACAO_ERROS.CONTEXTO_NAO_GRAVAVEL, { motivo: error.code });
-            }
-        }
-        throw error;
+const exigirAutorizacao = decisao => {
+    if (decisao.podeGravar) return;
+    if (decisao.code === JULGAMENTO_ERROS.JURADO_FORA_ROSTER) falhar(GRAVACAO_ERROS.ACESSO_OPERACIONAL_NEGADO);
+    if ([JULGAMENTO_ERROS.JURADO_NAO_INCLUIDO, JULGAMENTO_ERROS.CONCORRENTE_NAO_INCLUIDO].includes(decisao.code)) {
+        falhar(GRAVACAO_ERROS.CONTEXTO_NAO_GRAVAVEL, { motivo: decisao.code });
     }
+    if (Object.values(AUTORIZACAO_ERROS).includes(decisao.code)) {
+        falhar(decisao.code, decisao.motivo === 'limite_versao' ? { motivo: decisao.motivo } : {});
+    }
+    throw new JulgamentoContextError(decisao.code);
 };
 
 const validarNotasExistentes = (rows, avaliacao, criterios) => {
@@ -202,48 +188,65 @@ export const salvarAvaliacaoJuradoCycleAware = async (evento, idParticipacao, id
             && contexto.numero_ciclo === ciclo.numero_ciclo && contexto.estado_ciclo === ciclo.estado
             && contexto.id_ciclo_origem === ciclo.id_ciclo_origem && contexto.id_publicacao_origem === ciclo.id_publicacao_origem, 'contexto_bloqueado');
         if (dados.contexto.idCiclo !== contexto.id_ciclo_atual) falhar(GRAVACAO_ERROS.CICLO_DESATUALIZADO);
-        if (!contexto.permite_escrita) falhar(GRAVACAO_ERROS.CONTEXTO_NAO_GRAVAVEL);
-        await revalidarLive(connection, identificado.id, idUsuarioAutenticado);
-        const [jurados] = await connection.query(
-            `SELECT ${COLUNAS_JURADO} FROM ist_eventos_ciclos_jurados
-             WHERE id_ciclo = ? AND id_usuario = ? LOCK IN SHARE MODE`, [ciclo.id_ciclo, idUsuarioAutenticado]
-        );
-        const jurado = await resolverInclusao(() => resolverJuradoCiclo(contexto, idUsuarioAutenticado, connection, { exigirIncluido: true }));
-        exigir(jurados.length === 1 && isDeepStrictEqual(jurados[0], jurado), 'roster_bloqueado');
-        const [participantes] = await connection.query(
-            `SELECT ${COLUNAS_PARTICIPANTE} FROM ist_eventos_ciclos_concorrentes
-             WHERE id_ciclo = ? AND id_concorrente = ? LOCK IN SHARE MODE`, [ciclo.id_ciclo, idParticipacao]
-        );
-        const participante = await resolverInclusao(() => resolverConcorrenteCiclo(contexto, idParticipacao, connection, { exigirIncluido: true }));
-        exigir(participantes.length === 1 && isDeepStrictEqual(participantes[0], participante), 'participante_bloqueado');
-        const [bloqueados] = await connection.query(
-            `SELECT ${COLUNAS_CRITERIOS} FROM ist_eventos_ciclos_criterios
-             WHERE id_ciclo = ? ORDER BY id_criterio_ciclo LOCK IN SHARE MODE`, [ciclo.id_ciclo]
-        );
-        const criterios = await carregarCriteriosCiclo(contexto, connection);
-        const porId = rows => [...rows].sort((a, b) => a.id_criterio_ciclo - b.id_criterio_ciclo);
-        exigir(isDeepStrictEqual(porId(bloqueados), porId(criterios)), 'criterios_bloqueados');
-        const mapa = new Map(criterios.map(c => [c.id_criterio_ciclo, c]));
-        const notas = dados.notas.map(item => {
-            const criterio = mapa.get(item.idCriterioCiclo);
-            if (!criterio) falhar(GRAVACAO_ERROS.PAYLOAD_INVALIDO, { motivo: 'criterio_fora_snapshot' });
-            return { ...item, idCriterioOrigem: criterio.id_criterio_origem };
+        const par = { id_evento: identificado.id, id_ciclo: ciclo.id_ciclo, id_jurado: idUsuarioAutenticado, id_concorrente: idParticipacao };
+        let criterios, notas, efetiva;
+        const autorizacao = await avaliarAutorizacaoGravacao({
+            contexto, idUsuario: idUsuarioAutenticado, idParticipacao,
+            live: () => carregarElegibilidadeLiveGravacao(connection, identificado.id, idUsuarioAutenticado, { bloquear: true }),
+            jurado: async () => {
+                const [jurados] = await connection.query(
+                    `SELECT ${COLUNAS_JURADO} FROM ist_eventos_ciclos_jurados
+                     WHERE id_ciclo = ? AND id_usuario = ? LOCK IN SHARE MODE`, [ciclo.id_ciclo, idUsuarioAutenticado]
+                );
+                const jurado = await resolverJuradoCiclo(contexto, idUsuarioAutenticado, connection, { exigirIncluido: true });
+                exigir(jurados.length === 1 && isDeepStrictEqual(jurados[0], jurado), 'roster_bloqueado');
+                return jurado;
+            },
+            participante: async () => {
+                const [participantes] = await connection.query(
+                    `SELECT ${COLUNAS_PARTICIPANTE} FROM ist_eventos_ciclos_concorrentes
+                     WHERE id_ciclo = ? AND id_concorrente = ? LOCK IN SHARE MODE`, [ciclo.id_ciclo, idParticipacao]
+                );
+                const participante = await resolverConcorrenteCiclo(contexto, idParticipacao, connection, { exigirIncluido: true });
+                exigir(participantes.length === 1 && isDeepStrictEqual(participantes[0], participante), 'participante_bloqueado');
+                return participante;
+            },
+            criterios: async () => {
+                const [bloqueados] = await connection.query(
+                    `SELECT ${COLUNAS_CRITERIOS} FROM ist_eventos_ciclos_criterios
+                     WHERE id_ciclo = ? ORDER BY id_criterio_ciclo LOCK IN SHARE MODE`, [ciclo.id_ciclo]
+                );
+                criterios = await carregarCriteriosCiclo(contexto, connection);
+                const porId = rows => [...rows].sort((a, b) => a.id_criterio_ciclo - b.id_criterio_ciclo);
+                exigir(isDeepStrictEqual(porId(bloqueados), porId(criterios)), 'criterios_bloqueados');
+                return criterios;
+            },
+            efetiva: async () => {
+                // Payload continua responsabilidade do writer, antes do lock de historico como anteriormente.
+                const mapa = new Map(criterios.map(c => [c.id_criterio_ciclo, c]));
+                notas = dados.notas.map(item => {
+                    const criterio = mapa.get(item.idCriterioCiclo);
+                    if (!criterio) falhar(GRAVACAO_ERROS.PAYLOAD_INVALIDO, { motivo: 'criterio_fora_snapshot' });
+                    return { ...item, idCriterioOrigem: criterio.id_criterio_origem };
+                });
+                if (dados.estado === 'concluida' && notas.length !== criterios.length) {
+                    falhar(GRAVACAO_ERROS.PAYLOAD_INVALIDO, { motivo: 'conclusao_incompleta' });
+                }
+                const [historico] = await connection.query(
+                    `SELECT ${COLUNAS_AVALIACAO} FROM ist_eventos_avaliacoes
+                     WHERE id_evento = ? AND id_ciclo = ? AND id_jurado = ? AND id_concorrente = ?
+                     ORDER BY numero_tentativa, id_avaliacao FOR UPDATE`,
+                    [par.id_evento, par.id_ciclo, par.id_jurado, par.id_concorrente]
+                );
+                efetiva = interpretarTentativasCiclo(historico, par);
+                if ((efetiva?.numero_tentativa ?? null) !== dados.contexto.numeroTentativa) falhar(GRAVACAO_ERROS.TENTATIVA_DESATUALIZADA);
+                return efetiva;
+            }
         });
-        if (dados.estado === 'concluida' && notas.length !== criterios.length) {
-            falhar(GRAVACAO_ERROS.PAYLOAD_INVALIDO, { motivo: 'conclusao_incompleta' });
-        }
-        const par = { id_evento: identificado.id, id_ciclo: ciclo.id_ciclo, id_jurado: idUsuarioAutenticado, id_concorrente: participante.id_concorrente };
-        const [historico] = await connection.query(
-            `SELECT ${COLUNAS_AVALIACAO} FROM ist_eventos_avaliacoes
-             WHERE id_evento = ? AND id_ciclo = ? AND id_jurado = ? AND id_concorrente = ?
-             ORDER BY numero_tentativa, id_avaliacao FOR UPDATE`,
-            [par.id_evento, par.id_ciclo, par.id_jurado, par.id_concorrente]
-        );
-        const efetiva = interpretarTentativasCiclo(historico, par);
-        if ((efetiva?.numero_tentativa ?? null) !== dados.contexto.numeroTentativa) falhar(GRAVACAO_ERROS.TENTATIVA_DESATUALIZADA);
-        if (efetiva?.estado === 'concluida') falhar(GRAVACAO_ERROS.AVALIACAO_CONCLUIDA);
-        if ((efetiva?.versao ?? 0) !== dados.versao) falhar(GRAVACAO_ERROS.VERSAO_DESATUALIZADA);
-        if (efetiva && efetiva.versao === UINT_MAX) falhar(GRAVACAO_ERROS.CONTEXTO_NAO_GRAVAVEL, { motivo: 'limite_versao' });
+        // Preserva conflito de versao antes do limite de incremento; demais negacoes precedem o token.
+        if ((autorizacao.podeGravar || autorizacao.motivo === 'limite_versao')
+            && (efetiva?.versao ?? 0) !== dados.versao) falhar(GRAVACAO_ERROS.VERSAO_DESATUALIZADA);
+        exigirAutorizacao(autorizacao);
         let idAvaliacao = efetiva?.id_avaliacao;
         const numeroTentativa = efetiva ? efetiva.numero_tentativa : 1;
         const versao = dados.versao + 1;

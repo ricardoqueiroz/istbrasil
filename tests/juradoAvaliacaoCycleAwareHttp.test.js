@@ -36,7 +36,7 @@ const payload = () => ({
 });
 const dto = () => ({
     evento, contexto: { idCiclo: 20, numeroCiclo: 1, numeroTentativa: 1 }, versao: 1,
-    podeGravar: false, autorizacaoGravacao: { estado: 'nao_avaliada' }, estado: 'rascunho',
+    podeGravar: true, autorizacaoGravacao: { estado: 'autorizada', code: null, motivo: null }, estado: 'rascunho',
     criterios: [{ idCriterio: 101, idCriterioOrigem: 101, idCriterioCiclo: 501, peso: '100.00' }],
     avaliacao: { idAvaliacao: 60, media: '80.00', notas: [{ idCriterioCiclo: 501, nota: 80 }] }
 });
