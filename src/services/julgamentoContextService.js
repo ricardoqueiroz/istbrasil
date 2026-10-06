@@ -199,7 +199,13 @@ export const resolverConcorrenteCiclo = async (contexto, idConcorrente, executor
     validarVinculo(p, contexto);
     exigir(p.id_concorrente === idConcorrente && idValido(p.id_ciclo_concorrente)
         && idValido(p.id_usuario, INT_MAX) && textoValido(p.nome_publico, 255)
-        && textoValido(p.numero_concorrente, 50) && idValido(p.id_obra_1)
+        && ['incluido', 'desistente', 'desclassificado', 'inelegivel'].includes(p.estado_participacao));
+    // Snapshots excluidos podem nao possuir material; negar membership antes de exigir esse material.
+    if (exigirIncluido && p.estado_participacao !== 'incluido') {
+        falhar(JULGAMENTO_ERROS.CONCORRENTE_NAO_INCLUIDO, { estado_participacao: p.estado_participacao });
+    }
+    exigir(
+        textoValido(p.numero_concorrente, 50) && idValido(p.id_obra_1)
         && typeof p.obra_1_publica === 'string' && Array.from(p.obra_1_publica).length <= 255
         && textoValido(p.link_video_1, 500)
         && typeof p.fingerprint === 'string' && /^[a-fA-F0-9]{64}$/.test(p.fingerprint)
@@ -207,9 +213,6 @@ export const resolverConcorrenteCiclo = async (contexto, idConcorrente, executor
     exigir(p.id_obra_2 === null || idValido(p.id_obra_2));
     exigir(p.obra_2_publica === null || (typeof p.obra_2_publica === 'string' && Array.from(p.obra_2_publica).length <= 255));
     exigir(p.link_video_2 === null || (typeof p.link_video_2 === 'string' && Array.from(p.link_video_2).length <= 500));
-    if (exigirIncluido && p.estado_participacao !== 'incluido') {
-        falhar(JULGAMENTO_ERROS.CONCORRENTE_NAO_INCLUIDO, { estado_participacao: p.estado_participacao });
-    }
     return p;
 };
 
