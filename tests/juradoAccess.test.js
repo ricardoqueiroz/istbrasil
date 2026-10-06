@@ -5,7 +5,8 @@ import express from 'express';
 import cookieParser from 'cookie-parser';
 import jwt from 'jsonwebtoken';
 import { pool as db } from '../src/config/db.js';
-import juradoRoutes from '../src/routes/jurado.routes.js';
+import { criarJuradoRouter } from '../src/routes/jurado.routes.js';
+import { obterAvaliacaoJurado, salvarAvaliacaoJurado } from '../src/controllers/juradoController.js';
 import adminRoutes from '../src/routes/admin.routes.js';
 import { calcularMediaPonderada, validarPayloadAvaliacao } from '../src/services/juradoAvaliacaoService.js';
 import { JuradoAvaliacaoError, salvarAvaliacaoJurado as salvarAvaliacaoServico } from '../src/services/juradoAvaliacaoService.js';
@@ -339,7 +340,9 @@ before(async () => {
     const app = express();
     app.use(cookieParser());
     app.use(express.json());
-    app.use('/api/jurado', juradoRoutes);
+    // Contratos legacy permanecem cobertos somente neste harness explicitamente injetado.
+    // O router produtivo usa cycle-aware; testes de cutover exercitam seu wiring padrao.
+    app.use('/api/jurado', criarJuradoRouter({ avaliacao: { obterAvaliacaoJurado, salvarAvaliacaoJurado } }));
     app.use('/api/admin', adminRoutes);
     server = app.listen(0, '127.0.0.1');
     await once(server, 'listening');

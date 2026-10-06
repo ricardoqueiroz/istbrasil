@@ -119,8 +119,8 @@ const statusWriter = {
 };
 const statusContexto = {
     EVENTO_INEXISTENTE: 404, CONCORRENTE_AUSENTE: 404, JURADO_FORA_ROSTER: 403,
-    JURADO_NAO_INCLUIDO: 403, CONCORRENTE_NAO_INCLUIDO: 409, JULGAMENTO_NAO_CONFIGURADO: 500,
-    CICLO_ATUAL_AUSENTE: 500, CONTEXTO_INCONSISTENTE: 500, CRITERIOS_INVALIDOS: 500, TENTATIVAS_INVALIDAS: 500
+    JURADO_NAO_INCLUIDO: 403, CONCORRENTE_NAO_INCLUIDO: 409, JULGAMENTO_NAO_CONFIGURADO: 404,
+    CICLO_ATUAL_AUSENTE: 404, CONTEXTO_INCONSISTENTE: 500, CRITERIOS_INVALIDOS: 500, TENTATIVAS_INVALIDAS: 500
 };
 test('tabelas de testes cobrem todos os codigos realmente exportados', () => {
     assert.deepEqual(Object.keys(statusWriter).sort(), Object.values(GRAVACAO_ERROS).sort());
@@ -182,10 +182,12 @@ test('falha de logger nao impede resposta 500', async (t) => {
     t.mock.method(console, 'error', () => { throw new Error('logger'); });
     assert.deepEqual((await falha(new Error('infra'))).body, mensagemInterna);
 });
-test('export preparado e isolamento estatico sem rotas ou operacoes de persistencia', () => {
+test('adapter HTTP sem SQL; rotas reais usam GET/PUT cycle-aware', () => {
     assert.equal(typeof salvarAvaliacaoJuradoCycleAwareController, 'function');
     const source = readFileSync(new URL('../src/controllers/juradoAvaliacaoCycleAwareController.js', import.meta.url), 'utf8');
-    assert.doesNotMatch(source, /\.query\s*\(|getConnection|beginTransaction|\.commit\s*\(|\.rollback\s*\(|FOR UPDATE|obterAvaliacaoJuradoCycleAware|express/);
+    assert.doesNotMatch(source, /\.query\s*\(|getConnection|beginTransaction|\.commit\s*\(|\.rollback\s*\(|FOR UPDATE|express/);
     const routes = readFileSync(new URL('../src/routes/jurado.routes.js', import.meta.url), 'utf8');
-    assert.doesNotMatch(routes, /juradoAvaliacaoCycleAwareController|salvarAvaliacaoJuradoCycleAware|obterAvaliacaoJuradoCycleAware/);
+    assert.match(routes, /juradoAvaliacaoCycleAwareController/);
+    assert.match(routes, /obterAvaliacaoJuradoCycleAwareController/);
+    assert.match(routes, /salvarAvaliacaoJuradoCycleAwareController/);
 });

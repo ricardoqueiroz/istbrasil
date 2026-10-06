@@ -2,6 +2,7 @@ import {
     salvarAvaliacaoJuradoCycleAware, JuradoAvaliacaoGravacaoError, GRAVACAO_ERROS
 } from '../services/juradoAvaliacaoGravacaoService.js';
 import { JulgamentoContextError, JULGAMENTO_ERROS } from '../services/julgamentoContextService.js';
+import { obterAvaliacaoJuradoHttpCycleAware } from '../services/juradoAvaliacaoLeituraHttpService.js';
 
 const UINT_MAX = 4294967295;
 const respostaInterna = { message: 'N\u00e3o foi poss\u00edvel concluir a opera\u00e7\u00e3o de avalia\u00e7\u00e3o.' };
@@ -17,6 +18,8 @@ const errosWriter = new Map([
 ]);
 const errosContexto = new Map([
     [JULGAMENTO_ERROS.EVENTO_INEXISTENTE, [404, 'Evento n\u00e3o encontrado.']],
+    [JULGAMENTO_ERROS.JULGAMENTO_NAO_CONFIGURADO, [404, 'Contexto de julgamento indispon\u00edvel.']],
+    [JULGAMENTO_ERROS.CICLO_ATUAL_AUSENTE, [404, 'Contexto de julgamento indispon\u00edvel.']],
     [JULGAMENTO_ERROS.CONCORRENTE_AUSENTE, [404, 'Participa\u00e7\u00e3o indispon\u00edvel neste contexto.']],
     [JULGAMENTO_ERROS.JURADO_FORA_ROSTER, [403, 'Acesso ao evento n\u00e3o autorizado.']],
     [JULGAMENTO_ERROS.JURADO_NAO_INCLUIDO, [403, 'Acesso ao evento n\u00e3o autorizado.']],
@@ -39,25 +42,31 @@ const responderErro = (res, error) => {
         return res.status(status).json({ code: error.code, message });
     }
     // Uma falha do logger nao deve substituir a resposta neutra de infraestrutura.
-    try { console.error('Erro na operacao HTTP preparada de avaliacao cycle-aware.'); } catch {}
+    try { console.error('Erro na operacao HTTP de avaliacao cycle-aware.'); } catch {}
     return res.status(500).json(respostaInterna);
 };
 
-// Preparado, nao roteado. Autenticacao e resolucao do evento pertencem aos middlewares.
-export const criarSalvarAvaliacaoJuradoCycleAwareController = ({
-    salvarAvaliacao = salvarAvaliacaoJuradoCycleAware
-} = {}) => async (req, res) => {
+// Autenticacao e resolucao do evento pertencem aos middlewares.
+const criarController = operation => async (req, res) => {
     const valor = req.params.idParticipacao;
     const idParticipacao = typeof valor === 'string' && /^[1-9]\d*$/.test(valor) ? Number(valor) : NaN;
     if (!Number.isSafeInteger(idParticipacao) || idParticipacao > UINT_MAX) {
         return res.status(400).json({ message: 'Participa\u00e7\u00e3o inv\u00e1lida.' });
     }
     try {
-        const dto = await salvarAvaliacao(req.eventoJurado, idParticipacao, req.usuario.id_usuario, req.body);
+        const dto = await operation(req, idParticipacao);
         return res.status(200).json(dto);
     } catch (error) {
         return responderErro(res, error);
     }
 };
 
+export const criarObterAvaliacaoJuradoCycleAwareController = ({
+    obterAvaliacao = obterAvaliacaoJuradoHttpCycleAware
+} = {}) => criarController((req, id) => obterAvaliacao(req.eventoJurado, id, req.usuario.id_usuario));
+export const criarSalvarAvaliacaoJuradoCycleAwareController = ({
+    salvarAvaliacao = salvarAvaliacaoJuradoCycleAware
+} = {}) => criarController((req, id) => salvarAvaliacao(req.eventoJurado, id, req.usuario.id_usuario, req.body));
+
+export const obterAvaliacaoJuradoCycleAwareController = criarObterAvaliacaoJuradoCycleAwareController();
 export const salvarAvaliacaoJuradoCycleAwareController = criarSalvarAvaliacaoJuradoCycleAwareController();

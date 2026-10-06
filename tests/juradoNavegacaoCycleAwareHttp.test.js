@@ -176,19 +176,25 @@ test('default production router binds cycle-aware navigation, not only injectabl
         assert.equal(queries, 3); assert.equal(committed, 1); assert.equal(released, 1);
     } finally { pool.getConnection = async () => { throw new Error('Unexpected real connection'); }; }
 });
-test('I: real GET/PUT evaluation bindings and legacy handler implementation remain outside cutover', async () => {
+test('I: real GET/PUT evaluation bindings are cycle-aware and never select legacy handlers', async () => {
     const controller = readFileSync(new URL('../src/controllers/juradoController.js', import.meta.url), 'utf8');
     const evaluation = controller.slice(controller.indexOf('const responderErroAvaliacao'));
     assert.match(evaluation, /consultarAvaliacao\(req\.eventoJurado, idParticipacao, req\.usuario\.id_usuario\)/);
     assert.match(evaluation, /persistirAvaliacao\(req\.eventoJurado, idParticipacao, req\.usuario\.id_usuario, req\.body\)/);
     assert.doesNotMatch(evaluation, /CycleAware|idCiclo|numeroTentativa/);
     const { obterAvaliacaoJurado, salvarAvaliacaoJurado } = await import('../src/controllers/juradoController.js');
-    for (const [method, handler] of [['get', obterAvaliacaoJurado], ['put', salvarAvaliacaoJurado]]) {
+    const { obterAvaliacaoJuradoCycleAwareController, salvarAvaliacaoJuradoCycleAwareController } =
+        await import('../src/controllers/juradoAvaliacaoCycleAwareController.js');
+    for (const [method, handler, legacy] of [
+        ['get', obterAvaliacaoJuradoCycleAwareController, obterAvaliacaoJurado],
+        ['put', salvarAvaliacaoJuradoCycleAwareController, salvarAvaliacaoJurado]
+    ]) {
         const layer = actualRouter.stack.find(l => l.route?.path.endsWith('/avaliacao') && l.route.methods[method]);
         assert.equal(layer.route.stack.at(-1).handle, handler);
+        assert(!layer.route.stack.some(l => l.handle === legacy));
     }
 });
-test('I: GET/PUT evaluation on real router still reject malformed ids using legacy handlers', async t => {
+test('I: GET/PUT evaluation on real router reject malformed ids before cycle-aware services', async t => {
     const request = await harness(t);
     for (const method of ['GET', 'PUT'])
         assert.equal((await request('/eventos/fixture-event/concorrentes/0/avaliacao', { method })).status, 400);

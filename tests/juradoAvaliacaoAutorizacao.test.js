@@ -115,7 +115,7 @@ for (const [name, users, assignments] of [
     const executor = { query: async sql => [sql.includes('FROM ist_usuarios') ? users : assignments] };
     assert.equal(await carregarElegibilidadeLiveGravacao(executor, 17, 10), false);
 });
-test('reader and writer import the same policy; writer codes retain existing API and no legacy cutover', () => {
+test('reader and writer import the same policy; HTTP delegates without separate authorization rules', () => {
     for (const file of ['juradoAvaliacaoLeituraService', 'juradoAvaliacaoGravacaoService']) {
         const source = readFileSync(new URL(`../src/services/${file}.js`, import.meta.url), 'utf8');
         assert.match(source, /from '\.\/juradoAvaliacaoAutorizacaoService\.js'/);
@@ -124,5 +124,7 @@ test('reader and writer import the same policy; writer codes retain existing API
     }
     for (const [name, code] of Object.entries(AUTORIZACAO_ERROS)) assert.equal(GRAVACAO_ERROS[name], code);
     const routes = readFileSync(new URL('../src/routes/jurado.routes.js', import.meta.url), 'utf8');
-    assert.doesNotMatch(routes, /juradoAvaliacaoAutorizacao|obterAvaliacaoJuradoCycleAware|salvarAvaliacaoJuradoCycleAware/);
+    assert.doesNotMatch(routes, /juradoAvaliacaoAutorizacao/);
+    assert.match(routes, /obterAvaliacaoJuradoCycleAwareController/);
+    assert.match(routes, /salvarAvaliacaoJuradoCycleAwareController/);
 });

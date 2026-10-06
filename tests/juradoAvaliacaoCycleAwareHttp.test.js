@@ -480,11 +480,10 @@ test('headers parciais: segunda resposta falha, Express encerra conexao, nenhuma
     assert.doesNotMatch(result.text, /synthetic|stack|Response interrupted/);
 });
 
-test('harness nao importa servidor ou rotas produtivas; cutover continua ausente', () => {
+test('harness de falhas nao importa servidor; wiring produtivo GET/PUT e cycle-aware', () => {
     const source = readFileSync(new URL(import.meta.url), 'utf8');
     assert.doesNotMatch(source, /from ['"][^'"]*(?:server\.js|jurado\.routes\.js)['"]/);
-    for (const file of ['../src/routes/jurado.routes.js', '../src/controllers/juradoController.js', '../server.js']) {
-        const contents = readFileSync(new URL(file, import.meta.url), 'utf8');
-        assert.doesNotMatch(contents, /juradoAvaliacaoCycleAwareController|salvarAvaliacaoJuradoCycleAware|obterAvaliacaoJuradoCycleAware/);
-    }
+    const routes = readFileSync(new URL('../src/routes/jurado.routes.js', import.meta.url), 'utf8');
+    assert.match(routes, /obterAvaliacaoJuradoCycleAwareController/);
+    assert.match(routes, /salvarAvaliacaoJuradoCycleAwareController/);
 });

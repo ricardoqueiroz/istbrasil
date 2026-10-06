@@ -2,8 +2,14 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
+import { once } from 'node:events';
+import http from 'node:http';
 import { after, before, test } from 'node:test';
+import express from 'express';
+import cookieParser from 'cookie-parser';
+import jwt from 'jsonwebtoken';
 import mysql from 'mysql2/promise';
+import { pool as applicationPool } from '../src/config/db.js';
 import {
     resolverContextoJulgamento, resolverJuradoCiclo, resolverConcorrenteCiclo,
     carregarCriteriosCiclo, interpretarTentativasCiclo
@@ -400,6 +406,144 @@ integration('G: real FK prevents a note from pointing to another cycle criterion
             WHERE id_avaliacao=6001`, [foreignCriteria[0].id_criterio_ciclo]),
         code('ER_NO_REFERENCED_ROW_2'));
         assert.equal((await leitura(101, 3001, 1001, c)).avaliacao.notas.length, 1);
+    });
+});
+
+// Default production router and real middleware/services; only the application's pool
+// is redirected to the identity-checked local database (or existing SAVEPOINT adapter).
+async function httpHarness(t, { queries = pool, transactions = pool } = {}) {
+    const secret = 'synthetic-maria-cutover-secret';
+    const previous = { JWT_SECRET: process.env.JWT_SECRET, COOKIE_NAME: process.env.COOKIE_NAME };
+    let router;
+    try {
+        process.env.JWT_SECRET = secret;
+        process.env.COOKIE_NAME = 'maria_cutover_test';
+        ({ default: router } = await import('../src/routes/jurado.routes.js'));
+    } finally {
+        for (const [key, value] of Object.entries(previous))
+            if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+    const oldQuery = applicationPool.query, oldConnection = applicationPool.getConnection;
+    applicationPool.query = (sql, params) => queries.query(sql, params);
+    applicationPool.getConnection = () => transactions.getConnection();
+    const app = express();
+    app.use(cookieParser());
+    app.use(express.json());
+    app.use('/api/jurado', router);
+    const server = http.createServer(app);
+    let closed = false;
+    const close = async () => {
+        if (closed) return;
+        closed = true;
+        try {
+            await new Promise((resolve, reject) => {
+                server.close(error => error ? reject(error) : resolve());
+                server.closeAllConnections();
+            });
+        } finally {
+            applicationPool.query = oldQuery;
+            applicationPool.getConnection = oldConnection;
+        }
+    };
+    t.after(close);
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    return { close, request: async (slug, participant, { user = 1001, body } = {}) => {
+        const headers = user === null ? {} : {
+            Cookie: `maria_cutover_test=${jwt.sign({ id_usuario: user, id_tipo_usuario: 4 }, secret)}`
+        };
+        if (body !== undefined) headers['Content-Type'] = 'application/json';
+        const response = await fetch(`http://127.0.0.1:${server.address().port}/api/jurado/eventos/${slug}/concorrentes/${participant}/avaliacao`, {
+            headers, method: body === undefined ? 'GET' : 'PUT',
+            body: body === undefined ? undefined : JSON.stringify(body)
+        });
+        return { status: response.status, body: await response.json() };
+    } };
+}
+integration('HTTP GET: real default router reads A draft/completed, B sealed and C current cycle 2', async t => {
+    const h = await httpHarness(t);
+    try {
+        for (const [slug, participant, estado, podeGravar, authorization, cycle] of [
+            [slugA, 3001, 'rascunho', true, 'autorizada', contextA.id_ciclo_atual],
+            [slugA, 3002, 'concluida', false, 'avaliacao_concluida', contextA.id_ciclo_atual],
+            [slugB, 3101, 'pendente', false, 'ciclo_fechado', contextB.id_ciclo_atual],
+            [slugC, 3102, 'pendente', true, 'autorizada', 8001]
+        ]) {
+            const r = await h.request(slug, participant);
+            assert.equal(r.status, 200);
+            assert.equal(r.body.estado, estado);
+            assert.equal(r.body.podeGravar, podeGravar);
+            assert.equal(r.body.autorizacaoGravacao.estado, authorization);
+            assert.equal(r.body.contexto.idCiclo, cycle);
+            if (slug === slugC) {
+                assert.equal(r.body.contexto.numeroCiclo, 2);
+                assert.equal(r.body.contexto.numeroTentativa, null);
+                assert.equal(r.body.avaliacao, null);
+                const before = await readonly(c => leitura(103, 3102, 1001, c));
+                assert.deepEqual(r.body, before);
+            }
+        }
+        assert.equal((await h.request(slugA, 3001, { user: null })).status, 401);
+        assert.equal((await h.request(slugA, 3001, { user: 1002 })).status, 403);
+        assert.equal((await h.request(slugA, 3103)).status, 404);
+        assert.equal((await h.request(slugA, 3104)).status, 409);
+        assert.equal((await h.request('missing-local-event', 3001)).status, 404);
+    } finally { await h.close(); }
+});
+integration('HTTP PUT: real default router replaces draft notes and completes without reopening, inside rollback scope', async t => {
+    await isolatedWriter(async (c, adapter) => {
+        const initial = await leitura(101, 3001, 1001, c);
+        const notes = initial.criterios.map((k, i) => ({ idCriterioCiclo: k.idCriterioCiclo, nota: [20, 40, 60, 80][i] }));
+        const h = await httpHarness(t, { queries: c, transactions: adapter });
+        try {
+            const written = await h.request(slugA, 3001, { body: payload(initial, notes) });
+            assert.equal(written.status, 200);
+            assert.equal(written.body.versao, initial.versao + 1);
+            assert.equal(written.body.avaliacao.media, '50.00');
+            assert.equal(written.body.avaliacao.notas.length, 4);
+            const replaced = await h.request(slugA, 3001, { body: payload(written.body, [notes[1]]) });
+            assert.equal(replaced.status, 200);
+            assert.equal(replaced.body.avaliacao.notas.length, 1);
+            assert.equal(replaced.body.avaliacao.notas[0].idCriterioCiclo, notes[1].idCriterioCiclo);
+            const finished = await h.request(slugA, 3001, {
+                body: { ...payload(replaced.body, notes), estado: 'concluida' }
+            });
+            assert.equal(finished.status, 200);
+            assert.equal(finished.body.podeGravar, false);
+            assert.equal(finished.body.autorizacaoGravacao.estado, 'avaliacao_concluida');
+            const rejected = await h.request(slugA, 3001, { body: payload(finished.body) });
+            assert.equal(rejected.status, 409);
+            assert.equal(rejected.body.code, 'AVALIACAO_CONCLUIDA');
+            assert.deepEqual(await leitura(101, 3001, 1001, c), finished.body);
+        } finally { await h.close(); }
+    });
+});
+integration('HTTP PUT: stale tokens, B sealed, C reopening, revoked and excluded reject on real SQL with no residues', async t => {
+    await isolatedWriter(async (c, adapter) => {
+        const draft = await leitura(101, 3001, 1001, c), completed = await leitura(101, 3002, 1001, c);
+        const sealed = await leitura(102, 3101, 1001, c), reopened = await leitura(103, 3102, 1001, c);
+        const base = payload(draft);
+        const h = await httpHarness(t, { queries: c, transactions: adapter });
+        try {
+            for (const [slug, id, body, status, expectedCode, user = 1001] of [
+                [slugA, 3001, { ...base, contexto: { ...base.contexto, idCiclo: 8001 } }, 409, 'CICLO_DESATUALIZADO'],
+                [slugA, 3001, { ...base, contexto: { ...base.contexto, numeroTentativa: 2 } }, 409, 'TENTATIVA_DESATUALIZADA'],
+                [slugA, 3001, { ...base, versao: draft.versao + 1 }, 409, 'VERSAO_DESATUALIZADA'],
+                [slugA, 3002, payload(completed), 409, 'AVALIACAO_CONCLUIDA'],
+                [slugB, 3101, payload(sealed), 409, 'CONTEXTO_NAO_GRAVAVEL'],
+                [slugC, 3102, { ...payload(reopened), contexto: { idCiclo: contextC.id_ciclo_origem, numeroTentativa: null } }, 409, 'CICLO_DESATUALIZADO'],
+                [slugA, 3001, { ...base, notas: [{ idCriterioCiclo: reopened.criterios[0].idCriterioCiclo, nota: 50 }] }, 400, 'PAYLOAD_INVALIDO'],
+                [slugA, 3103, base, 404, 'CONCORRENTE_AUSENTE'],
+                [slugA, 3104, base, 409, 'CONTEXTO_NAO_GRAVAVEL'],
+                [slugA, 3001, base, 403, null, 1002],
+                [slugA, 3001, { versao: 1, estado: 'rascunho', notas: [{ idCriterio: 1, nota: 50 }] }, 400, 'PAYLOAD_INVALIDO']
+            ]) {
+                const r = await h.request(slug, id, { user, body });
+                assert.equal(r.status, status);
+                if (expectedCode) assert.equal(r.body.code, expectedCode);
+            }
+            assert.deepEqual(await snapshot(c), baseline);
+        } finally { await h.close(); }
     });
 });
 integration('H: exact rows, historical publications and schema remain identical after writer rollbacks', async () => {
