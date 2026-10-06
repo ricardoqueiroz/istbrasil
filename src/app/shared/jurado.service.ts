@@ -56,6 +56,8 @@ export type EstadoAvaliacaoJurado = 'pendente' | 'rascunho' | 'concluida';
 
 export interface CriterioAvaliacaoJurado {
     idCriterio: number;
+    idCriterioOrigem: number;
+    idCriterioCiclo: number;
     nome: string;
     descricao: string | null;
     ordem: number;
@@ -64,7 +66,27 @@ export interface CriterioAvaliacaoJurado {
 
 export interface NotaAvaliacaoJurado {
     idCriterio: number;
+    idCriterioOrigem: number;
+    idCriterioCiclo: number;
     nota: number;
+}
+
+export interface ContextoAvaliacaoJurado {
+    idCiclo: number;
+    numeroCiclo: number;
+    // null antes da primeira gravacao; tokens sao devolvidos pelo backend, nunca reconstruidos.
+    numeroTentativa: number | null;
+}
+
+export interface AutorizacaoGravacaoJurado {
+    estado: string;
+    code: string | null;
+    motivo: string | null;
+}
+
+export interface ConcorrenteAvaliacaoJurado extends Pick<ConcorrenteJurado,
+    'idParticipacao' | 'numeroConcorrente' | 'nome' | 'obraPrincipal' | 'linkVideoPrincipal' | 'obraOpcional' | 'linkVideoOpcional'> {
+    idSnapshot: number;
 }
 
 export interface AvaliacaoJurado {
@@ -80,7 +102,10 @@ export interface AvaliacaoJurado {
 
 interface DadosAvaliacaoJuradoResponse {
     evento: EventoJurado;
-    concorrente: Pick<ConcorrenteJurado, 'idParticipacao' | 'numeroConcorrente'>;
+    concorrente: ConcorrenteAvaliacaoJurado;
+    contexto: ContextoAvaliacaoJurado;
+    podeGravar: boolean;
+    autorizacaoGravacao: AutorizacaoGravacaoJurado;
     escala: { min: number; max: number; passo: number };
     criterios: CriterioAvaliacaoJurado[];
 }
@@ -91,9 +116,10 @@ export type AvaliacaoJuradoResponse = DadosAvaliacaoJuradoResponse & (
 );
 
 export interface SalvarAvaliacaoJuradoPayload {
+    contexto: Pick<ContextoAvaliacaoJurado, 'idCiclo' | 'numeroTentativa'>;
     versao: number;
     estado: Exclude<EstadoAvaliacaoJurado, 'pendente'>;
-    notas: NotaAvaliacaoJurado[];
+    notas: { idCriterioCiclo: number; nota: number }[];
     possivelDesclassificacao: boolean;
     motivoDesclassificacao: string | null;
 }

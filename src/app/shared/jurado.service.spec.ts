@@ -9,20 +9,31 @@ describe('JuradoService', () => {
     const evento = { id: 17, slug: 'evento-teste', nome: 'Evento Teste' };
     const dadosAvaliacao = {
         evento,
-        concorrente: { idParticipacao: 20, numeroConcorrente: 'FVST2-020' },
+        concorrente: { idParticipacao: 20, idSnapshot: 320, numeroConcorrente: 'FVST2-020', nome: 'Frozen participant',
+            obraPrincipal: { id: 22, titulo: 'Frozen work' }, linkVideoPrincipal: 'https://example.invalid/frozen',
+            obraOpcional: null, linkVideoOpcional: null },
+        contexto: { idCiclo: 100, numeroCiclo: 1, numeroTentativa: null },
+        podeGravar: true,
+        autorizacaoGravacao: { estado: 'autorizada', code: null, motivo: null },
         escala: { min: 0, max: 100, passo: 1 },
         criterios: [
-            { idCriterio: 11, nome: 'Primeiro criterio', descricao: null, ordem: 1, peso: '40.00' },
-            { idCriterio: 28, nome: 'Segundo criterio', descricao: 'Descricao do criterio', ordem: 2, peso: '60.00' }
+            { idCriterio: 111, idCriterioOrigem: 111, idCriterioCiclo: 11, nome: 'Primeiro criterio', descricao: null, ordem: 1, peso: '40.00' },
+            { idCriterio: 128, idCriterioOrigem: 128, idCriterioCiclo: 28, nome: 'Segundo criterio', descricao: 'Descricao do criterio', ordem: 2, peso: '60.00' }
         ]
     };
     const respostasPersistidas: AvaliacaoJuradoResponse[] = (['rascunho', 'concluida'] as const).map((estado) => ({
         ...dadosAvaliacao,
+        contexto: { idCiclo: 100, numeroCiclo: 1, numeroTentativa: 1 },
+        podeGravar: estado === 'rascunho',
+        autorizacaoGravacao: estado === 'rascunho'
+            ? { estado: 'autorizada', code: null, motivo: null }
+            : { estado: 'avaliacao_concluida', code: 'AVALIACAO_CONCLUIDA', motivo: 'AVALIACAO_CONCLUIDA' },
         estado,
         versao: 3,
         avaliacao: {
             idAvaliacao: 50,
-            notas: [{ idCriterio: 11, nota: 35 }, { idCriterio: 28, nota: 65 }],
+            notas: [{ idCriterio: 111, idCriterioOrigem: 111, idCriterioCiclo: 11, nota: 35 },
+                { idCriterio: 128, idCriterioOrigem: 128, idCriterioCiclo: 28, nota: 65 }],
             possivelDesclassificacao: true,
             motivoDesclassificacao: 'Analise do video',
             media: '53.00',
@@ -149,9 +160,10 @@ describe('JuradoService', () => {
         it(`salva avaliacao ${respostaEsperada.estado} sem modificar payload nem consultar novamente`, () => {
             if (respostaEsperada.estado === 'pendente') throw new Error('Fixture deve representar uma avaliacao persistida');
             const payload: SalvarAvaliacaoJuradoPayload = {
+                contexto: { idCiclo: 100, numeroTentativa: 1 },
                 versao: 2,
                 estado: respostaEsperada.estado,
-                notas: [{ idCriterio: 11, nota: 35 }, { idCriterio: 28, nota: 65 }],
+                notas: [{ idCriterioCiclo: 11, nota: 35 }, { idCriterioCiclo: 28, nota: 65 }],
                 possivelDesclassificacao: true,
                 motivoDesclassificacao: '  Analise do video  '
             };
@@ -166,9 +178,10 @@ describe('JuradoService', () => {
             expect(request.request.params.keys()).toEqual([]);
             expect(request.request.body).toBe(payload);
             expect(request.request.body).toEqual({
+                contexto: { idCiclo: 100, numeroTentativa: 1 },
                 versao: 2,
                 estado: respostaEsperada.estado,
-                notas: [{ idCriterio: 11, nota: 35 }, { idCriterio: 28, nota: 65 }],
+                notas: [{ idCriterioCiclo: 11, nota: 35 }, { idCriterioCiclo: 28, nota: 65 }],
                 possivelDesclassificacao: true,
                 motivoDesclassificacao: '  Analise do video  '
             });
@@ -191,7 +204,7 @@ describe('JuradoService', () => {
         });
 
         it(`PUT avaliacao propaga ${status} sem retry ou GET automatico`, () => {
-            const payload: SalvarAvaliacaoJuradoPayload = { versao: 0, estado: 'rascunho', notas: [], possivelDesclassificacao: false, motivoDesclassificacao: null };
+            const payload: SalvarAvaliacaoJuradoPayload = { contexto: { idCiclo: 100, numeroTentativa: null }, versao: 0, estado: 'rascunho', notas: [], possivelDesclassificacao: false, motivoDesclassificacao: null };
             const erro = jasmine.createSpy('erro');
             service.salvarAvaliacao(evento.slug, 20, payload).subscribe({ next: () => fail('Erro nao deve emitir avaliacao'), error: erro });
             const request = http.expectOne(`/api/jurado/eventos/${evento.slug}/concorrentes/20/avaliacao`);

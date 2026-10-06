@@ -68,8 +68,12 @@ interface EdicaoAvaliacao {
                     <div><dt class="text-sm text-surface-600 dark:text-surface-300">Evento</dt><dd class="break-words font-medium">{{ resposta.evento.nome }}</dd></div>
                     <div><dt class="text-sm text-surface-600 dark:text-surface-300">Inscri&ccedil;&atilde;o</dt><dd class="break-words font-medium">{{ resposta.concorrente.numeroConcorrente }}</dd></div>
                     <div><dt class="text-sm text-surface-600 dark:text-surface-300">Concorrente</dt><dd class="break-words font-medium">{{ resposta.concorrente.nome }}</dd></div>
-                    <div><dt class="text-sm text-surface-600 dark:text-surface-300">Localidade</dt><dd data-testid="localidade">{{ formatarLocalidade(resposta.concorrente.cidade, resposta.concorrente.uf) }}</dd></div>
-                    <div><dt class="text-sm text-surface-600 dark:text-surface-300">Data da inscri&ccedil;&atilde;o</dt><dd>{{ formatarData(resposta.concorrente.dataInscricao) }}</dd></div>
+                    @if (resposta.concorrente.cidade !== undefined || resposta.concorrente.uf !== undefined) {
+                        <div><dt class="text-sm text-surface-600 dark:text-surface-300">Localidade</dt><dd data-testid="localidade">{{ formatarLocalidade(resposta.concorrente.cidade, resposta.concorrente.uf) }}</dd></div>
+                    }
+                    @if (resposta.concorrente.dataInscricao) {
+                        <div><dt class="text-sm text-surface-600 dark:text-surface-300">Data da inscri&ccedil;&atilde;o</dt><dd>{{ formatarData(resposta.concorrente.dataInscricao) }}</dd></div>
+                    }
                 </dl>
 
                 <div class="grid min-w-0 gap-8 xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
@@ -100,7 +104,15 @@ interface EdicaoAvaliacao {
                         @if (mensagemConflito()) {
                             <p role="alert" class="break-words border-l-4 border-amber-500 pl-3" data-testid="conflito-avaliacao">{{ mensagemConflito() }}</p>
                         }
+                        @if (conflito()) {
+                            <button pButton type="button" icon="pi pi-refresh" label="Recarregar avalia\u00e7\u00e3o"
+                                data-testid="recarregar-avaliacao" [disabled]="reconciliando() || salvando()"
+                                (click)="recarregarAvaliacao()"></button>
+                        }
                         @if (avaliacao(); as atual) {
+                            @if (!atual.podeGravar) {
+                                <p role="status" data-testid="autorizacao-gravacao">{{ mensagemBloqueio() }}</p>
+                            }
                             <p role="status" class="font-semibold" data-testid="estado-avaliacao">
                                 @switch (atual.estado) {
                                     @case ('pendente') { Avalia&ccedil;&atilde;o n&atilde;o iniciada }
@@ -112,21 +124,21 @@ interface EdicaoAvaliacao {
                                 <p class="text-sm text-surface-600 dark:text-surface-300" data-testid="alteracoes-nao-salvas">Altera&ccedil;&otilde;es n&atilde;o salvas.</p>
                             }
                             <form (ngSubmit)="salvarRascunho()" novalidate class="min-w-0 space-y-5">
-                                @for (criterio of atual.criterios; track criterio.idCriterio) {
+                                @for (criterio of atual.criterios; track criterio.idCriterioCiclo) {
                                     <div class="min-w-0 space-y-2 border-b border-surface-200 pb-4 dark:border-surface-800" data-testid="criterio-avaliacao">
-                                        <label [for]="'nota-' + criterio.idCriterio" class="block break-words font-medium">{{ criterio.nome }}</label>
+                                        <label [for]="'nota-' + criterio.idCriterioCiclo" class="block break-words font-medium">{{ criterio.nome }}</label>
                                         @if (criterio.descricao?.trim()) {
-                                            <p [id]="'descricao-' + criterio.idCriterio" class="break-words text-sm text-surface-600 dark:text-surface-300">{{ criterio.descricao }}</p>
+                                            <p [id]="'descricao-' + criterio.idCriterioCiclo" class="break-words text-sm text-surface-600 dark:text-surface-300">{{ criterio.descricao }}</p>
                                         }
-                                        <p [id]="'peso-' + criterio.idCriterio" class="text-sm">Peso: {{ criterio.peso }}%</p>
+                                        <p [id]="'peso-' + criterio.idCriterioCiclo" class="text-sm">Peso: {{ criterio.peso }}%</p>
                                         <p-inputnumber
-                                            [inputId]="'nota-' + criterio.idCriterio" [name]="'nota-' + criterio.idCriterio"
-                                            [ngModel]="notasEditaveis()[criterio.idCriterio]" (ngModelChange)="alterarNota(criterio.idCriterio, $event)"
+                                            [inputId]="'nota-' + criterio.idCriterioCiclo" [name]="'nota-' + criterio.idCriterioCiclo"
+                                            [ngModel]="notasEditaveis()[criterio.idCriterioCiclo]" (ngModelChange)="alterarNota(criterio.idCriterioCiclo, $event)"
                                             [min]="atual.escala.min" [max]="atual.escala.max" [step]="atual.escala.passo"
                                             [allowEmpty]="true" [useGrouping]="false" [maxFractionDigits]="0"
                                             [readonly]="concluida()" [disabled]="!podeEditar() || confirmando"
                                             [invalid]="!!erroGravacao()"
-                                            [ariaDescribedBy]="'peso-' + criterio.idCriterio + (criterio.descricao?.trim() ? ' descricao-' + criterio.idCriterio : '') + (erroGravacao() ? ' erro-gravacao' : '')"
+                                            [ariaDescribedBy]="'peso-' + criterio.idCriterioCiclo + (criterio.descricao?.trim() ? ' descricao-' + criterio.idCriterioCiclo : '') + (erroGravacao() ? ' erro-gravacao' : '')"
                                             [inputStyleClass]="erroGravacao() ? 'w-full ng-invalid ng-dirty' : 'w-full'" styleClass="w-full" />
                                     </div>
                                 }
@@ -242,15 +254,30 @@ export class JuradoConcorrenteComponent {
     readonly mediaSalva = computed(() => this.avaliacao()?.avaliacao?.media ?? null);
     readonly tamanhoMotivo = computed(() => Array.from(this.motivoDesclassificacao().trim()).length);
     readonly concluida = computed(() => this.avaliacao()?.estado === 'concluida');
-    readonly podeEditar = computed(() => Boolean(this.detalhe() && this.avaliacao())
+    readonly podeEditar = computed(() => Boolean(this.detalhe() && this.avaliacao()?.podeGravar)
         && !this.carregando() && !this.carregandoAvaliacao() && !this.salvando()
-        && !this.reconciliando() && !this.erroAvaliacao() && !this.concluida());
+        && !this.reconciliando() && !this.conflito() && !this.erroAvaliacao() && !this.concluida());
+    readonly mensagemBloqueio = computed(() => {
+        const autorizacao = this.avaliacao()?.autorizacaoGravacao;
+        switch (autorizacao?.estado) {
+            case 'avaliacao_concluida': return 'Avalia\u00e7\u00e3o conclu\u00edda. Dispon\u00edvel somente para leitura.';
+            case 'ciclo_fechado': return 'Ciclo de julgamento fechado. Dispon\u00edvel somente para leitura.';
+            case 'jurado_inelegivel':
+            case 'jurado_fora_do_ciclo': return 'Sem autoriza\u00e7\u00e3o para gravar neste ciclo.';
+            case 'concorrente_fora_do_ciclo':
+            case 'concorrente_inelegivel': return 'Participa\u00e7\u00e3o indispon\u00edvel para grava\u00e7\u00e3o neste ciclo.';
+            default: return autorizacao?.motivo === 'limite_versao'
+                && autorizacao.code === 'CONTEXTO_NAO_GRAVAVEL'
+                ? 'Esta avalia\u00e7\u00e3o n\u00e3o permite novas grava\u00e7\u00f5es.'
+                : 'Grava\u00e7\u00e3o indispon\u00edvel neste contexto.';
+        }
+    });
     readonly alteracoesNaoSalvas = computed(() => {
         const resposta = this.avaliacao();
         if (!resposta) return false;
         const persistida = resposta.avaliacao;
-        return resposta.criterios.some((criterio) => !Object.is(this.notasEditaveis()[criterio.idCriterio],
-            persistida?.notas.find((nota) => nota.idCriterio === criterio.idCriterio)?.nota ?? null))
+        return resposta.criterios.some((criterio) => !Object.is(this.notasEditaveis()[criterio.idCriterioCiclo],
+            persistida?.notas.find((nota) => nota.idCriterioCiclo === criterio.idCriterioCiclo)?.nota ?? null))
             || this.possivelDesclassificacao() !== (persistida?.possivelDesclassificacao ?? false)
             || this.motivoDesclassificacao() !== (persistida?.motivoDesclassificacao ?? '');
     });
@@ -318,10 +345,10 @@ export class JuradoConcorrenteComponent {
         this.recargas.next();
     }
 
-    alterarNota(idCriterio: number, nota: number | null): void {
-        if (!this.podeEditar() || !this.avaliacao()?.criterios.some((criterio) => criterio.idCriterio === idCriterio)) return;
+    alterarNota(idCriterioCiclo: number, nota: number | null): void {
+        if (!this.podeEditar() || !this.avaliacao()?.criterios.some((criterio) => criterio.idCriterioCiclo === idCriterioCiclo)) return;
         this.preparacaoConclusao = null;
-        this.edicao.update((edicao) => ({ ...edicao, notas: Object.freeze({ ...edicao.notas, [idCriterio]: nota }) }));
+        this.edicao.update((edicao) => ({ ...edicao, notas: Object.freeze({ ...edicao.notas, [idCriterioCiclo]: nota }) }));
     }
 
     alterarDesclassificacao(possivel: boolean): void {
@@ -390,20 +417,24 @@ export class JuradoConcorrenteComponent {
         const resposta = this.avaliacao()!;
         const notas: SalvarAvaliacaoJuradoPayload['notas'] = [];
         for (const criterio of resposta.criterios) {
-            const nota = this.notasEditaveis()[criterio.idCriterio];
+            const nota = this.notasEditaveis()[criterio.idCriterioCiclo];
             if (nota === null && estado === 'rascunho') continue;
             if (typeof nota !== 'number' || !Number.isInteger(nota) || nota < resposta.escala.min || nota > resposta.escala.max) {
                 this.erroGravacao.set('Informe notas inteiras dentro da escala. Para concluir, preencha todos os crit\u00e9rios.');
                 return null;
             }
-            notas.push({ idCriterio: criterio.idCriterio, nota });
+            notas.push({ idCriterioCiclo: criterio.idCriterioCiclo, nota });
         }
         const motivo = this.motivoDesclassificacao().trim();
         if (this.possivelDesclassificacao() && (!motivo || Array.from(motivo).length > 2000)) {
             this.erroGravacao.set('Informe um motivo com at\u00e9 2000 caracteres para a poss\u00edvel desclassifica\u00e7\u00e3o.');
             return null;
         }
-        return { versao: resposta.versao, estado, notas, possivelDesclassificacao: this.possivelDesclassificacao(), motivoDesclassificacao: this.possivelDesclassificacao() ? motivo : null };
+        return {
+            contexto: { idCiclo: resposta.contexto.idCiclo, numeroTentativa: resposta.contexto.numeroTentativa },
+            versao: resposta.versao, estado, notas, possivelDesclassificacao: this.possivelDesclassificacao(),
+            motivoDesclassificacao: this.possivelDesclassificacao() ? motivo : null
+        };
     }
 
     private gravar(payload: SalvarAvaliacaoJuradoPayload, contexto: ContextoAvaliacao): void {
@@ -417,14 +448,8 @@ export class JuradoConcorrenteComponent {
                 if (contexto !== this.contexto) return EMPTY;
                 if (error instanceof HttpErrorResponse && error.status === 409) {
                     this.conflito.set(true);
-                    this.mensagemConflito.set('A avalia\u00e7\u00e3o foi alterada. Os dados do servidor ser\u00e3o relidos; suas edi\u00e7\u00f5es n\u00e3o ser\u00e3o reenviadas.');
-                    this.reconciliando.set(true);
-                    return this.service.obterAvaliacao(contexto.slug, contexto.idParticipacao).pipe(
-                        catchError((erro: unknown) => {
-                            if (contexto === this.contexto) this.tratarErroAvaliacao(erro);
-                            return EMPTY;
-                        })
-                    );
+                    this.mensagemConflito.set('A avalia\u00e7\u00e3o ou o contexto foi alterado. Recarregue para continuar; suas edi\u00e7\u00f5es n\u00e3o ser\u00e3o reaplicadas.');
+                    return EMPTY;
                 }
                 this.erroGravacao.set(error instanceof HttpErrorResponse && error.status === 400
                     ? 'Dados de avalia\u00e7\u00e3o inv\u00e1lidos. Confira as notas e o motivo.'
@@ -443,7 +468,31 @@ export class JuradoConcorrenteComponent {
         ).subscribe((resposta) => {
             if (contexto !== this.contexto) return;
             this.aplicarAvaliacao(resposta, contexto);
-            if (this.conflito() && !this.erroAvaliacao()) this.mensagemConflito.set('Estado atualizado por conflito. Os dados atuais do servidor foram carregados; suas edi\u00e7\u00f5es anteriores n\u00e3o foram reaplicadas.');
+        });
+    }
+
+    recarregarAvaliacao(): void {
+        const contexto = this.contexto;
+        if (!contexto || !this.conflito() || this.salvando() || this.reconciliando()) return;
+        this.preparacaoConclusao = null;
+        this.reconciliando.set(true);
+        this.service.obterAvaliacao(contexto.slug, contexto.idParticipacao).pipe(
+            catchError((error: unknown) => {
+                if (contexto === this.contexto) this.tratarErroAvaliacao(error);
+                return EMPTY;
+            }),
+            takeUntil(this.cancelarOperacoes),
+            takeUntilDestroyed(this.destroyRef),
+            finalize(() => {
+                if (contexto === this.contexto) this.reconciliando.set(false);
+            })
+        ).subscribe((resposta) => {
+            if (contexto !== this.contexto) return;
+            this.aplicarAvaliacao(resposta, contexto);
+            if (!this.erroAvaliacao()) {
+                this.conflito.set(false);
+                this.mensagemConflito.set('Estado atualizado. As edi\u00e7\u00f5es anteriores n\u00e3o foram reaplicadas.');
+            }
         });
     }
 
@@ -458,8 +507,8 @@ export class JuradoConcorrenteComponent {
         this.erroGravacao.set(null);
         this.preparacaoConclusao = null;
         this.edicao.set({
-            notas: Object.freeze(Object.fromEntries(resposta.criterios.map((criterio) => [criterio.idCriterio,
-                resposta.avaliacao?.notas.find((nota) => nota.idCriterio === criterio.idCriterio)?.nota ?? null]))),
+            notas: Object.freeze(Object.fromEntries(resposta.criterios.map((criterio) => [criterio.idCriterioCiclo,
+                resposta.avaliacao?.notas.find((nota) => nota.idCriterioCiclo === criterio.idCriterioCiclo)?.nota ?? null]))),
             possivelDesclassificacao: resposta.avaliacao?.possivelDesclassificacao ?? false,
             motivoDesclassificacao: resposta.avaliacao?.motivoDesclassificacao ?? ''
         });

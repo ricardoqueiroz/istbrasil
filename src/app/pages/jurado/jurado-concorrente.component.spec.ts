@@ -51,11 +51,14 @@ describe('JuradoConcorrenteComponent', () => {
     function avaliacaoPendente(slug = evento.slug, id = 20): AvaliacaoJuradoResponse {
         return {
             evento: slug === evento.slug ? evento : { id: 28, slug, nome: 'Novo Evento' },
-            concorrente: { idParticipacao: id, numeroConcorrente: `FVST2-${id}` },
+            concorrente: { ...concorrente, idSnapshot: 320, idParticipacao: id, numeroConcorrente: `FVST2-${id}` },
+            contexto: { idCiclo: 100, numeroCiclo: 1, numeroTentativa: null },
+            podeGravar: true,
+            autorizacaoGravacao: { estado: 'autorizada', code: null, motivo: null },
             estado: 'pendente', versao: 0, escala: { min: 0, max: 100, passo: 1 },
             criterios: [
-                { idCriterio: 12, nome: 'Criterio A', descricao: null, ordem: 1, peso: '40.00' },
-                { idCriterio: 91, nome: 'Criterio B', descricao: null, ordem: 2, peso: '60.00' }
+                { idCriterio: 112, idCriterioOrigem: 112, idCriterioCiclo: 12, nome: 'Criterio A', descricao: null, ordem: 1, peso: '40.00' },
+                { idCriterio: 191, idCriterioOrigem: 191, idCriterioCiclo: 91, nome: 'Criterio B', descricao: null, ordem: 2, peso: '60.00' }
             ],
             avaliacao: null
         };
@@ -69,9 +72,14 @@ describe('JuradoConcorrenteComponent', () => {
     function avaliacaoPersistida(estado: 'rascunho' | 'concluida' = 'rascunho', versao = 7): AvaliacaoJuradoResponse {
         return {
             ...avaliacaoPendente(), estado, versao,
+            contexto: { idCiclo: 100, numeroCiclo: 1, numeroTentativa: 1 },
+            podeGravar: estado === 'rascunho',
+            autorizacaoGravacao: estado === 'rascunho'
+                ? { estado: 'autorizada', code: null, motivo: null }
+                : { estado: 'avaliacao_concluida', code: 'AVALIACAO_CONCLUIDA', motivo: 'AVALIACAO_CONCLUIDA' },
             avaliacao: {
                 idAvaliacao: 50,
-                notas: [{ idCriterio: 91, nota: 80 }, { idCriterio: 12, nota: 0 }],
+                notas: [{ idCriterio: 191, idCriterioOrigem: 191, idCriterioCiclo: 91, nota: 80 }, { idCriterio: 112, idCriterioOrigem: 112, idCriterioCiclo: 12, nota: 0 }],
                 possivelDesclassificacao: false, motivoDesclassificacao: null, media: '48.00',
                 dataInclusao: '2026-10-03T12:00:00.000Z', dataAtualizacao: '2026-10-04T12:00:00.000Z',
                 dataConclusao: estado === 'concluida' ? '2026-10-04T12:00:00.000Z' : null
@@ -125,10 +133,10 @@ describe('JuradoConcorrenteComponent', () => {
         expect(campos.length).toBe(2);
         expect(fixture.nativeElement.querySelectorAll('[data-testid="criterio-avaliacao"]').length).toBe(2);
         for (const criterio of resposta.criterios) {
-            const label = fixture.nativeElement.querySelector(`label[for="nota-${criterio.idCriterio}"]`);
+            const label = fixture.nativeElement.querySelector(`label[for="nota-${criterio.idCriterioCiclo}"]`);
             expect(label.textContent).toBe(criterio.nome);
-            expect(fixture.nativeElement.querySelector(`#nota-${criterio.idCriterio}`)).not.toBeNull();
-            expect(fixture.nativeElement.querySelector(`#peso-${criterio.idCriterio}`).textContent).toContain(`${criterio.peso}%`);
+            expect(fixture.nativeElement.querySelector(`#nota-${criterio.idCriterioCiclo}`)).not.toBeNull();
+            expect(fixture.nativeElement.querySelector(`#peso-${criterio.idCriterioCiclo}`).textContent).toContain(`${criterio.peso}%`);
         }
         expect(fixture.nativeElement.querySelector('#descricao-12').textContent).toBe('Descricao explicita');
         expect(fixture.nativeElement.querySelector('#descricao-91')).toBeNull();
@@ -156,7 +164,7 @@ describe('JuradoConcorrenteComponent', () => {
         expect(input.value).toBe('');
         clicarAcao(fixture, 'salvar-rascunho');
         const request = consultaGravacao();
-        expect(request.request.body.notas).toEqual([{ idCriterio: 91, nota: 80 }]);
+        expect(request.request.body.notas).toEqual([{ idCriterioCiclo: 91, nota: 80 }]);
         request.flush(avaliacaoPersistida());
     });
 
@@ -364,7 +372,7 @@ describe('JuradoConcorrenteComponent', () => {
         clicarAcao(fixture, 'concluir-avaliacao');
         const antiga = confirm.calls.mostRecent().args[0];
         parametros.next(convertToParamMap({ slug: evento.slug, idParticipacao: '21' }));
-        const nova = { ...avaliacaoPersistida(), concorrente: { idParticipacao: 21, numeroConcorrente: 'FVST2-021' } };
+        const nova = { ...avaliacaoPersistida(), concorrente: { ...avaliacaoPendente().concorrente, idParticipacao: 21, numeroConcorrente: 'FVST2-021' } };
         consulta(evento.slug, 21, nova).flush(dados({ idParticipacao: 21 }));
         await fixture.whenStable();
         fixture.detectChanges();
@@ -387,9 +395,12 @@ describe('JuradoConcorrenteComponent', () => {
             clicarAcao(fixture, 'salvar-rascunho');
             consultaGravacao().flush({}, { status: 409, statusText: 'Conflict' });
             fixture.detectChanges();
-            expect(fixture.nativeElement.querySelector('[data-testid="conflito-avaliacao"]').textContent).toContain('alterada');
-            expect(fixture.nativeElement.textContent).toContain('Atualizando o estado');
+            expect(fixture.nativeElement.querySelector('[data-testid="conflito-avaliacao"]').textContent).toContain('alterado');
+            expect(fixture.nativeElement.querySelector('[data-testid="recarregar-avaliacao"]')).not.toBeNull();
             expect(fixture.nativeElement.querySelector('[data-testid="salvar-rascunho"]').disabled).toBeTrue();
+            http.expectNone((req) => req.url.includes('/api/jurado'));
+            clicarAcao(fixture, 'recarregar-avaliacao');
+            expect(fixture.nativeElement.textContent).toContain('Atualizando o estado');
             const reconciliation = http.expectOne(`/api/jurado/eventos/${evento.slug}/concorrentes/20/avaliacao`);
             if (status === 409) reconciliation.flush({}, { status: 409, statusText: 'Conflict' });
             else reconciliation.flush(avaliacaoPersistida('rascunho', 8));
@@ -400,7 +411,7 @@ describe('JuradoConcorrenteComponent', () => {
                 expect(fixture.nativeElement.querySelector('[data-testid="salvar-rascunho"], [data-testid="concluir-avaliacao"]')).toBeNull();
                 for (const controle of fixture.nativeElement.querySelectorAll('form input')) expect(controle.disabled).toBeTrue();
             } else {
-                expect(fixture.nativeElement.querySelector('[data-testid="conflito-avaliacao"]').textContent).toContain('Estado atualizado por conflito');
+                expect(fixture.nativeElement.querySelector('[data-testid="conflito-avaliacao"]').textContent).toContain('Estado atualizado');
                 expect(fixture.componentInstance.avaliacao()?.versao).toBe(8);
             }
             expect(fixture.nativeElement.querySelector('[data-testid="conflito-avaliacao"]').textContent).not.toContain('salva com sucesso');
@@ -432,7 +443,7 @@ describe('JuradoConcorrenteComponent', () => {
         component.alterarNota(12, 100);
         expect(component.notasEditaveis()[12]).toBe(100);
         expect(component.mediaSalva()).toBe('48.00');
-        expect(component.avaliacao()?.avaliacao?.notas).toEqual([{ idCriterio: 91, nota: 80 }, { idCriterio: 12, nota: 0 }]);
+        expect(component.avaliacao()?.avaliacao?.notas).toEqual(avaliacaoPersistida().avaliacao?.notas);
         expect(component.alteracoesNaoSalvas()).toBeTrue();
         component.alterarNota(12, 0);
         expect(component.alteracoesNaoSalvas()).toBeFalse();
@@ -468,7 +479,7 @@ describe('JuradoConcorrenteComponent', () => {
         const component = paginaComAvaliacao().componentInstance;
         component.salvarRascunho();
         const request = consultaGravacao();
-        expect(request.request.body).toEqual({ versao: 0, estado: 'rascunho', notas: [], possivelDesclassificacao: false, motivoDesclassificacao: null });
+        expect(request.request.body).toEqual({ contexto: { idCiclo: 100, numeroTentativa: null }, versao: 0, estado: 'rascunho', notas: [], possivelDesclassificacao: false, motivoDesclassificacao: null });
         expect(component.avaliacao()?.estado).toBe('pendente');
         expect(component.avaliacao()?.versao).toBe(0);
         expect(component.salvando()).toBeTrue();
@@ -484,7 +495,7 @@ describe('JuradoConcorrenteComponent', () => {
         component.salvarRascunho();
         const request = consultaGravacao();
         expect(request.request.withCredentials).toBeTrue();
-        expect(request.request.body).toEqual({ versao: 0, estado: 'rascunho', notas: [{ idCriterio: 12, nota: 0 }], possivelDesclassificacao: false, motivoDesclassificacao: null });
+        expect(request.request.body).toEqual({ contexto: { idCiclo: 100, numeroTentativa: null }, versao: 0, estado: 'rascunho', notas: [{ idCriterioCiclo: 12, nota: 0 }], possivelDesclassificacao: false, motivoDesclassificacao: null });
         request.flush(avaliacaoPersistida());
     });
 
@@ -496,17 +507,17 @@ describe('JuradoConcorrenteComponent', () => {
         expect(component.solicitarConclusao()).toBeFalse();
         component.alterarNota(12, 77);
         const request = consultaGravacao();
-        expect(request.request.body).toEqual({ versao: 7, estado: 'rascunho', notas: [{ idCriterio: 12, nota: 0 }], possivelDesclassificacao: false, motivoDesclassificacao: null });
+        expect(request.request.body).toEqual({ contexto: { idCiclo: 100, numeroTentativa: 1 }, versao: 7, estado: 'rascunho', notas: [{ idCriterioCiclo: 12, nota: 0 }], possivelDesclassificacao: false, motivoDesclassificacao: null });
         expect(component.notasEditaveis()[12]).toBe(0);
         expect(component.avaliacao()?.versao).toBe(7);
         const resposta = avaliacaoPersistida('rascunho', 12);
-        resposta.avaliacao!.notas = [{ idCriterio: 91, nota: 20 }];
+        resposta.avaliacao!.notas = [{ idCriterio: 191, idCriterioOrigem: 191, idCriterioCiclo: 91, nota: 20 }];
         resposta.avaliacao!.media = null;
         resposta.avaliacao!.possivelDesclassificacao = true;
         resposta.avaliacao!.motivoDesclassificacao = 'Motivo do servidor';
         resposta.criterios = [
             { ...resposta.criterios[0], peso: '30.00' }, resposta.criterios[1],
-            { idCriterio: 205, nome: 'Novo criterio', descricao: null, ordem: 3, peso: '10.00' }
+            { idCriterio: 305, idCriterioOrigem: 305, idCriterioCiclo: 205, nome: 'Novo criterio', descricao: null, ordem: 3, peso: '10.00' }
         ];
         request.flush(resposta);
         expect(component.avaliacao()).toEqual(resposta);
@@ -540,7 +551,7 @@ describe('JuradoConcorrenteComponent', () => {
         component.executarConclusao();
         component.executarConclusao();
         const request = consultaGravacao();
-        expect(request.request.body).toEqual({ versao: 7, estado: 'concluida', notas: [{ idCriterio: 12, nota: 0 }, { idCriterio: 91, nota: 80 }], possivelDesclassificacao: false, motivoDesclassificacao: null });
+        expect(request.request.body).toEqual({ contexto: { idCiclo: 100, numeroTentativa: 1 }, versao: 7, estado: 'concluida', notas: [{ idCriterioCiclo: 12, nota: 0 }, { idCriterioCiclo: 91, nota: 80 }], possivelDesclassificacao: false, motivoDesclassificacao: null });
         const resposta = avaliacaoPersistida('concluida', 8);
         request.flush(resposta);
         expect(component.avaliacao()).toEqual(resposta);
@@ -598,8 +609,116 @@ describe('JuradoConcorrenteComponent', () => {
         http.expectNone((req) => req.method === 'PUT');
     });
 
+    for (const [estado, code, motivo, mensagem] of [
+        ['ciclo_fechado', 'CONTEXTO_NAO_GRAVAVEL', 'CONTEXTO_NAO_GRAVAVEL', 'Ciclo de julgamento fechado'],
+        ['jurado_inelegivel', 'ACESSO_OPERACIONAL_NEGADO', 'ACESSO_OPERACIONAL_NEGADO', 'Sem autoriza\u00e7\u00e3o'],
+        ['concorrente_inelegivel', 'CONCORRENTE_NAO_INCLUIDO', 'CONCORRENTE_NAO_INCLUIDO', 'Participa\u00e7\u00e3o indispon\u00edvel'],
+        ['contexto_invalido', 'CONTEXTO_NAO_GRAVAVEL', 'limite_versao', 'n\u00e3o permite novas grava\u00e7\u00f5es'],
+        ['criterios_invalidos', 'CRITERIOS_INVALIDOS', 'CRITERIOS_INVALIDOS', 'Grava\u00e7\u00e3o indispon\u00edvel']
+    ]) {
+        it(`backend podeGravar=false (${estado}) bloqueia inputs e acoes mesmo em draft`, async () => {
+            const resposta = avaliacaoPersistida();
+            resposta.podeGravar = false;
+            resposta.autorizacaoGravacao = { estado, code, motivo };
+            const fixture = await paginaUI(resposta), component = fixture.componentInstance;
+            const antes = component.notasEditaveis();
+            expect(component.podeEditar()).toBeFalse();
+            expect(fixture.nativeElement.querySelector('[data-testid="autorizacao-gravacao"]').textContent).toContain(mensagem);
+            expect(fixture.nativeElement.textContent).not.toContain(code);
+            for (const controle of fixture.nativeElement.querySelectorAll('form input, form textarea, form button'))
+                expect(controle.disabled).toBeTrue();
+            component.alterarNota(12, 100);
+            component.alterarDesclassificacao(true);
+            component.alterarMotivo('nao permitido');
+            component.salvarRascunho();
+            expect(component.solicitarConclusao()).toBeFalse();
+            component.executarConclusao();
+            expect(component.notasEditaveis()).toBe(antes);
+            http.expectNone((req) => req.method === 'PUT');
+        });
+    }
+
+    it('identidade de gravacao e snapshot, nao origem; detalhe nunca substitui criterios/contexto da avaliacao', () => {
+        const resposta = avaliacaoPersistida();
+        const fixture = criarPagina();
+        const detalhe = consulta(evento.slug, 20, resposta);
+        detalhe.flush(dados({ nome: 'Outra apresentacao', obraPrincipal: { id: 999, titulo: 'Outro material' } }));
+        const component = fixture.componentInstance;
+        expect(component.avaliacao()).toBe(resposta);
+        component.alterarNota(112, 99);
+        expect(component.notasEditaveis()[112]).toBeUndefined();
+        component.alterarNota(12, 99);
+        component.salvarRascunho();
+        const request = consultaGravacao();
+        expect(request.request.body).toEqual({
+            contexto: { idCiclo: 100, numeroTentativa: 1 }, versao: 7, estado: 'rascunho',
+            notas: [{ idCriterioCiclo: 12, nota: 99 }, { idCriterioCiclo: 91, nota: 80 }],
+            possivelDesclassificacao: false, motivoDesclassificacao: null
+        });
+        for (const nota of request.request.body.notas) {
+            expect(Object.keys(nota).sort()).toEqual(['idCriterioCiclo', 'nota']);
+        }
+        const novo = avaliacaoPersistida('rascunho', 8);
+        novo.podeGravar = false;
+        novo.autorizacaoGravacao = { estado: 'ciclo_fechado', code: 'CONTEXTO_NAO_GRAVAVEL', motivo: 'CONTEXTO_NAO_GRAVAVEL' };
+        request.flush(novo);
+        expect(component.avaliacao()).toBe(novo);
+        expect(component.podeEditar()).toBeFalse();
+        http.expectNone((req) => req.url.includes('/api/jurado'));
+    });
+
+    it('material congelado sem cidade/uf/data live e exibido sem inventar metadados', () => {
+        const fixture = criarPagina();
+        const { cidade, uf, dataInscricao, ...snapshot } = concorrente;
+        consulta().flush({ evento, concorrente: { ...snapshot, idSnapshot: 320 } });
+        fixture.detectChanges();
+        expect(fixture.nativeElement.textContent).toContain(concorrente.obraPrincipal.titulo);
+        expect(fixture.nativeElement.querySelector('[data-testid="localidade"]')).toBeNull();
+        expect(fixture.nativeElement.textContent).not.toContain('Data da inscri\u00e7\u00e3o');
+        expect(fixture.componentInstance.avaliacao()?.contexto.idCiclo).toBe(100);
+        http.expectNone((req) => req.url.includes('/api/jurado'));
+    });
+
+    for (const code of ['CICLO_DESATUALIZADO', 'TENTATIVA_DESATUALIZADA', 'VERSAO_DESATUALIZADA', 'CONFLITO_CONCORRENCIA', 'AVALIACAO_CONCLUIDA', 'CONTEXTO_NAO_GRAVAVEL']) {
+        it(`409 ${code} nao faz GET/PUT automatico; reload explicito substitui tokens, notas e permissao`, () => {
+            const component = paginaComAvaliacao(avaliacaoPersistida()).componentInstance;
+            const antes = component.avaliacao();
+            component.alterarNota(12, 99);
+            component.salvarRascunho();
+            consultaGravacao().flush({ code, message: 'SQL stack interno' }, { status: 409, statusText: 'Conflict' });
+            expect(component.avaliacao()).toBe(antes);
+            expect(component.salvando()).toBeFalse();
+            expect(component.podeEditar()).toBeFalse();
+            expect(component.mensagemConflito()).not.toContain('SQL');
+            component.salvarRascunho();
+            component.executarConclusao();
+            expect(component.solicitarConclusao()).toBeFalse();
+            http.expectNone((req) => req.url.includes('/api/jurado'));
+            component.recarregarAvaliacao();
+            const request = http.expectOne(`/api/jurado/eventos/${evento.slug}/concorrentes/20/avaliacao`);
+            expect(request.request.method).toBe('GET');
+            const atual = avaliacaoPendente();
+            atual.contexto = { idCiclo: 200, numeroCiclo: 2, numeroTentativa: null };
+            atual.criterios = atual.criterios.map(c => ({ ...c, idCriterioCiclo: c.idCriterioCiclo + 1000 }));
+            request.flush(atual);
+            expect(component.avaliacao()).toBe(atual);
+            expect(component.notasEditaveis()).toEqual({ 1012: null, 1091: null });
+            expect(component.conflito()).toBeFalse();
+            expect(component.podeEditar()).toBeTrue();
+            http.expectNone((req) => req.url.includes('/api/jurado'));
+            component.alterarNota(1012, 50);
+            component.salvarRascunho();
+            const nova = consultaGravacao();
+            expect(nova.request.body).toEqual({
+                contexto: { idCiclo: 200, numeroTentativa: null }, versao: 0, estado: 'rascunho',
+                notas: [{ idCriterioCiclo: 1012, nota: 50 }], possivelDesclassificacao: false, motivoDesclassificacao: null
+            });
+            nova.flush({ ...avaliacaoPersistida('rascunho', 1), contexto: { idCiclo: 200, numeroCiclo: 2, numeroTentativa: 1 } });
+        });
+    }
+
     for (const estado of ['rascunho', 'concluida'] as const) {
-        it(`409 relê uma vez, preserva videos e adota ${estado} sem reaplicar edicao`, () => {
+        it(`409 bloqueia tokens; reload explicito preserva videos e adota ${estado} sem reaplicar edicao`, () => {
             const fixture = paginaComAvaliacao(avaliacaoPersistida());
             const component = fixture.componentInstance;
             component.reproduzirVideo(false);
@@ -608,9 +727,16 @@ describe('JuradoConcorrenteComponent', () => {
             component.salvarRascunho();
             consultaGravacao().flush({ message: 'Interno nao deve aparecer' }, { status: 409, statusText: 'Conflict' });
             expect(component.conflito()).toBeTrue();
-            expect(component.reconciliando()).toBeTrue();
+            expect(component.reconciliando()).toBeFalse();
+            expect(component.salvando()).toBeFalse();
             expect(component.podeEditar()).toBeFalse();
             component.salvarRascunho();
+            expect(component.solicitarConclusao()).toBeFalse();
+            component.alterarNota(12, 20);
+            expect(component.notasEditaveis()[12]).toBe(99);
+            http.expectNone((req) => req.url.includes('/api/jurado'));
+            component.recarregarAvaliacao();
+            component.recarregarAvaliacao();
             const reconciliation = http.expectOne(`/api/jurado/eventos/${evento.slug}/concorrentes/20/avaliacao`);
             expect(reconciliation.request.method).toBe('GET');
             const resposta = avaliacaoPersistida(estado, 8);
@@ -618,8 +744,8 @@ describe('JuradoConcorrenteComponent', () => {
             expect(component.avaliacao()).toEqual(resposta);
             expect(component.notasEditaveis()).toEqual({ 12: 0, 91: 80 });
             expect(component.alteracoesNaoSalvas()).toBeFalse();
-            expect(component.conflito()).toBeTrue();
-            expect(component.mensagemConflito()).toContain('Estado atualizado por conflito');
+            expect(component.conflito()).toBeFalse();
+            expect(component.mensagemConflito()).toContain('Estado atualizado');
             expect(component.mensagemConflito()).not.toContain('Interno');
             expect(component.playerPrincipal()).toBe(player);
             expect(component.detalhe()).not.toBeNull();
@@ -635,6 +761,8 @@ describe('JuradoConcorrenteComponent', () => {
             const component = paginaComAvaliacao(avaliacaoPersistida()).componentInstance;
             component.salvarRascunho();
             consultaGravacao().flush({}, { status: 409, statusText: 'Conflict' });
+            http.expectNone((req) => req.url.includes('/api/jurado'));
+            component.recarregarAvaliacao();
             const reconciliation = http.expectOne(`/api/jurado/eventos/${evento.slug}/concorrentes/20/avaliacao`);
             if (status === 0) reconciliation.error(new ProgressEvent('error'));
             else reconciliation.flush({ message: 'Informacao interna' }, { status, statusText: 'Erro' });
@@ -666,6 +794,10 @@ describe('JuradoConcorrenteComponent', () => {
             expect(component.erroGravacao()).not.toContain('SQL');
             if ([401, 403].includes(status)) expect(navigate).toHaveBeenCalledOnceWith([status === 401 ? '/login' : '/']);
             else expect(navigate).not.toHaveBeenCalled();
+            if ([401, 403, 404].includes(status)) {
+                component.salvarRascunho();
+                expect(component.solicitarConclusao()).toBeFalse();
+            }
             http.expectNone((req) => req.url.includes('/api/jurado'));
         });
     }
@@ -713,6 +845,7 @@ describe('JuradoConcorrenteComponent', () => {
             let antiga = consultaGravacao();
             if (operacao === 'reconciliacao') {
                 antiga.flush({}, { status: 409, statusText: 'Conflict' });
+                component.recarregarAvaliacao();
                 antiga = http.expectOne(`/api/jurado/eventos/${evento.slug}/concorrentes/20/avaliacao`);
             }
             parametros.next(convertToParamMap({ slug: 'outro-evento', idParticipacao: '22' }));
