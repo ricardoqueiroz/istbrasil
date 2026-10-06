@@ -37,6 +37,83 @@ let eventosTransacao;
 let falhaTransacao;
 let antesTransacao;
 let proximoIdAvaliacao;
+let snapshotsFila;
+let consultasNavegacao;
+let ciclosNavegacao;
+let julgamentosNavegacao;
+let publicacoesNavegacao;
+const contextoNavegacao = (id = 1) => ({
+    idCiclo: id * 100, numeroCiclo: 1, estadoCiclo: 'aberto', versaoJulgamento: 1
+});
+const respostaAusente = { status: 404, body: { code: 'CONCORRENTE_AUSENTE', message: 'Recurso indispon\u00edvel neste contexto.' } };
+const respostaFalhaNavegacao = { message: 'N\u00e3o foi poss\u00edvel consultar a navega\u00e7\u00e3o do jurado.' };
+
+// Fixtures congelados na primeira requisicao. Alteracoes live posteriores nao os recompoem.
+const congelarFixturesNavegacao = () => {
+    if (snapshotsFila) return;
+    snapshotsFila = participacoes.filter(p => participacaoElegivel(p, p.id_evento)).map(p => ({
+        id_ciclo_concorrente: p.id_concorrente + 1000, id_ciclo: p.id_evento * 100, id_evento: p.id_evento,
+        id_concorrente: p.id_concorrente, id_usuario: p.id_usuario, numero_concorrente: p.numero_concorrente,
+        nome_publico: usuariosFila.find(u => u.id_usuario === p.id_usuario).nome,
+        id_obra_1: p.id_obra_1, obra_1_publica: composicoes.find(o => o.id_obra === p.id_obra_1).titulo
+            ?? composicoes.find(o => o.id_obra === p.id_obra_1).obra,
+        link_video_1: p.link_video_1, id_obra_2: p.id_obra_2,
+        obra_2_publica: p.id_obra_2 === null ? null : (composicoes.find(o => o.id_obra === p.id_obra_2).titulo
+            ?? composicoes.find(o => o.id_obra === p.id_obra_2).obra),
+        link_video_2: p.link_video_2, fingerprint: 'a'.repeat(64), estado_participacao: 'incluido'
+    }));
+};
+const consultarNavegacaoSimulada = async (sql, params) => {
+    consultasNavegacao.push({ sql, params });
+    assert.doesNotMatch(sql, /\b(INSERT|UPDATE|DELETE|ALTER|FOR UPDATE)\b/);
+    if (falharBanco) throw criarErroBanco('ER_SIMULADO');
+    if (sql.startsWith('SELECT id, slug, nome') || sql.startsWith('SELECT e.id, e.slug, e.nome')) {
+        const tamanho = consultas.length;
+        try {
+            const [rows] = await db.query(sql, params);
+            return [rows.map(({ id, slug, nome }) => ({ id, slug, nome }))];
+        }
+        finally { consultas.length = tamanho; }
+    }
+    if (sql.includes('FROM ist_eventos_julgamentos')) return [julgamentosNavegacao.filter(j => j.id_evento === params[0])];
+    if (sql.includes('FROM ist_eventos_ciclos WHERE')) return [ciclosNavegacao.filter(c => c.id_ciclo === params[0])];
+    if (sql.includes('FROM ist_eventos_publicacoes p')) {
+        return [publicacoesNavegacao.filter(p => p.id_publicacao === params[0]).map(p => {
+            const c = ciclosNavegacao.find(ciclo => ciclo.id_ciclo === p.id_ciclo);
+            return { ...p, ciclo_evento: c.id_evento, numero_ciclo: c.numero_ciclo,
+                estado_ciclo: c.estado, ciclo_publicado_em: c.publicado_em };
+        })];
+    }
+    if (sql.includes('FROM ist_eventos_publicacoes')) return [
+        publicacoesNavegacao.filter(p => p.id_evento === params[0] && p.id_ciclo === params[1])
+    ];
+    if (sql.includes('FROM ist_eventos_ciclos_jurados')) return [[{
+        id_ciclo: params[0], id_evento: ciclosNavegacao.find(c => c.id_ciclo === params[0]).id_evento, id_usuario: params[1],
+        nome_publico: 'Jurado congelado', estado_participacao: 'incluido'
+    }]];
+    if (sql.includes('FROM ist_eventos_ciclos_concorrentes')) {
+        if (sql.startsWith('SELECT COUNT')) {
+            if (falharFila === 'count') throw criarErroBanco('ER_SIMULADO');
+            assert.deepEqual(params.slice(1), [julgamentosNavegacao.find(j => j.id_evento === params[0]).id_ciclo_atual, 'incluido']);
+            return [[{ total: snapshotsFila.filter(p => p.id_evento === params[0] && p.id_ciclo === params[1]
+                && p.estado_participacao === params[2]).length }]];
+        }
+        if (sql.includes('LIMIT ? OFFSET ?')) {
+            if (falharFila === 'select') throw criarErroBanco('ER_SIMULADO');
+            const order = sql.match(/ORDER BY (numero_concorrente|nome_publico) (ASC|DESC), id_concorrente ASC/);
+            assert.ok(order);
+            assert.deepEqual(params.slice(1, 3), [julgamentosNavegacao.find(j => j.id_evento === params[0]).id_ciclo_atual, 'incluido']);
+            const rows = snapshotsFila.filter(p => p.id_evento === params[0] && p.id_ciclo === params[1]
+                && p.estado_participacao === params[2]);
+            rows.sort((a, b) => String(a[order[1]]).localeCompare(String(b[order[1]])) * (order[2] === 'ASC' ? 1 : -1)
+                || a.id_concorrente - b.id_concorrente);
+            return [rows.slice(params[4], params[4] + params[3])];
+        }
+        if (falharFila === 'detalhe') throw criarErroBanco('ER_SIMULADO');
+        return [snapshotsFila.filter(p => p.id_ciclo === params[0] && p.id_concorrente === params[1])];
+    }
+    throw new Error('Consulta cycle-aware nao simulada: ' + sql);
+};
 
 const participacaoElegivel = (participacao, idEvento) => participacao.id_evento === idEvento
     && participacao.aceite_regulamento === 1
@@ -50,6 +127,7 @@ const criarErroBanco = (code) => Object.assign(new Error('Falha SQL simulada'), 
 
 const criarConexaoSimulada = () => {
     let snapshot;
+    let navegacao = false;
     const restaurar = () => {
         if (snapshot) {
             avaliacoes = structuredClone(snapshot.avaliacoes);
@@ -75,6 +153,13 @@ const criarConexaoSimulada = () => {
         destroy() { eventosTransacao.push('DESTROY'); restaurar(); },
         async query(sql, params = []) {
             const consulta = sql.replace(/\s+/g, ' ').trim();
+            if (consulta === 'SET TRANSACTION ISOLATION LEVEL REPEATABLE READ') {
+                navegacao = true;
+                congelarFixturesNavegacao();
+                return [[], []];
+            }
+            if (navegacao && consulta.startsWith('START TRANSACTION')) return [[], []];
+            if (navegacao) return consultarNavegacaoSimulada(consulta, params);
             eventosTransacao.push(consulta);
             assert.doesNotMatch(consulta, /ON DUPLICATE KEY|FROM ist_eventos WHERE.*FOR UPDATE|UPDATE ist_eventos_criterios|INSERT INTO ist_eventos_criterios/);
             if (falhaTransacao === 'rollback') throw criarErroBanco('ER_SIMULADO');
@@ -265,6 +350,17 @@ beforeEach(() => {
     usuario = { id_usuario: 10, id_tipo_usuario: 4, id_situacao: 8, id_cargo: 11 };
     designacoes = [{ id_evento: 1, id_usuario: 10, ativo: 1 }];
     consultas = [];
+    consultasNavegacao = [];
+    snapshotsFila = null;
+    ciclosNavegacao = eventos.map(e => ({
+        id_ciclo: e.id * 100, id_evento: e.id, numero_ciclo: 1, estado: 'aberto',
+        id_ciclo_origem: null, id_publicacao_origem: null, publicado_em: null, motivo_reabertura: null
+    }));
+    julgamentosNavegacao = eventos.map(e => ({
+        id_evento: e.id, id_ciclo_atual: e.id * 100, id_publicacao_vigente: null,
+        quantidade_classificados: null, versao: 1
+    }));
+    publicacoesNavegacao = [];
     falharBanco = false;
     participacoes = [criarParticipacao()];
     usuariosFila = [{
@@ -358,7 +454,7 @@ test('/acessos: designação inativa não é retornada', async () => {
 test('/acessos: uma designação ativa retorna apenas dados públicos', async () => {
     assert.deepEqual(await requisitar('/api/jurado/acessos'), {
         status: 200,
-        body: { eventos: [{ id: 1, slug: 'festival-teste', nome: 'Festival Teste' }] }
+        body: { eventos: [{ id: 1, slug: 'festival-teste', nome: 'Festival Teste', contexto: contextoNavegacao() }] }
     });
 });
 
@@ -392,7 +488,7 @@ test('/eventos/:slug: designação de outro evento não concede acesso', async (
 test('/eventos/:slug: designação correta ativa retorna evento público', async () => {
     assert.deepEqual(await requisitar('/api/jurado/eventos/festival-teste?id_evento=999'), {
         status: 200,
-        body: { evento: { id: 1, slug: 'festival-teste', nome: 'Festival Teste' } }
+        body: { evento: { id: 1, slug: 'festival-teste', nome: 'Festival Teste' }, contexto: contextoNavegacao() }
     });
     assert.deepEqual(consultas[1].params, [10, 4, 8, 11, 1, 1]);
 });
@@ -469,17 +565,17 @@ test('fila: contrato publico completo, defaults e fallback sem dados pessoais', 
         status: 200,
         body: {
             evento: { id: 1, slug: 'festival-teste', nome: 'Festival Teste' },
+            contexto: contextoNavegacao(),
             concorrentes: [{
-                idParticipacao: 17, numeroConcorrente: 'FVST2-001', nome: 'Concorrente Teste',
-                cidade: null, uf: null, dataInscricao: '2026-10-02T12:00:00.000Z',
+                idParticipacao: 17, idSnapshot: 1017, numeroConcorrente: 'FVST2-001', nome: 'Concorrente Teste',
                 obraPrincipal: { id: 22, titulo: 'Obra Principal' },
                 linkVideoPrincipal: 'https://youtu.be/abcdefghijk', obraOpcional: null, linkVideoOpcional: null
             }],
             pagination: { page: 1, limit: 25, total: 1, totalPages: 1 }
         }
     });
-    assert.deepEqual(consultas[2].params, [1]);
-    assert.deepEqual(consultas[3].params, [1, 25, 0]);
+    assert.deepEqual(consultasNavegacao.find(q => q.sql.startsWith('SELECT COUNT')).params, [1, 100, 'incluido']);
+    assert.deepEqual(consultasNavegacao.find(q => q.sql.includes('LIMIT ? OFFSET ?')).params, [1, 100, 'incluido', 25, 0]);
 });
 
 test('fila: isolamento por slug mesmo com id_evento forjado na query', async () => {
@@ -492,8 +588,8 @@ test('fila: isolamento por slug mesmo com id_evento forjado na query', async () 
     const segundo = await requisitar('/api/jurado/eventos/outro-evento/concorrentes?id_evento=1');
     assert.equal(segundo.body.evento.id, 2);
     assert.deepEqual(segundo.body.concorrentes.map((item) => item.idParticipacao), [28]);
-    assert.deepEqual(consultas[2].params, [2]);
-    assert.deepEqual(consultas[3].params, [2, 25, 0]);
+    assert.deepEqual(consultasNavegacao.findLast(q => q.sql.startsWith('SELECT COUNT')).params, [2, 200, 'incluido']);
+    assert.deepEqual(consultasNavegacao.findLast(q => q.sql.includes('LIMIT ? OFFSET ?')).params, [2, 200, 'incluido', 25, 0]);
 });
 
 test('fila: designacao de outro evento nao concede acesso', async () => {
@@ -536,8 +632,8 @@ for (const video of [null, 'https://youtu.be/lmnopqrstuv']) {
         assert.equal(resposta.body.pagination.total, 1);
         assert.deepEqual(resposta.body.concorrentes[0].obraOpcional, { id: 40, titulo: 'Nome Original' });
         assert.equal(resposta.body.concorrentes[0].linkVideoOpcional, video);
-        assert.equal(resposta.body.concorrentes[0].cidade, 'Santarem');
-        assert.equal(resposta.body.concorrentes[0].uf, 'PA');
+        assert.equal(resposta.body.concorrentes[0].cidade, undefined);
+        assert.equal(resposta.body.concorrentes[0].uf, undefined);
     });
 }
 
@@ -561,7 +657,7 @@ test('fila: paginacao valida e totalPages usam total completo', async () => {
     const resposta = await requisitar(`${caminhoFila}?page=2&limit=2`);
     assert.deepEqual(resposta.body.concorrentes.map((item) => item.idParticipacao), [19, 20]);
     assert.deepEqual(resposta.body.pagination, { page: 2, limit: 2, total: 5, totalPages: 3 });
-    assert.deepEqual(consultas[3].params, [1, 2, 2]);
+    assert.deepEqual(consultasNavegacao.find(q => q.sql.includes('LIMIT ? OFFSET ?')).params, [1, 100, 'incluido', 2, 2]);
 });
 
 test('fila: pagina alem do total retorna lista vazia com total preservado', async () => {
@@ -593,9 +689,8 @@ for (const query of ['limit=101', 'page=9007199254740991&limit=100', 'page=1&pag
 }
 
 for (const { sort, coluna, idsAsc } of [
-    { sort: 'numeroConcorrente', coluna: 'c.numero_concorrente', idsAsc: [17, 18, 19] },
-    { sort: 'dataInscricao', coluna: 'c.data_cadastro', idsAsc: [18, 19, 17] },
-    { sort: 'nome', coluna: 'u.nome', idsAsc: [19, 18, 17] }
+    { sort: 'numeroConcorrente', coluna: 'numero_concorrente', idsAsc: [17, 18, 19] },
+    { sort: 'nome', coluna: 'nome_publico', idsAsc: [19, 18, 17] }
 ]) {
     for (const order of ['asc', 'desc']) {
         test(`fila: ordena por ${sort} ${order} com desempate fixo`, async () => {
@@ -608,8 +703,8 @@ for (const { sort, coluna, idsAsc } of [
             const resposta = await requisitar(`${caminhoFila}?sort=${sort}&order=${order}`);
             assert.equal(resposta.status, 200);
             assert.deepEqual(resposta.body.concorrentes.map((item) => item.idParticipacao), order === 'asc' ? idsAsc : [...idsAsc].reverse());
-            const consultaFila = consultas.find(({ sql }) => sql.startsWith('SELECT c.id_concorrente'));
-            assert.ok(consultaFila.sql.includes(`ORDER BY ${coluna} ${order.toUpperCase()}, c.id_concorrente ASC`));
+            const consultaFila = consultasNavegacao.find(({ sql }) => sql.includes('LIMIT ? OFFSET ?'));
+            assert.ok(consultaFila.sql.includes(`ORDER BY ${coluna} ${order.toUpperCase()}, id_concorrente ASC`));
         });
 
         test(`fila: empate de ${sort} usa idParticipacao ASC com order ${order}`, async () => {
@@ -617,13 +712,13 @@ for (const { sort, coluna, idsAsc } of [
             const resposta = await requisitar(`${caminhoFila}?sort=${sort}&order=${order}`);
             assert.equal(resposta.status, 200);
             assert.deepEqual(resposta.body.concorrentes.map((item) => item.idParticipacao), [17, 18, 19]);
-            const consultaFila = consultas.find(({ sql }) => sql.startsWith('SELECT c.id_concorrente'));
-            assert.ok(consultaFila.sql.includes(`ORDER BY ${coluna} ${order.toUpperCase()}, c.id_concorrente ASC`));
+            const consultaFila = consultasNavegacao.find(({ sql }) => sql.includes('LIMIT ? OFFSET ?'));
+            assert.ok(consultaFila.sql.includes(`ORDER BY ${coluna} ${order.toUpperCase()}, id_concorrente ASC`));
         });
     }
 }
 
-for (const query of ['sort=cpf', 'sort=__proto__', 'sort=nome%3BDROP%20TABLE%20ist_usuarios', 'sort=nome&sort=dataInscricao', 'order=invalid', 'order=desc%3BDROP', 'order=asc&order=desc']) {
+for (const query of ['sort=dataInscricao', 'sort=cpf', 'sort=__proto__', 'sort=nome%3BDROP%20TABLE%20ist_usuarios', 'sort=nome&sort=dataInscricao', 'order=invalid', 'order=desc%3BDROP', 'order=asc&order=desc']) {
     test(`fila: rejeita ordenacao arbitraria ${query}`, async () => {
         assert.equal((await requisitar(`${caminhoFila}?${query}`)).status, 400);
         assert.equal(consultas.length, 2);
@@ -634,7 +729,7 @@ test('fila: nao implementa busca ou filtro por atributos do inscrito', async () 
     const resposta = await requisitar(`${caminhoFila}?search=nao-corresponde&idTipoUsuario=2&idSituacao=8`);
     assert.equal(resposta.status, 200);
     assert.equal(resposta.body.pagination.total, 1);
-    assert.deepEqual(consultas[2].params, [1]);
+    assert.deepEqual(consultasNavegacao.find(q => q.sql.startsWith('SELECT COUNT')).params, [1, 100, 'incluido']);
 });
 
 for (const etapa of ['count', 'select']) {
@@ -645,7 +740,7 @@ for (const etapa of ['count', 'select']) {
         try {
             const resposta = await requisitar(caminhoFila);
             assert.equal(resposta.status, 500);
-            assert.deepEqual(resposta.body, { message: 'Não foi possível consultar a fila de concorrentes.' });
+            assert.deepEqual(resposta.body, respostaFalhaNavegacao);
             assert.doesNotMatch(JSON.stringify(resposta.body), /SQL|stack|Falha simulada/);
         } finally {
             console.error = consoleErrorOriginal;
@@ -655,14 +750,13 @@ for (const etapa of ['count', 'select']) {
 
 test('detalhe: autorizado recebe somente o mesmo contrato publico da fila', async () => {
     const fila = await requisitar(caminhoFila);
-    const baseFila = consultas[3].sql.slice(consultas[3].sql.indexOf('FROM ist_concorrentes')).split(' ORDER BY ')[0];
     consultas = [];
     const detalhe = await requisitar(caminhoDetalhe);
     assert.equal(detalhe.status, 200);
-    assert.deepEqual(detalhe.body, { evento: fila.body.evento, concorrente: fila.body.concorrentes[0] });
-    assert.equal(consultas.length, 3);
-    assert.deepEqual(consultas[2].params, [1, 17]);
-    assert.equal(consultas[2].sql.slice(consultas[2].sql.indexOf('FROM ist_concorrentes')).replace(/ AND c\.id_concorrente = \?$/, ''), baseFila);
+    assert.deepEqual(detalhe.body, { evento: fila.body.evento, contexto: fila.body.contexto, concorrente: fila.body.concorrentes[0] });
+    assert.equal(consultas.length, 2);
+    assert.deepEqual(consultasNavegacao.at(-1).params, [100, 17]);
+    assert.match(consultasNavegacao.at(-1).sql, /FROM ist_eventos_ciclos_concorrentes/);
     assert.doesNotMatch(JSON.stringify(detalhe.body), /dado-privado|cpf|identidade|email|telefone|logradouro|senha|token|curriculo|data_nascimento/);
 });
 
@@ -675,13 +769,13 @@ for (const id of ['0', '-1', 'abc', '1.5', '1e2', '9007199254740992', '17%20OR%2
 
 test('detalhe: inexistente e de outro evento retornam exatamente o mesmo 404', async () => {
     const inexistente = await requisitar(`${caminhoFila}/99`);
-    assert.deepEqual(inexistente, { status: 404, body: { message: 'Concorrente indisponível.' } });
-    assert.equal(consultas.length, 3);
+    assert.deepEqual(inexistente, respostaAusente);
+    assert.equal(consultas.length, 2);
     participacoes.push(criarParticipacao({ id_concorrente: 28, id_evento: 2 }));
     consultas = [];
     assert.deepEqual(await requisitar(`${caminhoFila}/28?id_evento=2`), inexistente);
-    assert.equal(consultas.length, 3);
-    assert.deepEqual(consultas[2].params, [1, 28]);
+    assert.equal(consultas.length, 2);
+    assert.deepEqual(consultasNavegacao.at(-1).params, [100, 28]);
 });
 
 test('detalhe: evento do slug autorizado governa a consulta mesmo com query forjada', async () => {
@@ -691,7 +785,7 @@ test('detalhe: evento do slug autorizado governa a consulta mesmo com query forj
     assert.equal(resposta.status, 200);
     assert.equal(resposta.body.evento.id, 2);
     assert.equal(resposta.body.concorrente.idParticipacao, 28);
-    assert.deepEqual(consultas[2].params, [2, 28]);
+    assert.deepEqual(consultasNavegacao.at(-1).params, [200, 28]);
 });
 
 for (const [campo, valor] of [
@@ -701,8 +795,8 @@ for (const [campo, valor] of [
 ]) {
     test(`detalhe: ${campo}=${JSON.stringify(valor)} retorna 404 uniforme`, async () => {
         participacoes[0][campo] = valor;
-        assert.deepEqual(await requisitar(caminhoDetalhe), { status: 404, body: { message: 'Concorrente indisponível.' } });
-        assert.equal(consultas.length, 3);
+        assert.deepEqual(await requisitar(caminhoDetalhe), respostaAusente);
+        assert.equal(consultas.length, 2);
     });
 }
 
@@ -739,10 +833,65 @@ test('detalhe: falha do lookup retorna 500 sem expor SQL', async () => {
     console.error = () => {};
     try {
         const resposta = await requisitar(caminhoDetalhe);
-        assert.deepEqual(resposta, { status: 500, body: { message: 'Não foi possível consultar o concorrente.' } });
+        assert.deepEqual(resposta, { status: 500, body: respostaFalhaNavegacao });
     } finally {
         console.error = consoleErrorOriginal;
     }
+});
+
+test('navegacao real: mudancas live de material e membership nao alteram fila/detalhe congelados', async () => {
+    const antes = await requisitar(caminhoFila);
+    const snapshotsAntes = structuredClone(snapshotsFila);
+    participacoes[0].aceite_regulamento = 0;
+    participacoes[0].link_video_1 = 'https://example.invalid/changed-live';
+    usuariosFila[0].nome = 'Nome live alterado';
+    composicoes[0].titulo = 'Obra live alterada';
+    participacoes.push(criarParticipacao({ id_concorrente: 99 }));
+    assert.deepEqual(await requisitar(caminhoFila), antes);
+    assert.deepEqual((await requisitar(caminhoDetalhe)).body.concorrente, antes.body.concorrentes[0]);
+    assert.deepEqual(await requisitar(`${caminhoFila}/99`), respostaAusente);
+    assert.deepEqual(snapshotsFila, snapshotsAntes);
+    assert(consultasNavegacao.every(q => !/\bFROM ist_concorrentes\b|\bJOIN ist_composicao\b/.test(q.sql)));
+});
+
+test('navegacao real: reabertura usa ciclo atual 2 e preserva material/publicacao do ciclo 1', async () => {
+    await requisitar(caminhoFila);
+    const historico = structuredClone(snapshotsFila);
+    const primeiro = ciclosNavegacao[0];
+    primeiro.estado = 'selado';
+    primeiro.publicado_em = '2026-10-06 12:00:00';
+    publicacoesNavegacao.push({
+        id_publicacao: 7001, id_evento: 1, id_ciclo: 100, versao: 1, publicado_em: primeiro.publicado_em
+    });
+    const publicacaoAntes = structuredClone(publicacoesNavegacao);
+    ciclosNavegacao.push({
+        id_ciclo: 101, id_evento: 1, numero_ciclo: 2, estado: 'aberto',
+        id_ciclo_origem: 100, id_publicacao_origem: 7001, publicado_em: null, motivo_reabertura: 'Fixture formal'
+    });
+    julgamentosNavegacao[0].id_ciclo_atual = 101;
+    julgamentosNavegacao[0].id_publicacao_vigente = 7001;
+    julgamentosNavegacao[0].versao = 2;
+    snapshotsFila.push({ ...historico[0], id_ciclo: 101, id_ciclo_concorrente: 2017, nome_publico: 'Snapshot ciclo 2' });
+    const fila = await requisitar(`${caminhoFila}?idCiclo=100`);
+    const detalhe = await requisitar(caminhoDetalhe);
+    assert.deepEqual(fila.body.contexto, { idCiclo: 101, numeroCiclo: 2, estadoCiclo: 'aberto', versaoJulgamento: 2 });
+    assert.equal(fila.body.concorrentes[0].nome, 'Snapshot ciclo 2');
+    assert.equal(detalhe.body.concorrente.idSnapshot, 2017);
+    assert.deepEqual(snapshotsFila.filter(p => p.id_ciclo === 100), historico);
+    assert.deepEqual(publicacoesNavegacao, publicacaoAntes);
+});
+
+test('navegacao real: snapshot inelegivel nao recebe material nem ganha membership por elegibilidade live', async () => {
+    const fila = await requisitar(caminhoFila);
+    participacoes.push(criarParticipacao({ id_concorrente: 99 }));
+    snapshotsFila.push({ ...snapshotsFila[0], id_ciclo_concorrente: 1099, id_concorrente: 99,
+        estado_participacao: 'inelegivel', id_obra_1: null, link_video_1: null });
+    const antes = structuredClone(snapshotsFila);
+    assert.deepEqual(await requisitar(caminhoFila), fila);
+    assert.deepEqual(await requisitar(`${caminhoFila}/99`), respostaAusente);
+    designacoes[0].ativo = 0;
+    assert.equal((await requisitar(caminhoDetalhe)).status, 403);
+    assert.deepEqual(snapshotsFila, antes);
 });
 
 const assertSemEscrita = () => assert.equal(eventosTransacao.filter((sql) => /^(INSERT|UPDATE|DELETE)\b/.test(sql)).length, 0);
