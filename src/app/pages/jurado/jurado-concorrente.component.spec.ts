@@ -7,6 +7,7 @@ import { By } from '@angular/platform-browser';
 import { ActivatedRoute, Router, UrlTree, convertToParamMap, provideRouter } from '@angular/router';
 import { ConfirmationService } from 'primeng/api';
 import { InputNumber } from 'primeng/inputnumber';
+import { Slider } from 'primeng/slider';
 import { BehaviorSubject } from 'rxjs';
 import { appRoutes } from '../../../app.routes';
 import { juradoGuard } from '../../guards/jurado.guard';
@@ -131,6 +132,15 @@ describe('JuradoConcorrenteComponent', () => {
         const fixture = await paginaUI(resposta);
         const campos = fixture.debugElement.queryAll(By.directive(InputNumber));
         expect(campos.length).toBe(2);
+        const sliders = fixture.debugElement.queryAll(By.directive(Slider));
+        expect(sliders.length).toBe(2);
+        for (const slider of sliders) {
+            const controle = slider.componentInstance as Slider;
+            expect(controle.min).toBe(10);
+            expect(controle.max).toBe(90);
+            expect(controle.step).toBe(2);
+            expect(controle.disabled()).toBeTrue();
+        }
         expect(fixture.nativeElement.querySelectorAll('[data-testid="criterio-avaliacao"]').length).toBe(2);
         for (const criterio of resposta.criterios) {
             const label = fixture.nativeElement.querySelector(`label[for="nota-${criterio.idCriterioCiclo}"]`);
@@ -155,6 +165,9 @@ describe('JuradoConcorrenteComponent', () => {
         const fixture = await paginaUI(avaliacaoPersistida());
         const input = fixture.nativeElement.querySelector('#nota-12') as HTMLInputElement;
         expect(input.value).toBe('0');
+        const slider = fixture.debugElement.queryAll(By.directive(Slider))[0].componentInstance as Slider;
+        expect(slider.value).toBe(0);
+        expect(slider.disabled()).toBeFalse();
         input.value = '';
         input.dispatchEvent(new Event('input', { bubbles: true }));
         input.dispatchEvent(new Event('blur'));
@@ -162,10 +175,103 @@ describe('JuradoConcorrenteComponent', () => {
         fixture.detectChanges();
         expect(fixture.componentInstance.notasEditaveis()[12]).toBeNull();
         expect(input.value).toBe('');
+        expect(slider.disabled()).toBeTrue();
+        http.expectNone((req) => req.method === 'PUT' || req.method === 'POST');
         clicarAcao(fixture, 'salvar-rascunho');
         const request = consultaGravacao();
         expect(request.request.body.notas).toEqual([{ idCriterioCiclo: 91, nota: 80 }]);
         request.flush(avaliacaoPersistida());
+    });
+
+    it('Slider vazio permanece desabilitado e oculto da acessibilidade sem atribuir zero', async () => {
+        const fixture = await paginaUI();
+        for (const elemento of fixture.debugElement.queryAll(By.directive(Slider))) {
+            const slider = elemento.componentInstance as Slider;
+            expect(slider.disabled()).toBeTrue();
+            expect(elemento.nativeElement.getAttribute('aria-hidden')).toBe('true');
+            expect(slider.min).toBe(0);
+            expect(slider.max).toBe(100);
+            expect(slider.step).toBe(1);
+        }
+        expect(fixture.nativeElement.querySelectorAll('[data-testid="nota-nao-atribuida"]').length).toBe(2);
+        expect((fixture.nativeElement.querySelector('#nota-12') as HTMLInputElement).value).toBe('');
+        fixture.componentInstance.alterarNotaPeloSlider(12, 0);
+        await fixture.whenStable();
+        fixture.detectChanges();
+        expect(fixture.componentInstance.notasEditaveis()).toEqual({ 12: null, 91: null });
+        http.expectNone((req) => req.method !== 'GET');
+    });
+
+    it('InputNumber e Slider compartilham nota e limpar nao atribui minimo nem persiste', async () => {
+        const fixture = await paginaUI();
+        const component = fixture.componentInstance;
+        const sliderElement = fixture.debugElement.queryAll(By.directive(Slider))[0];
+        const slider = sliderElement.componentInstance as Slider;
+        const input = fixture.nativeElement.querySelector('#nota-12') as HTMLInputElement;
+        input.value = '72';
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.dispatchEvent(new Event('blur'));
+        fixture.detectChanges();
+        await fixture.whenStable();
+        fixture.detectChanges();
+        expect(component.notasEditaveis()[12]).toBe(72);
+        expect(slider.value).toBe(72);
+        expect(slider.disabled()).toBeFalse();
+        expect(sliderElement.nativeElement.hasAttribute('aria-hidden')).toBeFalse();
+        expect(slider.ariaLabelledBy).toBe('label-nota-12');
+        const alterar = spyOn(component, 'alterarNota').and.callThrough();
+        const handle = sliderElement.nativeElement.querySelector('[role="slider"]') as HTMLElement;
+        handle.dispatchEvent(new KeyboardEvent('keydown', { code: 'ArrowRight', bubbles: true }));
+        fixture.detectChanges();
+        await fixture.whenStable();
+        fixture.detectChanges();
+        expect(alterar).toHaveBeenCalledOnceWith(12, 73);
+        expect(component.notasEditaveis()[12]).toBe(73);
+        expect(input.value).toBe('73');
+        input.value = '';
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.dispatchEvent(new Event('blur'));
+        fixture.detectChanges();
+        await fixture.whenStable();
+        fixture.detectChanges();
+        expect(component.notasEditaveis()[12]).toBeNull();
+        expect(input.value).toBe('');
+        expect(slider.disabled()).toBeTrue();
+        component.alterarNotaPeloSlider(12, 0);
+        expect(component.notasEditaveis()[12]).toBeNull();
+        http.expectNone((req) => req.method !== 'GET');
+    });
+
+    for (const bloqueio of ['concluida', 'permissao', 'confirmando'] as const) {
+        it(`Slider ignora eventos quando bloqueado por ${bloqueio}`, async () => {
+            const resposta = avaliacaoPersistida(bloqueio === 'concluida' ? 'concluida' : 'rascunho');
+            if (bloqueio === 'permissao') resposta.podeGravar = false;
+            const fixture = await paginaUI(resposta);
+            const component = fixture.componentInstance;
+            if (bloqueio === 'confirmando') expect(component.solicitarConclusao()).toBeTrue();
+            fixture.detectChanges();
+            const antes = component.notasEditaveis();
+            const alterar = spyOn(component, 'alterarNota').and.callThrough();
+            for (const elemento of fixture.debugElement.queryAll(By.directive(Slider))) {
+                expect((elemento.componentInstance as Slider).disabled()).toBeTrue();
+                elemento.triggerEventHandler('ngModelChange', 42);
+            }
+            expect(alterar).not.toHaveBeenCalled();
+            expect(component.notasEditaveis()).toBe(antes);
+            if (bloqueio === 'confirmando') expect(component.confirmando).toBeTrue();
+            http.expectNone((req) => req.method !== 'GET');
+        });
+    }
+
+    it('handler do Slider rejeita valores invalidos sem alterar a nota ou persistir', async () => {
+        const fixture = await paginaUI(avaliacaoPersistida());
+        const component = fixture.componentInstance;
+        const antes = component.notasEditaveis();
+        const alterar = spyOn(component, 'alterarNota').and.callThrough();
+        for (const nota of [null, NaN, Infinity, -1, 101, 1.5]) component.alterarNotaPeloSlider(12, nota);
+        expect(alterar).not.toHaveBeenCalled();
+        expect(component.notasEditaveis()).toBe(antes);
+        http.expectNone((req) => req.method !== 'GET');
     });
 
     for (const [estado, texto] of [['pendente', 'Avalia\u00e7\u00e3o n\u00e3o iniciada'], ['rascunho', 'Rascunho'], ['concluida', 'Avalia\u00e7\u00e3o conclu\u00edda']] as const) {
@@ -316,6 +422,10 @@ describe('JuradoConcorrenteComponent', () => {
         expect(fixture.nativeElement.querySelector('#nota-12').getAttribute('aria-describedby')).toContain('erro-gravacao');
         expect(fixture.nativeElement.querySelector('#nota-12').classList.contains('p-invalid')).toBeTrue();
         expect((fixture.debugElement.query(By.directive(InputNumber)).componentInstance as InputNumber).invalid()).toBeTrue();
+        for (const elemento of fixture.debugElement.queryAll(By.directive(Slider))) {
+            expect((elemento.componentInstance as Slider).invalid()).toBeTrue();
+            expect(elemento.nativeElement.classList.contains('p-invalid')).toBeTrue();
+        }
         http.expectNone((req) => req.method === 'PUT');
     });
 
@@ -1042,6 +1152,7 @@ describe('JuradoConcorrenteComponent', () => {
         const texto = fixture.nativeElement.textContent;
         for (const criterio of avaliacaoPendente().criterios) expect(texto).toContain(criterio.nome);
         expect(fixture.nativeElement.querySelectorAll('p-inputnumber').length).toBe(2);
+        expect(fixture.nativeElement.querySelectorAll('p-slider').length).toBe(2);
         expect(texto).not.toContain('nenhuma nota \u00e9 registrada');
         expect(texto).toContain('40.00%');
         expect(texto).toContain('60.00%');

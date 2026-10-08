@@ -24,6 +24,9 @@ export interface PerfilUsuario {
 }
 
 export interface PerfilConcorrente {
+    idEvento?: number;
+    idConcorrente?: number;
+    idEtapaInscricoes?: number | null;
     numeroConcorrente: string | null;
     idObra1: number | null;
     tituloObra1: string | null;

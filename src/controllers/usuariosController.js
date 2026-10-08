@@ -790,7 +790,7 @@ const obterPerfil = async (req, res) => {
         if (Number(usuario.id_tipo_usuario) === 2) {
             const evento = await resolverEventoPorSlug(FESTIVAL_II.slug);
             const [concorrenteRows] = await db.query(
-                `SELECT c.id_usuario AS concorrente_usuario_id,
+                `SELECT c.id_usuario AS concorrente_usuario_id, c.id_concorrente, c.id_evento,
                         c.numero_concorrente, c.id_obra_1, c.link_video_1,
                     c.id_obra_2, c.link_video_2, c.aceite_regulamento, c.data_cadastro,
                         obra1.titulo AS titulo_obra_1,
@@ -802,9 +802,26 @@ const obterPerfil = async (req, res) => {
                 [idUsuario, evento.id]
             );
 
-            if (concorrenteRows.length > 0 && concorrenteRows[0].concorrente_usuario_id !== null) {
+            if (concorrenteRows.length === 1 && Number(concorrenteRows[0].concorrente_usuario_id) === Number(idUsuario)
+                && Number(concorrenteRows[0].id_evento) === Number(evento.id)
+                && Number.isSafeInteger(Number(concorrenteRows[0].id_concorrente))
+                && Number(concorrenteRows[0].id_concorrente) > 0) {
                 const dadosConcorrente = concorrenteRows[0];
+                let idEtapaInscricoes = null;
+                if (FESTIVAL_II.idEtapaInscricoes !== null) {
+                    const [etapas] = await db.query(
+                        'SELECT id, evento_id FROM ist_eventos_etapas WHERE id = ? AND evento_id = ?',
+                        [FESTIVAL_II.idEtapaInscricoes, evento.id]
+                    );
+                    if (etapas.length === 1 && Number(etapas[0].id) === FESTIVAL_II.idEtapaInscricoes
+                        && Number(etapas[0].evento_id) === Number(evento.id)) {
+                        idEtapaInscricoes = Number(etapas[0].id);
+                    }
+                }
                 concorrente = {
+                    idEvento: Number(dadosConcorrente.id_evento),
+                    idConcorrente: Number(dadosConcorrente.id_concorrente),
+                    idEtapaInscricoes,
                     numeroConcorrente: dadosConcorrente.numero_concorrente,
                     idObra1: dadosConcorrente.id_obra_1,
                     tituloObra1: dadosConcorrente.titulo_obra_1,

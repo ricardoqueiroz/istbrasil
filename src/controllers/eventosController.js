@@ -76,7 +76,11 @@ const obterEventoPorSlug = async (req, res) => {
             [programacao]
         ] = await Promise.all([
             db.query(
-                'SELECT * FROM ist_eventos_etapas WHERE evento_id = ? ORDER BY ordem ASC, data_inicio ASC', 
+                {
+                    sql: 'SELECT * FROM ist_eventos_etapas WHERE evento_id = ? ORDER BY ordem ASC, data_inicio ASC, id ASC',
+                    // DATETIME civil: preservar os valores editoriais, sem conversão pelo timezone do host.
+                    dateStrings: true
+                },
                 [evento.id]
             ),
             db.query(

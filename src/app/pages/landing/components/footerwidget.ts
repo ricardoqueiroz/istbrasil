@@ -74,7 +74,7 @@ import { Router, RouterModule } from '@angular/router';
                     <p class="text-surface-700 dark:text-surface-100 font-bold">INSTITUTO SEBASTIAO TAPAJOS IST</p>
                     <p class="text-surface-700 dark:text-surface-100">
                         CNPJ 28.870.139/0001-05<br>
-                        Estrada do Pajuçara, 33 - Praia de pajuçara (Zona Rural)<br>
+                        Estrada do Pajuçara, 33 - Praia do Pajuçara (Zona Rural)<br>
                         Santarém - PA - Brasil 68005000
                     </p>
                 </div>
@@ -83,7 +83,7 @@ import { Router, RouterModule } from '@angular/router';
             <div class="grid grid-cols-12 gap-4 mt-8 text-center">
                 <div class="col-span-12">
                     <hr class="mb-4 border-surface-300 dark:border-surface-700" />
-                    <p class="text-surface-700 dark:text-surface-100">Copyright (c) Instituto Sebastião Tapajós IST - Todos os direitos reservados.</p>
+                    <p class="text-surface-700 dark:text-surface-100">Copyright &copy; Instituto Sebastião Tapajós IST - Todos os direitos reservados.</p>
                 </div>
             </div>
         </div>

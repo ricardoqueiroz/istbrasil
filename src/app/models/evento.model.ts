@@ -49,8 +49,14 @@ export interface EventoEtapa {
   evento_id: number;
   titulo: string;
   descricao?: string;
-  data_inicio?: string | Date;
-  data_fim?: string | Date;
+  data_inicio?: string | Date | null;
+  data_fim?: string | Date | null;
+  link_etapa_pendente?: string | null;
+  cta_etapa_pendente?: string | null;
+  link_etapa_andamento?: string | null;
+  cta_etapa_andamento?: string | null;
+  link_etapa_concluido?: string | null;
+  cta_etapa_concluido?: string | null;
   status: EtapaStatus;
   ordem: number;
 }

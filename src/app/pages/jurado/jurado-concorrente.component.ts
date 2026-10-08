@@ -10,6 +10,7 @@ import { ButtonModule } from 'primeng/button';
 import { CheckboxModule } from 'primeng/checkbox';
 import { ConfirmDialogModule } from 'primeng/confirmdialog';
 import { InputNumberModule } from 'primeng/inputnumber';
+import { SliderModule } from 'primeng/slider';
 import { TextareaModule } from 'primeng/textarea';
 import { EMPTY, Subject, catchError, distinctUntilChanged, finalize, map, merge, of, startWith, switchMap, takeUntil } from 'rxjs';
 import { AvaliacaoJuradoResponse, ConcorrenteJuradoResponse, JuradoService, SalvarAvaliacaoJuradoPayload } from '../../shared/jurado.service';
@@ -44,7 +45,7 @@ interface EdicaoAvaliacao {
 @Component({
     selector: 'p-jurado-concorrente',
     standalone: true,
-    imports: [NgTemplateOutlet, RouterLink, FormsModule, ButtonModule, CheckboxModule, ConfirmDialogModule, InputNumberModule, TextareaModule],
+    imports: [NgTemplateOutlet, RouterLink, FormsModule, ButtonModule, CheckboxModule, ConfirmDialogModule, InputNumberModule, SliderModule, TextareaModule],
     providers: [ConfirmationService],
     styles: [':host { display: block; min-width: 0; max-width: 100%; }'],
     template: `
@@ -126,20 +127,41 @@ interface EdicaoAvaliacao {
                             <form (ngSubmit)="salvarRascunho()" novalidate class="min-w-0 space-y-5">
                                 @for (criterio of atual.criterios; track criterio.idCriterioCiclo) {
                                     <div class="min-w-0 space-y-2 border-b border-surface-200 pb-4 dark:border-surface-800" data-testid="criterio-avaliacao">
-                                        <label [for]="'nota-' + criterio.idCriterioCiclo" class="block break-words font-medium">{{ criterio.nome }}</label>
+                                        <label [id]="'label-nota-' + criterio.idCriterioCiclo" [for]="'nota-' + criterio.idCriterioCiclo" class="block break-words font-medium">{{ criterio.nome }}</label>
                                         @if (criterio.descricao?.trim()) {
                                             <p [id]="'descricao-' + criterio.idCriterioCiclo" class="break-words text-sm text-surface-600 dark:text-surface-300">{{ criterio.descricao }}</p>
                                         }
                                         <p [id]="'peso-' + criterio.idCriterioCiclo" class="text-sm">Peso: {{ criterio.peso }}%</p>
-                                        <p-inputnumber
-                                            [inputId]="'nota-' + criterio.idCriterioCiclo" [name]="'nota-' + criterio.idCriterioCiclo"
-                                            [ngModel]="notasEditaveis()[criterio.idCriterioCiclo]" (ngModelChange)="alterarNota(criterio.idCriterioCiclo, $event)"
-                                            [min]="atual.escala.min" [max]="atual.escala.max" [step]="atual.escala.passo"
-                                            [allowEmpty]="true" [useGrouping]="false" [maxFractionDigits]="0"
-                                            [readonly]="concluida()" [disabled]="!podeEditar() || confirmando"
-                                            [invalid]="!!erroGravacao()"
-                                            [ariaDescribedBy]="'peso-' + criterio.idCriterioCiclo + (criterio.descricao?.trim() ? ' descricao-' + criterio.idCriterioCiclo : '') + (erroGravacao() ? ' erro-gravacao' : '')"
-                                            [inputStyleClass]="erroGravacao() ? 'w-full ng-invalid ng-dirty' : 'w-full'" styleClass="w-full" />
+                                        <div class="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-center" role="group"
+                                            [attr.aria-labelledby]="'label-nota-' + criterio.idCriterioCiclo"
+                                            [attr.aria-describedby]="'peso-' + criterio.idCriterioCiclo + (criterio.descricao?.trim() ? ' descricao-' + criterio.idCriterioCiclo : '') + (erroGravacao() ? ' erro-gravacao' : '')">
+                                            <div class="flex min-w-0 flex-1 items-center gap-3">
+                                                <span class="shrink-0 text-sm">{{ atual.escala.min }}</span>
+                                                <p-slider class="min-w-0 flex-1" [name]="'slider-nota-' + criterio.idCriterioCiclo"
+                                                    [ngModel]="notasEditaveis()[criterio.idCriterioCiclo]"
+                                                    (ngModelChange)="alterarNotaPeloSlider(criterio.idCriterioCiclo, $event)"
+                                                    [min]="atual.escala.min" [max]="atual.escala.max" [step]="atual.escala.passo"
+                                                    [disabled]="notasEditaveis()[criterio.idCriterioCiclo] == null || concluida() || !podeEditar() || confirmando"
+                                                    [invalid]="!!erroGravacao()"
+                                                    [ariaLabelledBy]="'label-nota-' + criterio.idCriterioCiclo"
+                                                    [attr.aria-hidden]="notasEditaveis()[criterio.idCriterioCiclo] == null ? 'true' : null" />
+                                                <span class="shrink-0 text-sm">{{ atual.escala.max }}</span>
+                                            </div>
+                                            <div class="w-24 shrink-0 self-end sm:self-auto">
+                                                <p-inputnumber
+                                                    [inputId]="'nota-' + criterio.idCriterioCiclo" [name]="'nota-' + criterio.idCriterioCiclo"
+                                                    [ngModel]="notasEditaveis()[criterio.idCriterioCiclo]" (ngModelChange)="alterarNota(criterio.idCriterioCiclo, $event)"
+                                                    [min]="atual.escala.min" [max]="atual.escala.max" [step]="atual.escala.passo"
+                                                    [allowEmpty]="true" [useGrouping]="false" [maxFractionDigits]="0"
+                                                    [readonly]="concluida()" [disabled]="!podeEditar() || confirmando"
+                                                    [invalid]="!!erroGravacao()"
+                                                    [ariaDescribedBy]="'peso-' + criterio.idCriterioCiclo + (criterio.descricao?.trim() ? ' descricao-' + criterio.idCriterioCiclo : '') + (erroGravacao() ? ' erro-gravacao' : '')"
+                                                    [inputStyleClass]="erroGravacao() ? 'w-full ng-invalid ng-dirty' : 'w-full'" styleClass="w-full" />
+                                            </div>
+                                        </div>
+                                        @if (notasEditaveis()[criterio.idCriterioCiclo] == null) {
+                                            <p class="text-sm text-surface-600 dark:text-surface-300" data-testid="nota-nao-atribuida">Nota n&atilde;o atribu&iacute;da. Digite uma nota para habilitar o ajuste.</p>
+                                        }
                                     </div>
                                 }
                                 <section class="min-w-0 space-y-3 border-t border-surface-200 pt-4 dark:border-surface-800" aria-labelledby="sinalizacao">
@@ -343,6 +365,13 @@ export class JuradoConcorrenteComponent {
     tentarNovamente(): void {
         if (this.salvando() || this.reconciliando()) return;
         this.recargas.next();
+    }
+
+    alterarNotaPeloSlider(idCriterioCiclo: number, nota: number | null): void {
+        if (this.notasEditaveis()[idCriterioCiclo] == null || this.concluida() || !this.podeEditar() || this.confirmando) return;
+        const escala = this.avaliacao()?.escala;
+        if (!escala || typeof nota !== 'number' || !Number.isInteger(nota) || nota < escala.min || nota > escala.max) return;
+        this.alterarNota(idCriterioCiclo, nota);
     }
 
     alterarNota(idCriterioCiclo: number, nota: number | null): void {

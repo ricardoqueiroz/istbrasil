@@ -50,7 +50,7 @@ import { AuthService } from '../../shared/auth.service';
 
             <div class="layout-topbar-menu hidden lg:block">
                 <div class="layout-topbar-menu-content">
-                    <button type="button" class="layout-topbar-action">
+                    <button type="button" class="layout-topbar-action"  routerLink="/eventos">
                         <i class="pi pi-calendar"></i>
                         <span>Calendario</span>
                     </button>
