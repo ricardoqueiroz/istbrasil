@@ -96,7 +96,7 @@ STAGE=pm2
 for pm2_file in "$EXPECTED_PM2_HOME/pm2.pid" "$EXPECTED_PM2_HOME/rpc.sock"; do
     [[ $(stat -c %u -- "$pm2_file") == "$ADMIN_UID" ]] || fail 'PM2 metadata/socket not owned by admin.'
 done
-read -r DAEMON_PID < "$EXPECTED_PM2_HOME/pm2.pid"
+DAEMON_PID=$(< "$EXPECTED_PM2_HOME/pm2.pid")
 [[ $DAEMON_PID =~ ^[1-9][0-9]*$ && -d /proc/$DAEMON_PID ]] || fail 'Invalid/inactive PM2 PID.'
 [[ $(stat -c %u -- /proc/"$DAEMON_PID") == "$ADMIN_UID" ]] || fail 'PM2 daemon not owned by admin.'
 PROCESS_LIST=$(ps -eo uid=,pid=,comm=) || fail 'Cannot enumerate visible processes.'

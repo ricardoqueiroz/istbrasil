@@ -149,6 +149,7 @@ name.pdf"
  export FIXTURE_NATIVE="$FIXTURE"
  if command -v cygpath >/dev/null 2>&1; then FIXTURE_NATIVE=$(cygpath -m "$FIXTURE"); fi
  echo 111 > "$FIXTURE/pm2/pm2.pid"
+ [[ $scenario != pm2-pid-no-lf ]] || printf '111' > "$FIXTURE/pm2/pm2.pid"
  : > "$FIXTURE/pm2/rpc.sock"
  : > "$FIXTURE/.deploy.lock"
  # Test-only socket adapter; production still requires a Unix socket.
@@ -185,6 +186,9 @@ name.pdf"
   missing-nss-admin) grep -q 'NSS enumeration' "$FIXTURE/output" ;;
   root-node-empty) grep -q 'command line empty' "$FIXTURE/output" ;;
   daemon-stale) grep -q 'title/home not proven' "$FIXTURE/output" ;;
+  pm2-pid-no-lf)
+   [[ $(wc -c < "$FIXTURE/pm2/pm2.pid") -eq 3 ]]
+   grep -q 'Admin PM2 daemon, API identity and ancestry validated' "$FIXTURE/output" ;;
   api-unrelated) grep -q 'not a descendant' "$FIXTURE/output" ;;
   api-hidden) grep -q 'Insufficient /proc visibility' "$FIXTURE/output" ;;
   missing-dependencies) grep -q 'missing dependencies' "$FIXTURE/output" ;;
@@ -196,6 +200,7 @@ name.pdf"
 }
 for scenario in root wrong-user dirty unknown bad-link root-pm2 port-conflict missing-dependencies peer-conflict; do run_case "$scenario" --check fail; done
 run_case valid --check pass
+run_case pm2-pid-no-lf --check pass
 run_case lock-conflict --deploy fail
 for scenario in build-failure publication-failure pm2-failure; do run_case "$scenario" --deploy fail; done
 run_case rollback --rollback fail
