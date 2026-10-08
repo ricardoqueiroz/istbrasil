@@ -48,7 +48,7 @@ A regressão encontrou ObjectUnsubscribedError ao clicar novamente no aceite da 
 
 ## Bloqueadores de publicação
 
-Rollback de produção não está comprovado. A restauração isolada descrita abaixo não troca releases, publica frontend ou reconfigura PM2. A arquitetura aprovada para a fase futura prepara cada backend com seus próprios node_modules, evitando npm ci no diretório ativo. Nenhuma implantação é permitida até testar também ativação e recuperação reais no PM2, publicação parcial, arquivos persistentes e saúde da aplicação.
+O rollback operacional está implementado e validado apenas em Linux isolado; ainda não foi homologado na VPS. A restauração da Fase 1 descrita abaixo continua sem trocar releases, publicar frontend ou reconfigurar PM2. Releases usam seus próprios node_modules, evitando npm ci no diretório ativo. Nenhuma implantação é permitida enquanto `deploy.sh` permanecer bloqueado e até a homologação específica no ambiente Ubuntu 20.04 do usuário `admin`.
 
 `--deploy`/`--rollback`, após diagnóstico válido, exigem lock previamente provisionado em `/var/www/istbrasil.org.br/.deploy.lock`; não criam arquivos de infraestrutura. Usam flock exclusivo sem espera, depois recusam publicação/recuperação. Em ambiente com conflito de peers, abortam antes do lock porque nenhuma operação mutante é possível. Essa ordem deverá mudar quando operações reais forem autorizadas: adquirir lock antes de qualquer preparação/validação que proteja mutações e revalidar o estado.
 
@@ -181,7 +181,7 @@ O schema proposto de backup de produção é separado do formato isolado da Fase
 
 Journal: envelope `{record, sha256}`, hash de `JSON.stringify(record)`. Record contém `version`, `transactionId`, `operation` (deploy/rollback), `generation`, `releaseId`, `events`. Eventos possuem `phase`, `at`, com ordem started → prepared → backend_activated → frontend_published → health_verified → confirmed; failed/interrupted só podem terminar uma sequência ainda não confirmada. Active deve referenciar journal confirmed da mesma geração/release. Transações não confirmadas exigem revisão, inclusive failed.
 
-Lock: `version`, `transactionId`, `token`, `operation`, `pid`, `startTicks`, `bootId`, `createdAt`. PID e idade isoladamente nunca provam propriedade ou abandono seguro. Um lock válido, ligado a processo admin com início/boot compatíveis e comando canônico do futuro `production-operation.mjs`, mais journal pendente da geração seguinte, pode ser IN_PROGRESS. Esse executor não existe nesta fase. Processo encerrado, identidade divergente, journal terminal ou proprietário ilegível não autorizam remover lock. Existência de `.deploy.lock` gera incerteza: esta versão não tenta observar/adquirir seu flock.
+Lock: `version`, `transactionId`, `token`, `operation`, `pid`, `startTicks`, `bootId`, `createdAt`. PID e idade isoladamente nunca provam propriedade ou abandono seguro. Um lock válido, ligado a processo admin com início/boot compatíveis e comando canônico de `production-operation.mjs`, mais journal pendente da geração seguinte, pode ser IN_PROGRESS. Processo encerrado, identidade divergente, journal terminal ou proprietário ilegível não autorizam remover lock. Existência de `.deploy.lock` gera incerteza: o diagnóstico não tenta observar/adquirir seu flock.
 
 ### Vínculos de runtime e dependências do diretório de execução
 
@@ -286,7 +286,7 @@ Exportações usam UUID exclusivo e nunca sobrescrevem uma anterior. EXPORT.lock
 
 Arquivos são abertos sem seguir symlink final, com verificação de ancestrais e de metadados antes/depois da leitura. Escritas são exclusivas no workspace; arquivos e diretórios têm fsync na conclusão. Limites conservadores: 64 MiB por objeto/registro, 2 GiB de blobs exportados, 250 mil entradas, 10 mil commits visitados e profundidade de árvore 64. Ao exceder, bloquear; não alterar limites automaticamente. Não se trata de snapshot atômico nem de reserva de capacidade para instalar/buildar uma release. A reserva operacional da Fase 2.1 não foi modificada.
 
-environment.ts e environment.prod.ts são exportados somente quando rastreados no commit. Nenhum arquivo de environment é gerado e nenhum valor PayPal é alterado. Instalação, fallback de environment, build, testes de módulos nativos, journal operacional e ativação pertencem a etapas posteriores ainda não autorizadas.
+environment.ts e environment.prod.ts são exportados somente quando rastreados no commit. Nenhum arquivo de environment é gerado e nenhum valor PayPal é alterado. Instalação, build e testes dos módulos nativos pertencem à preparação; journal e ativação pertencem ao módulo operacional desconectado descrito abaixo.
 
 ### Testes da Fase 2.2-A
 
@@ -315,6 +315,24 @@ Esse estado é deliberadamente inativo: não cria active.json, não altera PM2/N
 Testes isolados cobrem packs via Git, fluxo normal, falhas de instalação/build, lock, integridade e ausência de ambiente secreto. O runner injetável usa apenas fixtures; a aceitação final também exige uma preparação real descartável com Node 20.19.6, npm e registry, seguida de probes reais de bcrypt/sharp e build Angular.
 
 O formato de workspace/teste não aceita caminhos da VPS. Não são executados serviços, SQL/migrations, operações Git remotas, deploy ou rollback. Fases 1/2.1 e deploy.sh permanecem inalterados.
+
+## Fase 2.3: ativação e rollback operacional (desconectados)
+
+`scripts/deploy/production-operation.mjs` implementa `activatePreparedRelease()` e `rollbackRelease()`, mas permanece sem CLI e sem integração com `deploy.sh`. Portanto `--deploy` e `--rollback` continuam bloqueados. O módulo não executa Git, npm, migration, SQL, Nginx ou PayPal. Sua execução futura exige chamada explícita após revisão e habilitação separada.
+
+Cada operação usa o contrato canônico da Fase 2.1. Cria `operation.lock` por exclusividade com PID, boot ID, start ticks e token; lock preexistente nunca é removido automaticamente. Journals seguem `started → prepared → backend_activated → frontend_published → health_verified → confirmed`, ou terminam em `failed`. Falha de rollback automático ou de confirmação do estado retém o lock para revisão manual.
+
+Antes de trocar processos ou publicação, o runtime atual é copiado para `.deploy/backups/<UUID>/payload`: backend executável com seus `node_modules` e frontend sem `istdbadmin`. `.env`, seus backups, `istbrasil.private`, `.git` e artefatos de build não entram no payload. Manifesto, SHA-256 dos arquivos, runtime/ABI e selo READY usam o schema já validado pelo diagnóstico. A cada rollback explícito também é criado um novo backup da versão que estava ativa, permitindo recuperação da tentativa de rollback.
+
+A candidata preparada é verificada antes e depois da promoção para `.deploy/releases/<UUID>`. A release recebe somente dois vínculos absolutos aprovados: `backend/.env` e `backend/istbrasil.private`. O backend usa os `node_modules` da própria release; não há instalação no caminho ativo. O adaptador PM2 exclui e recria exclusivamente `ist-api` com cwd/script da release. Como essa troca possui um pequeno intervalo sem processo, esta fase não promete zero downtime.
+
+Na publicação, todo conteúdo gerenciado de `html` é substituído, preservando `html/istdbadmin`; `index.html` é copiado por último. Uploads e `backend-php` ficam fora da árvore modificada. O health check do backend aceita somente resposta HTTP bem-sucedida em `127.0.0.1:3000`, com até doze tentativas separadas por 250 ms para acomodar o início assíncrono do PM2. O frontend exige index não vazio e o vínculo `istdbadmin` ainda presente.
+
+Se PM2, frontend, health check, active.json ou journal falhar depois do início da ativação, o adaptador volta ao cwd/script anterior, o frontend é reconstruído a partir do backup e a saúde antiga é testada. `active.json` só é publicado depois dos dois health checks; se sua confirmação no journal falhar, o active anterior é restaurado ou removido. Uma falha nessa recuperação é risco alto: o erro original é preservado, `rollbackError` é anexado quando possível e o lock permanece.
+
+O rollback explícito valida novamente hashes e inventário do backup, converte o payload em uma nova release imutável com novos vínculos persistentes, ativa essa release e grava uma nova geração. O backend não é executado diretamente do diretório de backup.
+
+Os testes usam árvores fictícias e cobrem sucesso, falha de ativação do backend, falha de publicação, rollback explícito, persistência, integridade e lock. A integração instala PM2 6.0.14 apenas em tmpfs descartável e comprova a troca real entre dois servidores HTTP como usuário não root. Ainda será necessária homologação no Ubuntu 20.04 com o usuário `admin`, caminhos canônicos, permissões/ACLs e visibilidade `/proc` antes de conectar o módulo ao entrypoint.
 
 ## Testes locais
 
