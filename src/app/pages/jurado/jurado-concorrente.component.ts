@@ -235,7 +235,7 @@ interface EdicaoAvaliacao {
                     <p>{{ titulo }} indispon&iacute;vel.</p>
                 }
             </ng-template>
-            <p-confirmdialog key="concluir-avaliacao" [style]="{ width: 'min(32rem, calc(100vw - 2rem))' }" [closable]="false" [closeOnEscape]="false" />
+            <p-confirmdialog key="concluir-avaliacao" [style]="{ width: 'min(32rem, calc(100vw - 2rem))' }" [closable]="false" [closeOnEscape]="false" [acceptVisible]="confirmando" />
         </section>
     `
 })

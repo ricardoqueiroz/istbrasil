@@ -5,7 +5,8 @@ import { DomSanitizer } from '@angular/platform-browser';
 import { provideNoopAnimations } from '@angular/platform-browser/animations';
 import { By } from '@angular/platform-browser';
 import { ActivatedRoute, Router, UrlTree, convertToParamMap, provideRouter } from '@angular/router';
-import { ConfirmationService } from 'primeng/api';
+import { Confirmation, ConfirmationService } from 'primeng/api';
+import { ConfirmDialog } from 'primeng/confirmdialog';
 import { InputNumber } from 'primeng/inputnumber';
 import { Slider } from 'primeng/slider';
 import { BehaviorSubject } from 'rxjs';
@@ -464,6 +465,8 @@ describe('JuradoConcorrenteComponent', () => {
         const aceitar = document.querySelector('.p-confirmdialog-accept-button') as HTMLButtonElement;
         expect(aceitar).not.toBeNull();
         aceitar.click();
+        fixture.detectChanges();
+        expect(document.querySelector('.p-confirmdialog-accept-button')).toBeNull();
         aceitar.click();
         const request = consultaGravacao();
         expect(request.request.body.estado).toBe('concluida');
@@ -494,6 +497,261 @@ describe('JuradoConcorrenteComponent', () => {
         http.expectNone((req) => req.method === 'PUT');
         atual.reject?.();
         fixture.debugElement.injector.get(ConfirmationService).close();
+    });
+
+    describe('confirmacao real com PrimeNG 21', () => {
+        type DialogoUI = { dialogo: HTMLElement; mascara: HTMLElement; concluir: HTMLButtonElement; cancelar: HTMLButtonElement };
+
+        function confirmacao(fixture: ComponentFixture<JuradoConcorrenteComponent>): ConfirmDialog {
+            return fixture.debugElement.query(By.directive(ConfirmDialog)).componentInstance as ConfirmDialog;
+        }
+
+        async function atualizarUI(fixture: ComponentFixture<JuradoConcorrenteComponent>): Promise<void> {
+            fixture.detectChanges();
+            await fixture.whenStable();
+            fixture.detectChanges();
+        }
+
+        async function digitarNota(fixture: ComponentFixture<JuradoConcorrenteComponent>, nota: number): Promise<void> {
+            const input = fixture.nativeElement.querySelector('#nota-12') as HTMLInputElement;
+            expect(input.disabled).toBeFalse();
+            input.value = String(nota);
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+            input.dispatchEvent(new Event('blur'));
+            await atualizarUI(fixture);
+            expect(fixture.componentInstance.notasEditaveis()[12]).toBe(nota);
+        }
+
+        async function paginaCompleta(): Promise<ComponentFixture<JuradoConcorrenteComponent>> {
+            const fixture = await paginaUI(avaliacaoPersistida());
+            await digitarNota(fixture, 60);
+            (fixture.nativeElement.querySelector('#possivel-desclassificacao') as HTMLInputElement).click();
+            await atualizarUI(fixture);
+            const motivo = fixture.nativeElement.querySelector('#motivo-desclassificacao') as HTMLTextAreaElement;
+            motivo.value = 'Sinalizacao para validacao';
+            motivo.dispatchEvent(new Event('input', { bubbles: true }));
+            await atualizarUI(fixture);
+            return fixture;
+        }
+
+        function verificarCampos(fixture: ComponentFixture<JuradoConcorrenteComponent>, bloqueados: boolean): void {
+            const campos = fixture.nativeElement.querySelectorAll('form input, form textarea, form button');
+            expect(campos.length).toBeGreaterThan(3);
+            for (const campo of campos) expect(campo.disabled).withContext(campo.id || campo.tagName).toBe(bloqueados);
+            for (const slider of fixture.debugElement.queryAll(By.directive(Slider))) {
+                expect((slider.componentInstance as Slider).disabled()).toBe(bloqueados);
+            }
+        }
+
+        async function abrirDialogo(fixture: ComponentFixture<JuradoConcorrenteComponent>): Promise<DialogoUI> {
+            clicarAcao(fixture, 'concluir-avaliacao');
+            await atualizarUI(fixture);
+            expect(fixture.componentInstance.confirmando).toBeTrue();
+            expect(confirmacao(fixture).visible).toBeTrue();
+            const dialogo = document.querySelector('.p-dialog.p-confirmdialog') as HTMLElement;
+            expect(dialogo).not.toBeNull();
+            const mascara = dialogo.closest('.p-dialog-mask') as HTMLElement;
+            expect(mascara).not.toBeNull();
+            expect(dialogo.isConnected).toBeTrue();
+            expect(mascara.isConnected).toBeTrue();
+            expect(getComputedStyle(dialogo).display).not.toBe('none');
+            const concluir = dialogo.querySelector('.p-confirmdialog-accept-button') as HTMLButtonElement;
+            const cancelar = dialogo.querySelector('.p-confirmdialog-reject-button') as HTMLButtonElement;
+            expect(concluir).not.toBeNull();
+            expect(cancelar).not.toBeNull();
+            expect(concluir.textContent?.trim()).toBe('Concluir');
+            expect(cancelar.textContent?.trim()).toBe('Cancelar');
+            expect(concluir.disabled).toBeFalse();
+            expect(cancelar.disabled).toBeFalse();
+            http.expectNone((req) => req.method === 'PUT');
+            return { dialogo, mascara, concluir, cancelar };
+        }
+
+        async function esperarFechamento(fixture: ComponentFixture<JuradoConcorrenteComponent>, ui: DialogoUI): Promise<void> {
+            expect(fixture.componentInstance.confirmando).toBeFalse();
+            expect(confirmacao(fixture).visible).toBeFalse();
+            // PrimeUIX uses CSS motion even with provideNoopAnimations. Observe real removal;
+            // do not dispatch animationend or wait for HTTP stability while a PUT is pending.
+            const limite = performance.now() + 2500;
+            fixture.detectChanges();
+            while ((ui.dialogo.isConnected || ui.mascara.isConnected) && performance.now() < limite) {
+                await new Promise<void>((resolve) => window.setTimeout(resolve, 16));
+                fixture.detectChanges();
+            }
+            expect(ui.dialogo.isConnected).withContext('dialogo removido depois da animacao CSS').toBeFalse();
+            expect(ui.mascara.isConnected).withContext('mascara removida depois da animacao CSS').toBeFalse();
+            expect(document.querySelector('.p-dialog.p-confirmdialog')).toBeNull();
+            expect(document.querySelector('.p-dialog-mask')).toBeNull();
+        }
+
+        function respostaConcluida(nota = 60, idParticipacao = 20): AvaliacaoJuradoResponse {
+            const resposta = avaliacaoPersistida('concluida', 8);
+            resposta.concorrente.idParticipacao = idParticipacao;
+            resposta.avaliacao!.notas.find((item) => item.idCriterioCiclo === 12)!.nota = nota;
+            resposta.avaliacao!.possivelDesclassificacao = true;
+            resposta.avaliacao!.motivoDesclassificacao = 'Sinalizacao para validacao';
+            return resposta;
+        }
+
+        it('abre pelos controles reais e bloqueia todos os campos antes de qualquer PUT', async () => {
+            const fixture = await paginaCompleta();
+            const notas = fixture.componentInstance.notasEditaveis();
+            const ui = await abrirDialogo(fixture);
+            verificarCampos(fixture, true);
+            expect(fixture.componentInstance.notasEditaveis()).toBe(notas);
+            ui.cancelar.click();
+            await esperarFechamento(fixture, ui);
+            http.expectNone((req) => req.method === 'PUT');
+        });
+
+        it('cancela, remove dialogo e mascara, libera campos e reabre com os dois botoes', async () => {
+            const fixture = await paginaCompleta();
+            const notas = fixture.componentInstance.notasEditaveis();
+            const ui = await abrirDialogo(fixture);
+            ui.cancelar.click();
+            await esperarFechamento(fixture, ui);
+            verificarCampos(fixture, false);
+            expect(fixture.componentInstance.notasEditaveis()).toBe(notas);
+            http.expectNone((req) => req.method === 'PUT');
+            const reaberto = await abrirDialogo(fixture);
+            verificarCampos(fixture, true);
+            reaberto.cancelar.click();
+            await esperarFechamento(fixture, reaberto);
+            verificarCampos(fixture, false);
+            http.expectNone((req) => req.method === 'PUT');
+        });
+
+        it('aceita uma vez, fecha antes da resposta e permanece somente leitura depois da conclusao', async () => {
+            const fixture = await paginaCompleta();
+            const confirm = spyOn(fixture.debugElement.injector.get(ConfirmationService), 'confirm').and.callThrough();
+            const ui = await abrirDialogo(fixture);
+            const mensagem = confirm.calls.mostRecent().args[0];
+            ui.concluir.click();
+            fixture.detectChanges();
+            ui.concluir.click();
+            mensagem.accept?.();
+            const request = consultaGravacao();
+            expect(request.request.body.estado).toBe('concluida');
+            expect(request.request.body.versao).toBe(7);
+            expect(request.request.body.contexto).toEqual({ idCiclo: 100, numeroTentativa: 1 });
+            http.expectNone((req) => req.method === 'PUT');
+            verificarCampos(fixture, true);
+            await esperarFechamento(fixture, ui);
+            expect(fixture.componentInstance.salvando()).toBeTrue();
+            request.flush(respostaConcluida());
+            await atualizarUI(fixture);
+            expect(fixture.componentInstance.concluida()).toBeTrue();
+            expect(fixture.nativeElement.querySelector('[data-testid="estado-avaliacao"]').textContent).toContain('conclu');
+            verificarCampos(fixture, true);
+            expect(fixture.nativeElement.querySelector('[data-testid="salvar-rascunho"], [data-testid="concluir-avaliacao"]')).toBeNull();
+            http.expectNone((req) => req.method === 'PUT');
+        });
+
+        for (const status of [400, 500]) {
+            it(`erro HTTP ${status} na conclusao permite corrigir e confirmar novamente com um PUT por tentativa`, async () => {
+                const fixture = await paginaCompleta();
+                const ui = await abrirDialogo(fixture);
+                ui.concluir.click();
+                fixture.detectChanges();
+                const primeira = consultaGravacao();
+                expect(primeira.request.body.estado).toBe('concluida');
+                http.expectNone((req) => req.method === 'PUT');
+                primeira.flush({}, { status, statusText: 'Erro simulado' });
+                await esperarFechamento(fixture, ui);
+                await atualizarUI(fixture);
+                const erro = fixture.nativeElement.querySelector('#erro-gravacao');
+                expect(erro.getAttribute('role')).toBe('alert');
+                expect(erro.textContent).toContain(status === 400 ? 'inv\u00e1lidos' : 'salvar');
+                expect(fixture.componentInstance.concluida()).toBeFalse();
+                verificarCampos(fixture, false);
+                await digitarNota(fixture, 61);
+                const nova = await abrirDialogo(fixture);
+                nova.concluir.click();
+                fixture.detectChanges();
+                nova.concluir.click();
+                const segunda = consultaGravacao();
+                expect(segunda.request.body.estado).toBe('concluida');
+                expect(segunda.request.body.versao).toBe(7);
+                expect(segunda.request.body.notas).toContain({ idCriterioCiclo: 12, nota: 61 });
+                http.expectNone((req) => req.method === 'PUT');
+                await esperarFechamento(fixture, nova);
+                segunda.flush(respostaConcluida(61));
+                await atualizarUI(fixture);
+                expect(fixture.componentInstance.concluida()).toBeTrue();
+                expect(fixture.nativeElement.querySelector('#erro-gravacao')).toBeNull();
+                verificarCampos(fixture, true);
+                http.expectNone((req) => req.method === 'PUT');
+            });
+        }
+
+        it('tres cancelamentos sucessivos nao deixam callbacks antigos capazes de aceitar ou cancelar a nova confirmacao', async () => {
+            const fixture = await paginaCompleta();
+            const confirm = spyOn(fixture.debugElement.injector.get(ConfirmationService), 'confirm').and.callThrough();
+            const canceladas: Confirmation[] = [];
+            for (let ciclo = 0; ciclo < 3; ciclo++) {
+                const ui = await abrirDialogo(fixture);
+                canceladas.push(confirm.calls.mostRecent().args[0]);
+                ui.cancelar.click();
+                await esperarFechamento(fixture, ui);
+                verificarCampos(fixture, false);
+                canceladas[ciclo].accept?.();
+                canceladas[ciclo].reject?.();
+                expect(fixture.componentInstance.confirmando).toBeFalse();
+                http.expectNone((req) => req.method === 'PUT');
+            }
+            const atual = await abrirDialogo(fixture);
+            for (const antiga of canceladas) { antiga.accept?.(); antiga.reject?.(); }
+            fixture.detectChanges();
+            expect(fixture.componentInstance.confirmando).toBeTrue();
+            expect(confirmacao(fixture).visible).toBeTrue();
+            expect(atual.concluir.isConnected).toBeTrue();
+            expect(atual.cancelar.isConnected).toBeTrue();
+            http.expectNone((req) => req.method === 'PUT');
+            atual.concluir.click();
+            fixture.detectChanges();
+            const request = consultaGravacao();
+            http.expectNone((req) => req.method === 'PUT');
+            await esperarFechamento(fixture, atual);
+            request.flush(respostaConcluida());
+            await atualizarUI(fixture);
+            expect(fixture.componentInstance.concluida()).toBeTrue();
+        }, 15000);
+
+        it('troca de concorrente fecha o dialogo antigo e so grava o payload e a versao do contexto atual', async () => {
+            const fixture = await paginaCompleta();
+            const confirm = spyOn(fixture.debugElement.injector.get(ConfirmationService), 'confirm').and.callThrough();
+            const antigaUI = await abrirDialogo(fixture);
+            const antiga = confirm.calls.mostRecent().args[0];
+            parametros.next(convertToParamMap({ slug: evento.slug, idParticipacao: '21' }));
+            const resposta = avaliacaoPersistida('rascunho', 12);
+            resposta.concorrente.idParticipacao = 21;
+            consulta(evento.slug, 21, resposta).flush(dados({ idParticipacao: 21 }));
+            await esperarFechamento(fixture, antigaUI);
+            await atualizarUI(fixture);
+            const atualUI = await abrirDialogo(fixture);
+            antiga.accept?.();
+            antiga.reject?.();
+            fixture.detectChanges();
+            expect(fixture.componentInstance.confirmando).toBeTrue();
+            expect(confirmacao(fixture).visible).toBeTrue();
+            http.expectNone((req) => req.method === 'PUT');
+            atualUI.concluir.click();
+            fixture.detectChanges();
+            atualUI.concluir.click();
+            const request = http.expectOne((req) => req.method === 'PUT' && req.url === `/api/jurado/eventos/${evento.slug}/concorrentes/21/avaliacao`);
+            expect(request.request.body.versao).toBe(12);
+            expect(request.request.body.contexto).toEqual({ idCiclo: 100, numeroTentativa: 1 });
+            expect(request.request.body.notas).toEqual([{ idCriterioCiclo: 12, nota: 0 }, { idCriterioCiclo: 91, nota: 80 }]);
+            http.expectNone((req) => req.method === 'PUT');
+            await esperarFechamento(fixture, atualUI);
+            const concluida = avaliacaoPersistida('concluida', 13);
+            concluida.concorrente.idParticipacao = 21;
+            request.flush(concluida);
+            await atualizarUI(fixture);
+            expect(fixture.componentInstance.avaliacao()?.concorrente.idParticipacao).toBe(21);
+            expect(fixture.componentInstance.avaliacao()?.versao).toBe(13);
+            expect(fixture.componentInstance.concluida()).toBeTrue();
+        });
     });
 
     for (const status of [409, 500]) {

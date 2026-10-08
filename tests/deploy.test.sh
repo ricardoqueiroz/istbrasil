@@ -207,12 +207,50 @@ run_case rollback --rollback fail
 for scenario in perm640 backup640 quoted-private private-pdf ignored-generated root-node-unrelated port-duplicate; do run_case "$scenario" --check pass; done
 for scenario in wrong-owner wrong-group shared-group shared-primary missing-nss-admin root-node-empty perm644 perm660 perm400 perm4600 extended-acl acl-inaccessible tracked-env ignored-unknown newline-unknown private-executable private-script private-symlink unignored-generated git-enumeration-error pm2-owner daemon-stale api-unrelated api-hidden root-node-pm2 root-node-hidden port-owner port-hidden port-partly-hidden; do run_case "$scenario" --check fail; done
 "$REAL_NODE" --input-type=commonjs - "$SOURCE" <<'NODE'
-const fs = require('node:fs'), path = require('node:path');
+const fs = require('node:fs'), path = require('node:path'), assert = require('node:assert/strict');
 const {createRequire} = require('node:module');
 const repo=process.argv[2];
 const semver=createRequire(path.join(repo,'package.json'))('semver');
 const p=JSON.parse(fs.readFileSync(path.join(repo,'package-lock.json'),'utf8')).packages;
-if (semver.satisfies(p['node_modules/@angular/core'].version,p['node_modules/primeng'].peerDependencies['@angular/core'])) throw Error('Expected blocker no longer present; revisit deployment gate.');
-console.log('PASS actual Angular/PrimeNG peer conflict');
+const manifest=JSON.parse(fs.readFileSync(path.join(repo,'package.json'),'utf8'));
+assert.deepEqual(p[''].dependencies,manifest.dependencies);
+assert.deepEqual(p[''].devDependencies,manifest.devDependencies);
+for (const name of ['animations','common','compiler','core','forms','platform-browser','platform-browser-dynamic','router','compiler-cli','cli']) {
+ assert.equal(p['node_modules/@angular/'+name].version,'21.1.1');
+}
+assert.equal(p['node_modules/@angular/cdk'].version,'21.2.14');
+assert.equal(p['node_modules/@angular-devkit/build-angular'].version,'21.1.1');
+assert.equal(p['node_modules/primeng'].version,'21.0.0');
+assert.equal(p['node_modules/@primeuix/themes'].version,'2.0.2');
+assert(semver.satisfies(p['node_modules/@primeuix/styles'].version,'^2.0.2'));
+assert.equal(p['node_modules/hono'].dev,true);
+assert.equal(p['node_modules/hono'].peer,true);
+assert.equal(manifest.dependencies.hono,undefined);
+assert.equal(manifest.devDependencies.hono,undefined);
+// Execute the production peer gate against the real lock and in-memory fixtures.
+const deploy=fs.readFileSync(path.join(repo,'deploy.sh'),'utf8');
+const gate=deploy.match(/    for \(const info of Object\.values\(pkgs\)\) \{[\s\S]*?\n    \}\n(?=\} catch)/);
+assert(gate,'Production peer gate not found');
+const check=new Function('pkgs','semver','reject',gate[0]);
+const validate=packages => check(packages,semver,message => { throw new Error(message); });
+validate(p);
+console.log('PASS actual manifest/lock compatibility and preserved Angular versions');
+const angularPeers=['animations','cdk','common','core','forms','platform-browser','router'];
+for (const name of angularPeers) {
+ const fixture=structuredClone(p);
+ fixture['node_modules/primeng'].peerDependencies['@angular/'+name]=name==='cdk'?'^20.0.3':'^20.0.4';
+ assert.throws(() => validate(fixture),/Peer dependency conflict/);
+}
+console.log('PASS isolated Angular/PrimeNG conflicts (7 peers)');
+const missingHono=structuredClone(p);
+delete missingHono['node_modules/hono'];
+assert.throws(() => validate(missingHono),/Peer dependency conflict/);
+console.log('PASS isolated missing mandatory hono peer');
+const optional={'node_modules/example':{peerDependencies:{examplePeer:'^1'},peerDependenciesMeta:{examplePeer:{optional:true}}}};
+validate(optional);
+console.log('PASS isolated absent optional peer');
+optional['node_modules/examplePeer']={version:'2.0.0'};
+assert.throws(() => validate(optional),/Peer dependency conflict/);
+console.log('PASS isolated incompatible installed optional peer');
 NODE
-printf '%s isolated diagnostic cases + 1 actual dependency check passed.\n' "$COUNT"
+printf '%s isolated diagnostic cases + 5 dependency checks passed.\n' "$COUNT"
