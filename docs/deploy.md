@@ -1,8 +1,8 @@
-# Deploy seguro IST Brasil — diagnóstico e dependências
+# Deploy seguro IST Brasil — diagnóstico, dependências e recuperação isolada
 
 ## Estado real desta versão
 
-`--check` implementado. `--deploy` e `--rollback` são **bloqueados intencionalmente**. Não há implantação, backup, recuperação ou reinício implementados. Isso atende à alternativa de segurança autorizada: não simular garantia de rollback in-place.
+`--check` implementado. `--deploy` e `--rollback` são **bloqueados intencionalmente**. `deploy.sh` permanece inalterado e não faz backup, recuperação, publicação ou reinício. A Fase 1 acrescenta módulos independentes de backup e recuperação **somente em workspace temporário isolado**, sem conectar essas operações ao script de produção.
 
 O backend continua em `/var/www/istbrasil.org.br/backend-node/istbrasil`; não existe mudança no PM2, Nginx ou dados. O alvo é apenas `origin/main` já disponível localmente; nenhum modo executa fetch nesta versão.
 
@@ -48,15 +48,105 @@ A regressão encontrou ObjectUnsubscribedError ao clicar novamente no aceite da 
 
 ## Bloqueadores de publicação
 
-Rollback não está comprovado: npm ci substituiria node_modules no diretório ativo, arquivos rastreados privados precisam ser protegidos, e rollback de Git sem reset/merge não pode descartar dados. Nenhuma implantação é permitida até definir e testar restauração de código, dependências nativas (bcrypt/sharp), frontend, configurações e Git sem perder alterações ou persistentes.
+Rollback de produção não está comprovado. A restauração isolada descrita abaixo não troca releases, publica frontend ou reconfigura PM2. A arquitetura aprovada para a fase futura prepara cada backend com seus próprios node_modules, evitando npm ci no diretório ativo. Nenhuma implantação é permitida até testar também ativação e recuperação reais no PM2, publicação parcial, arquivos persistentes e saúde da aplicação.
 
 `--deploy`/`--rollback`, após diagnóstico válido, exigem lock previamente provisionado em `/var/www/istbrasil.org.br/.deploy.lock`; não criam arquivos de infraestrutura. Usam flock exclusivo sem espera, depois recusam publicação/recuperação. Em ambiente com conflito de peers, abortam antes do lock porque nenhuma operação mutante é possível. Essa ordem deverá mudar quando operações reais forem autorizadas: adquirir lock antes de qualquer preparação/validação que proteja mutações e revalidar o estado.
 
-## Recuperação planejada, não implementada
+## Fase 1 implementada — backup e recuperação isolada
 
-Antes de habilitar publicação: baseline da versão ativa com código, node_modules, manifest frontend e metadados Git/PM2 restritos; hashes e validação de recuperação. Nenhum env em área pública. Atualização somente fast-forward para SHA explícito; instalação/build antes de publicação; índice por último; gerenciamento exclusivo de arquivos do manifest, preservando istdbadmin e arquivos desconhecidos; restauração comprovada do backend incluindo dependências. Necessária decisão sobre pausa controlada da API durante substituição in-place, para evitar arquivos/dependências inconsistentes.
+Arquivos: `scripts/deploy/state.mjs`, `scripts/deploy/backup.mjs`, `tests/deploy-backup.test.mjs` e `tests/deploy.integration.test.sh`. Usam somente módulos nativos do Node; não executam Git, npm, shell, aplicação, PM2 ou consultas de banco. Os testes executam apenas um backend sintético para comprovar que os módulos restaurados são utilizáveis.
 
-Traps atuais somente registram estágio e abortam. Não fazem rollback. SIGKILL/quedas exigirão journal de recuperação na versão futura. Não alegar zero downtime. Não haverá SQL/migrations nem reload Nginx automático.
+`createIsolation()` cria um diretório `ist-deploy-isolated-*` diretamente no diretório temporário canônico do sistema, com marcador exato `ISOLATED.json`. Os módulos recusam fontes externas: backend e frontend precisam estar sob `sources/` nesse workspace. Não existe CLI para operar sobre a VPS. Não copiar produção ou credenciais para esses testes.
+
+API, utilizada pelas fixtures:
+
+```javascript
+const backup = await createBackup({ isolation, backend, frontend, commit: shaCompleto });
+const manifest = await verifyBackup(isolation, backup.id);
+const restored = await restoreBackup({ isolation, id: backup.id });
+```
+
+As fontes são árvores fictícias criadas pelo teste. O SHA deve ter 40 caracteres hexadecimais; nesta fase é metadado fornecido, não comprovação por Git de que a árvore corresponde ao commit.
+
+Formato escolhido nesta fase: snapshot em diretório privado, sem TAR/compressão ou ferramentas adicionais:
+
+```text
+<workspace temporário>/
+  ISOLATED.json
+  WORKSPACE.lock                 # existe somente durante a operação ou enquanto exige revisão
+  sources/                       # somente fixtures fictícias
+  backups/<UUID>/
+    payload/backend/             # código, sem node_modules/persistentes
+    payload/modules/             # node_modules separados
+    payload/frontend/
+    manifest.json
+    manifest.sha256
+    READY
+  journal/<UUID>.json
+  restored/<UUID>/
+    backend/node_modules/
+    frontend/
+    RESTORED.json
+```
+
+Em Linux, armazenamento administrativo é 700, arquivos regulares de payload/manifesto/journal/lock são 600 e precisam pertencer ao usuário operacional do teste. O manifesto registra caminhos relativos, tipos, tamanhos, SHA-256 de arquivos/destinos de links, modos originais, UID/GID, Node, plataforma, arquitetura e ABI. Conteúdo é lido/copiado em blocos de 64 KiB. A restauração reaplica modos; não faz chown. Windows não comprova permissões POSIX nem durabilidade por fsync de diretórios.
+
+O backup exclui sem percorrer `.env*` (incluindo `.env`, `.env.backup` e `.env_old`), `istbrasil.private`, `uploads`, `backend-php` e `istdbadmin`, além de `.git`, `.npmrc`, `.ssh`, `.aws`, `.pm2`, `.deploy`, database/development, dist/cache Angular, chaves/certificados com extensões protegidas e sessões SQLTools. A lista exata integra o manifesto. Isso é exclusão por caminho, não um detector de segredos embutidos em código. Arquivos desses caminhos nunca são restaurados ou apagados; não se trata de backup de dados persistentes ou banco.
+
+O link original `html/istdbadmin` permanece intocado e não é desreferenciado nem recriado no destino isolado. Os 119 documentos privados dos testes são gerados com conteúdo fictício. Nenhum documento real é utilizado. Links relativos internos de node_modules são preservados; links absolutos, externos, para caminhos protegidos, links no caminho administrativo e arquivos regulares com hardlinks são recusados. Tipos especiais e bits setuid/setgid/sticky também exigem revisão. Se um pacote precisar de um arquivo excluído, será necessário revisar a política antes da fase de produção.
+
+Verificação exige manifesto válido, SHA-256 do manifesto, lista exata de entradas, hashes/tamanhos de payload, permissões privadas, selo READY e journal de backup completo. Mudanças na fonte durante a captura são verificadas por conteúdo/metadados e uma segunda varredura. Isso não substitui um snapshot atômico do filesystem; a fonte deve permanecer estável. SHA-256 detecta corrupção, mas não autentica um backup contra alguém capaz de substituir todos os arquivos e hashes.
+
+Cada restauração cria um UUID novo em `restored/`, sem aceitar destino arbitrário ou sobrescrever uma recuperação anterior. Verifica o backup antes de criar o destino, compara plataforma/arquitetura/ABI e copia código/módulos/frontend. A integridade é conferida enquanto diretórios ainda são 700 e arquivos 600; o backup original também é verificado novamente. Somente depois aplica modos originais dos arquivos e dos diretórios, com diretórios filhos antes dos pais. Em Linux, os descritores são abertos antes de restringir permissões, e fstat/fsync confirmam os modos sem exigir nova leitura após um modo 000. Só então grava RESTORED.json e conclui/confere o journal. O destino externo da restauração permanece 700. A fixture `.node` comprova cópia binária, não carregamento real de bcrypt/sharp; esse teste continua exigido na fase futura.
+
+Journal: envelope JSON com SHA-256, eventos e transições permitidas. Escritas usam arquivo exclusivo, fsync e publicação atômica; em Linux também sincronizam os diretórios. Transições de backup: started → copying → verifying → complete; de restauração: started → verifying → copying → checking → complete. Falhas tratáveis tentam registrar e conferir failed, preservando os artefatos parciais. Se isso também falhar, a exceção original é relançada intacta; a falha secundária fica em journalError quando o objeto permite esse diagnóstico. Erros de limpeza também não substituem a exceção original. Erros não extensíveis conservam sua identidade, mesmo sem receber a propriedade secundária.
+
+`createBackup()` e `restoreBackup()` adquirem o mesmo WORKSPACE.lock por criação exclusiva, antes da inspeção do journal/fontes, e o mantêm durante toda a operação. Isso impede backup/backup, backup/restauração e restauração/restauração concorrentes, inclusive entre processos. O lock registra token, transação, operação, PID e instante; PID/idade nunca autorizam remoção automática. Um lock existente, mesmo inválido ou de processo encerrado, bloqueia a operação.
+
+Somente a operação que criou o lock pode removê-lo, após confirmar seu resultado ou um failed verificável, conferindo inode/token antes da remoção. Se aquisição, journal ou confirmação final forem incertos, o lock permanece para revisão. Se um complete ficar visível após rename mas a gravação durável/confirmação falhar, não há retorno de sucesso: inspectTransactions sinaliza unconfirmed/incomplete e verifyBackup recusa aquele backup enquanto seu lock estiver presente. A ausência do lock é necessária para confirmar o resultado da operação, além do journal e dos selos.
+
+`inspectTransactions()` identifica estados incompletos e bloqueia novas cópias/restaurações. O teste SIGKILL interrompe uma cópia real, verifica concorrência entre processos e comprova que registrar failed sozinho não remove o lock abandonado. A recuperação do backup anterior só acontece após revisão explícita da transação e remoção manual do lock da fixture cujo processo já terminou. Não há retomada automática, limpeza de locks abandonados, garbage collection, retenção automática ou coordenação de deploy. A exclusão mútua de operações de produção continua pertencendo ao flock do deploy e deverá ser implementada antes de conectar os módulos.
+
+O diagnóstico existente continua com suas proteções originais: a presença de `.env_old` ainda pode bloquear a allowlist de `deploy.sh`. Sua preservação pelo novo módulo não amplia essa allowlist nem dispensa a revisão necessária antes da Fase 2.
+
+Execução local sem dependências adicionais:
+
+```bash
+node --check scripts/deploy/state.mjs
+node --check scripts/deploy/backup.mjs
+node --test tests/deploy-backup.test.mjs
+# Linux, usuário não root:
+bash tests/deploy.integration.test.sh
+```
+
+Suíte Linux com fixtures reais de filesystem, dados sintéticos, links, permissões, corrupção, schema malicioso e SIGKILL durante uma cópia real parcialmente concluída. Regressões adicionais cobrem as quatro combinações concorrentes, locks antigos/inválidos, falhas de publicação e fsync do journal, preservação de erros e restauração com modos 000. Falhas I/O são injetadas exclusivamente nas chamadas nativas da fixture com mocks do runner Node; a cópia/hash/validação restantes continuam reais e os mocks são restaurados por teste. No Windows, os nove casos exclusivamente Linux são explicitamente marcados como skip; a falha após rename é injetada diretamente, pois fsync de diretório não é executado nessa plataforma. O runner Linux recusa Windows e root; não simula resultado PASS quando o ambiente necessário está ausente. O contêiner de validação usa Node 20.19.6, usuário 1000:1000, sem rede/capabilities, filesystem raiz somente leitura e apenas módulos/testes/deploy.sh montados como leitura; os dados são criados em /tmp e descartados ao fim.
+
+Resultados após a revisão desta fase: 42 testes em Linux passaram, sem falhas ou skips; no Windows passaram 33, sem falhas, com os nove skips Linux esperados. São 12 casos adicionais, preservando os 30 existentes e ampliando o cenário SIGKILL. Na implementação inicial também passaram os 52 casos existentes de diagnóstico, as cinco verificações de dependências e a validação sintática Bash/Node. Essa suíte de diagnóstico não foi repetida na revisão, pois deploy.sh e seus testes permaneceram inalterados. Não foram repetidos testes Angular, build ou instalação de dependências, pois os módulos não são conectados à aplicação.
+
+Para reproduzir o isolamento em um host Linux com Docker já disponível, a partir da raiz do projeto e com a imagem oficial previamente obtida:
+
+```bash
+docker run --rm --pull=never --network none --read-only \
+  --cap-drop ALL --security-opt no-new-privileges --user 1000:1000 \
+  --tmpfs /tmp:rw,nosuid,nodev,size=256m,mode=1777 \
+  --mount "type=bind,source=$PWD/scripts/deploy,target=/work/scripts/deploy,readonly" \
+  --mount "type=bind,source=$PWD/tests/deploy-backup.test.mjs,target=/work/tests/deploy-backup.test.mjs,readonly" \
+  --mount "type=bind,source=$PWD/tests/deploy.integration.test.sh,target=/work/tests/deploy.integration.test.sh,readonly" \
+  --mount "type=bind,source=$PWD/deploy.sh,target=/work/deploy.sh,readonly" \
+  --workdir /work \
+  node@sha256:b342de02eb4a57cd6986290a69833d20818508db8078dba0197a024193410aee \
+  bash tests/deploy.integration.test.sh
+```
+
+A imagem validada é `node:20.19.6-bookworm-slim` (Debian Linux), fixada por digest. Não montar `.env`, node_modules do projeto, dados privados, o socket Docker ou a árvore inteira do repositório no contêiner.
+
+Essa validação Linux não equivale a validação da VPS Ubuntu 20.04, das dependências reais ou dos serviços. Recuperação após perda do host, snapshots consistentes de banco, criptografia/cópia externa e persistência em reboot permanecem fora desta fase.
+
+## Fase 2 planejada, não implementada
+
+Antes de habilitar publicação: adaptar os módulos isolados a caminhos administrativos aprovados com validações de produção, baseline da versão ativa, metadados Git/PM2 restritos e dimensionamento de espaço/inodes. Nenhum env em área pública. Preparar backend em releases com dependências próprias, alvo publicado e SHA explícito, instalação/build antes de ativação; frontend por manifesto com índice por último; preservação de istdbadmin e arquivos desconhecidos; recuperação comprovada do backend/PM2 e publicação parcial. Permanecem pendentes coordenação/locks, janela de interrupção, health checks, política de retenção e configuração de reboot.
+
+Traps de deploy.sh somente registram estágio e abortam. Não fazem rollback. O journal isolado não é integrado ao deploy; sua adoção em produção exige revisão e testes adicionais. Não alegar zero downtime. Não haverá SQL/migrations nem reload Nginx automático.
 
 ## Testes locais
 
@@ -66,10 +156,10 @@ Testes usam cópia do script com caminhos temporários, /proc fictício e marcad
 
 ## Antes de qualquer execução na VPS
 
-Validação local desta correção: 333 testes Angular completos, 131 testes focados do jurado, quatro testes de eventos com consultas simuladas, 52 cenários isolados de deploy e cinco verificações de dependências passaram. O build final de produção passou, com avisos CommonJS de page-flip e quill-delta; nenhum ajuste foi feito nesses pacotes. As instalações, testes e builds usam uma cópia temporária; node_modules e serviços do workspace ativo foram preservados. A suíte backend completa não foi executada; a divergência preexistente em festivalParticipation.test.js não foi corrigida nesta tarefa.
+Histórico da correção de dependências: 333 testes Angular completos, 131 testes focados do jurado, quatro testes de eventos com consultas simuladas, 52 cenários isolados de deploy e cinco verificações de dependências passaram. O build final de produção passou, com avisos CommonJS de page-flip e quill-delta; nenhum ajuste foi feito nesses pacotes. As instalações, testes e builds usam uma cópia temporária; node_modules e serviços do workspace ativo foram preservados. A suíte backend completa não foi executada; a divergência preexistente em festivalParticipation.test.js não foi corrigida nesta tarefa. Esses resultados de aplicação não foram repetidos na Fase 1 de backup.
 
-Não foi executada validação Linux: o único WSL disponível é docker-desktop parado, sem daemon Docker acessível. Nenhum serviço foi iniciado para contornar essa limitação. A validação visual manual de Aura, modo escuro, overlays e formulários permanece pendente.
+A validação de dependências descrita acima foi realizada no Windows. Na Fase 1 de backup, Docker já estava disponível e foi utilizado para executar os testes isolados em Linux; nenhum serviço existente foi reiniciado. Isso não valida o build Angular ou os binários bcrypt/sharp reais em Ubuntu. A validação visual manual de Aura, modo escuro, overlays e formulários permanece pendente.
 
 Revisão humana obrigatória. Conferir layout, admin/PM2_HOME, privilégios de leitura de /proc/ss, permissões e allowlist sem publicar segredos. O script não consegue comprovar ausência de processos que nem aparecem na visão de ps/ss de admin. Permissões reais de /proc, hidepid, containers/namespaces, formato do título PM2, ancestralidade fork/cluster e registros NSS precisam ser conferidos na VPS. Falhas nas leituras exigidas bloqueiam, mas uma enumeração aparentemente completa não é prova de visibilidade global. A enumeração getent passwd pode ser limitada por diretórios externos: antes de aceitar 640 é necessário confirmar exclusividade real do grupo. As inspeções não são um snapshot atômico; mudanças de processos durante a leitura podem causar aborto conservador. Não executar sudo pm2, reiniciar daemons ou matar processos para contornar falhas.
 
-Validar a instalação e regressão também em Linux, incluindo aparência Aura/modo escuro, overlays, formulários e sincronização Slider/InputNumber dos jurados. PrimeNG 21 usa animações CSS e deixa showTransitionOptions/hideTransitionOptions sem efeito; essas propriedades não foram encontradas no código atual. Definir rollback in-place, escrever testes de falha real e aprovar comando/commit/backup concretos antes de habilitar deploy. Nenhum deploy antigo foi encontrado para comparação linha a linha.
+Validar a instalação e regressão também em Linux, incluindo aparência Aura/modo escuro, overlays, formulários e sincronização Slider/InputNumber dos jurados. PrimeNG 21 usa animações CSS e deixa showTransitionOptions/hideTransitionOptions sem efeito; essas propriedades não foram encontradas no código atual. Implementar/testar a Fase 2 e aprovar comando/commit/backup concretos antes de habilitar deploy. Nenhum deploy antigo foi encontrado para comparação linha a linha.
