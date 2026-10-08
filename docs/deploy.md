@@ -241,6 +241,81 @@ Permanecem pendentes: proveniência Git independente e build, origem efetiva de 
 
 Traps de deploy.sh somente registram estágio e abortam. Não fazem rollback. O journal isolado não é integrado ao deploy; sua adoção em produção exige revisão e testes adicionais. Não alegar zero downtime. Não haverá SQL/migrations nem reload Nginx automático.
 
+## Fase 2.2-A: exportador Git em workspace temporário
+
+`scripts/deploy/git-export.mjs` exporta uma projeção explícita de um commit Git local. Não prepara dependências ou releases operacionais, não executa aplicação/npm/build, não cria vínculos de runtime e não importa os módulos das Fases 1/2.1. `deploy.sh` permanece desconectado e deploy/rollback bloqueados.
+
+APIs: `createExportWorkspace()`, `requireExportWorkspace(root)`, `exportCommit({workspace, commitSha, approvedMainSha})`, `verifyExport({workspace, exportId})`. Somente Linux com UID não zero é aceito para criação/exportação/verificação. O workspace precisa ser filho direto do diretório temporário canônico (/tmp ou /var/tmp seguros), ter prefixo `ist-git-export-`, owner/grupo do usuário atual e modo 700, com marcador privado exato. TMPDIR não pode redirecionar criação para um caminho de produção/arbitrário. A origem é fixa em `repository/.git`; destinos são UUIDs novos em `exports/`. Não há opção de origem/destino arbitrário, flag para produção ou CLI operacional. Os testes constroem somente repositórios fictícios nesse workspace.
+
+```text
+<tmp>/ist-git-export-XXXXXX/       700
+  ISOLATED.json                  600
+  repository/.git/               origem fictícia, somente lida pelo exportador
+  EXPORT.lock                    600, somente durante a operação ou incerteza
+  exports/<UUID>/               700
+    source/                     diretórios 700; arquivos 600/executáveis 700
+    source.json                 600
+    COMPLETE.json               600, selo de exportação isolada
+```
+
+### Proveniência e seleção
+
+Exigir SHA-1 completo com 40 caracteres hexadecimais minúsculos para o commit e o snapshot esperado de main. Confirmar tipo commit, conteúdo Git tipado, árvore e ancestralidade: selecionado deve ser igual ou ancestral da main aprovada. HEAD precisa apontar diretamente para refs/heads/main; refs empacotadas são aceitas. O snapshot aprovado precisa corresponder à referência real, e é conferido em múltiplos pontos antes/durante/depois da cópia. Mudar main aborta a operação; nunca altera o SHA selecionado para seguir a branch. Checkpoints não detectam necessariamente mudanças transitórias que voltam ao mesmo SHA entre leituras, mas todos os objetos exportados permanecem fixados por seus IDs.
+
+A leitura de objetos soltos é feita com módulos nativos Node: zlib, validação de header/tamanho/tipo, ausência de bytes comprimidos extras e recomputação do ID Git sobre `tipo tamanho\0conteúdo`. Árvores são interpretadas em formato binário com nomes delimitados por NUL e IDs de 20 bytes. Mensagens de commit e identidades de autores não são registradas. `verified-local-git-objects` comprova a correspondência da projeção exportada aos objetos locais; não autentica autoria, aprovação humana ou publicação no GitHub. `approvedMainSha` é uma expectativa fornecida pelo chamador e conferida contra main, não uma autorização operacional.
+
+Objetos soltos continuam sendo lidos e verificados diretamente. Quando o objeto solicitado existe somente em pack, o exportador chama `git cat-file --batch` sem shell, com diretório Git fixo, ambiente reduzido, configurações global/system desabilitadas, replace objects desabilitados, protocolos vazios e sem operação de rede. A política de caminhos é aplicada antes de solicitar qualquer blob: somente commits, trees e blobs autorizados são pedidos. O Git pode descomprimir internamente bases de delta, inclusive bytes compartilhados com um objeto excluído, mas o conteúdo excluído nunca é emitido nem materializado pelo exportador. Tipo, tamanho e SHA-1 tipado de cada resposta são verificados independentemente.
+
+O exportador não executa filtros, textconv, hooks, fetch ou comandos de aplicação. Repositórios parciais/shallow, alternates, commondir, configurações de inclusão/extensions/promisor e links/hardlinks no armazenamento Git continuam recusados. A fonte deve permanecer estável e pertencer ao usuário do workspace; não há promessa de isolamento contra um processo hostil com o mesmo UID capaz de substituir diretórios. Git CLI local compatível passa a ser requisito quando algum objeto necessário estiver empacotado.
+
+### Política antes da leitura
+
+`EXPORT_POLICY` e seu SHA-256 integram o registro. A allowlist inclui server.js, package.json/lock, configurações Angular/TypeScript/PostCSS necessárias, .gitattributes, README/LICENSE e as áreas de código/assets permitidas em src e public. A lista exata está no módulo e é independente de `.gitignore` e do working tree.
+
+Antes de solicitar um blob, excluir componentes html, .env*, istbrasil.private, uploads, backend-php, database/development, dumps/backups, credentials/secrets, .git/.npmrc/.ssh/.aws/.pm2/.deploy, node_modules, caches e builds anteriores. SQL/sessões SQLTools, dumps/bancos locais, backups e chaves/certificados sensíveis por extensão/nome também são excluídos. Diretórios inteiros excluídos não são percorridos: registra-se somente caminho raiz, tipo, ID Git e motivo, sem nomes internos ou conteúdo privado. Hash SHA-256 do conteúdo protegido não é calculado, pois exigiria sua leitura. IDs de blobs encontrados diretamente em caminhos excluídos não podem ser reutilizados por arquivos autorizados.
+
+Arquivos não pertencentes à allowlist ficam em exclusões NOT_BUILD_INPUT. A política é uma proteção por caminho/tipo, não um detector completo de credenciais embutidas em código permitido. Revisão humana do commit continua necessária. A verificação cobre a projeção autorizada; objetos de blobs/subárvores excluídos não são lidos nem têm sua integridade testada. Ausência/corrupção deles não invalida a cópia autorizada.
+
+Recusar traversal, absolutos, componentes vazios/dot/dotdot, backslashes, colon, controles/newlines, UTF-8 inválido, nomes reservados/trailing dot-space, tipos especiais, submódulos e todos os symlinks Git. Espaços internos, Unicode, aspas e metacaracteres de shell são tratados como nomes, sem interpretação por shell. Colisões case-insensitive/NFC são recusadas conservadoramente. Nenhum link de configuração/dados é criado. Executáveis Git são copiados em modo 700, sem executar seu conteúdo.
+
+### Registro, verificação e falhas
+
+`source.json` registra commit/tree/main aprovados, versão/hash da política, UID/GID, diretórios, arquivos com caminho/ID do blob/modo/tamanho/SHA-256 e exclusões. Não registra conteúdo protegido, mensagens de commits ou saídas completas de ferramentas. `verifyExport()` confere selo e schema, revalida Git/main/ancestralidade, reenumera os metadados da árvore e exige inventário exato com bytes correspondentes ao ID Git e ao SHA-256. Recalcular um receipt não permite substituir payload por conteúdo que não pertence à árvore aprovada. Registros arbitrários, extras, links e alterações de modos/conteúdo são recusados.
+
+Exportações usam UUID exclusivo e nunca sobrescrevem uma anterior. EXPORT.lock por criação exclusiva coordena operações nesse workspace; não é journal ou lock operacional de produção. Lock existente/abandonado nunca é removido automaticamente. Erros anteriores ao selo deixam a cópia parcial sem conclusão; falhas durante a confirmação final retêm o lock, e verifyExport recusa enquanto ele existir. Somente o dono que adquiriu o lock tenta liberá-lo, conferindo token/inode. Erros de limpeza não substituem o erro original. Dados parciais ficam preservados para revisão; não há retomada automática, garbage collection ou integração com active/journals de produção.
+
+Arquivos são abertos sem seguir symlink final, com verificação de ancestrais e de metadados antes/depois da leitura. Escritas são exclusivas no workspace; arquivos e diretórios têm fsync na conclusão. Limites conservadores: 64 MiB por objeto/registro, 2 GiB de blobs exportados, 250 mil entradas, 10 mil commits visitados e profundidade de árvore 64. Ao exceder, bloquear; não alterar limites automaticamente. Não se trata de snapshot atômico nem de reserva de capacidade para instalar/buildar uma release. A reserva operacional da Fase 2.1 não foi modificada.
+
+environment.ts e environment.prod.ts são exportados somente quando rastreados no commit. Nenhum arquivo de environment é gerado e nenhum valor PayPal é alterado. Instalação, fallback de environment, build, testes de módulos nativos, journal operacional e ativação pertencem a etapas posteriores ainda não autorizadas.
+
+### Testes da Fase 2.2-A
+
+```bash
+node --check scripts/deploy/git-export.mjs
+node --check tests/deploy-git-export.test.mjs
+node --test tests/deploy-git-export.test.mjs
+node --test tests/deploy-production-contract.test.mjs
+bash tests/deploy.integration.test.sh
+```
+
+Fixtures contêm objetos Git reais em formato loose e PACK/idx v2, criados com dados fictícios por Node, sem CLI simulada. A compatibilidade dos formatos também é conferida pelo Git nativo quando disponível. Testes cobrem commit inválido/inexistente/tipo incorreto/fora de main; objetos ausentes/corrompidos; exclusão antes de abrir blobs; árvores maliciosas; nomes especiais; links/submódulos; main mudando durante leitura; worktree/gitignore divergentes; corrupção e receipts recalculados; concorrência/locks; erros de cópia/selo e ausência de escrita fora do workspace. Snapshot do repositório fictício e sentinela externa permanecem iguais; leituras podem afetar atime.
+
+Validação em Linux Debian isolado, Node 20.19.6 e UID 1000: 59 aprovados, zero falhas e três skips nos 62 testes do exportador; os skips são exclusivamente os cenários que requerem Git CLI, ausente na imagem local. Os seis testes da preparação, os 55 da Fase 2.1 e os 42 da Fase 1 passaram sem falhas/skips. No Windows, os testes puros e a conferência independente dos packs pelo Git nativo passaram; as APIs POSIX são ignoradas explicitamente. Uma instalação limpa real e descartável do commit aprovado instalou 1.297 pacotes com peers estritos, concluiu o build Angular de produção e carregou bcrypt/sharp em Node 20.19.6. Permanecem os avisos CommonJS conhecidos de page-flip e quill-delta. O caminho completo do exportador sobre packs ainda precisa ser exercitado em Linux com Git disponível; não foi instalada ferramenta adicional apenas para remover esse skip.
+
+### Fases 2.2-B/C/D: preparação isolada de release
+
+`scripts/deploy/release-prepare.mjs` consome exclusivamente uma exportação completa e novamente verificada. A API `prepareRelease({ workspace, exportId, allowRegistry, runner })` não aceita caminho de origem ou destino arbitrário. O workspace Linux temporário permanece privado e a operação usa `PREPARE.lock`; lock preexistente, inclusive abandonado, bloqueia e requer descarte manual do workspace. Não há recuperação automática.
+
+O preparador copia os arquivos autorizados para `preparations/<UUID>/release/backend`, recusa scripts de lifecycle do pacote raiz, executa exatamente `npm ci --include=dev --strict-peer-deps` e `npm run build -- --configuration production`, e testa o carregamento de bcrypt e sharp. O ambiente encaminhado contém somente PATH e valores operacionais controlados; não inclui variáveis da aplicação, banco ou credenciais. O registry fica disponível somente quando `allowRegistry: true`; build e probes são marcados sem rede. Dependências executam seus scripts normais de instalação, necessários aos módulos nativos, portanto o commit e o lockfile continuam sujeitos a revisão humana.
+
+O resultado possui `release/backend` com código e `node_modules`, e `release/frontend` com o conteúdo de `dist/sakai-ng/browser`. São obrigatórios server.js, manifestos npm, pacotes bcrypt/sharp e index.html. Node precisa ser exatamente 20.19.6. O manifesto registra commit/tree, versões de Node e npm, ABI, plataforma, arquitetura, comandos e SHA-256/modo/tamanho de todos os arquivos; links só podem ser relativos e permanecer dentro da release. `PREPARED_INACTIVE.json` é escrito por último. `verifyPreparedRelease()` revalida a exportação de origem, selo, arquivos essenciais e inventário integral. Falhas geram `FAILED.json` sem conteúdo de stderr e nunca geram selo de release válida.
+
+Esse estado é deliberadamente inativo: não cria active.json, não altera PM2/Nginx, não publica frontend e não vincula `.env`, privados, uploads ou diretórios de produção. `deploy.sh --deploy` e `--rollback` continuam bloqueados. Workspaces incompletos devem ser revisados e removidos manualmente fora deste módulo.
+
+Testes isolados cobrem packs via Git, fluxo normal, falhas de instalação/build, lock, integridade e ausência de ambiente secreto. O runner injetável usa apenas fixtures; a aceitação final também exige uma preparação real descartável com Node 20.19.6, npm e registry, seguida de probes reais de bcrypt/sharp e build Angular.
+
+O formato de workspace/teste não aceita caminhos da VPS. Não são executados serviços, SQL/migrations, operações Git remotas, deploy ou rollback. Fases 1/2.1 e deploy.sh permanecem inalterados.
+
 ## Testes locais
 
 `bash -n deploy.sh`; `bash -n tests/deploy.test.sh`; `bash tests/deploy.test.sh`.
