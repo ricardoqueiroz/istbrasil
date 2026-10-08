@@ -142,9 +142,102 @@ A imagem validada é `node:20.19.6-bookworm-slim` (Debian Linux), fixada por dig
 
 Essa validação Linux não equivale a validação da VPS Ubuntu 20.04, das dependências reais ou dos serviços. Recuperação após perda do host, snapshots consistentes de banco, criptografia/cópia externa e persistência em reboot permanecem fora desta fase.
 
-## Fase 2 planejada, não implementada
+## Fase 2.1: contrato de produção e diagnóstico somente leitura
 
-Antes de habilitar publicação: adaptar os módulos isolados a caminhos administrativos aprovados com validações de produção, baseline da versão ativa, metadados Git/PM2 restritos e dimensionamento de espaço/inodes. Nenhum env em área pública. Preparar backend em releases com dependências próprias, alvo publicado e SHA explícito, instalação/build antes de ativação; frontend por manifesto com índice por último; preservação de istdbadmin e arquivos desconhecidos; recuperação comprovada do backend/PM2 e publicação parcial. Permanecem pendentes coordenação/locks, janela de interrupção, health checks, política de retenção e configuração de reboot.
+`production-contract.mjs` define caminhos, schemas, política de metadados, capacidade e classificação. `production-inspect.mjs` coleta evidências somente por leitura. Os dois módulos são independentes da Fase 1: não importam `backup.mjs`, `state.mjs`, `server.js` ou `db.js`. As APIs e o isolamento da Fase 1 permanecem intactos. `deploy.sh` não importa nem executa os módulos novos; `--deploy` e `--rollback` continuam bloqueados. Não há preparação, publicação, restauração, adoção de instalação legacy ou mudança de serviços nesta fase.
+
+### Caminhos e permissões
+
+Base fixa do CLI: `/var/www/istbrasil.org.br`. Repositório original: `backend-node/istbrasil`. SHA do repositório não implica identidade da aplicação em execução.
+
+| Caminho sob a base | Contrato |
+| --- | --- |
+| `.deploy`, `releases`, `backups`, `state`, `state/transactions`, `logs` | Diretórios reais 700, UID/GID operacional de admin; ACL básica |
+| `.deploy/releases/<UUID>` | Diretório real 700; `manifest.json` 600; subárvores `backend/` e `frontend/` inventariadas |
+| `.deploy/backups/<UUID>` | Diretório real 700; `manifest.json` e `READY` 600; `payload/` 700 |
+| `.deploy/state/active.json` | Arquivo regular 600, um único hardlink; existência não é confirmação de publicação |
+| `.deploy/state/transactions/<UUID>.json` | Arquivo regular 600, envelope com hash e transições válidas |
+| `.deploy/state/operation.lock` e `.deploy.lock` | Arquivos regulares 600; nenhum lock é criado, adquirido ou removido pelo diagnóstico |
+| `backend-node/istbrasil/.env` e `.env.backup` | Obrigatórios, regulares, sem symlink/hardlink; 600 ou 640 com propriedade/grupo compatíveis com admin |
+| `backend-node/istbrasil/.env_old` | Opcional; se existir, mesma proteção de `.env` |
+| `html`, `uploads`, `backend-php`, `backend-node/istbrasil/istbrasil.private` | Diretórios originais preservados; diagnóstico não percorre conteúdo privado/persistente |
+| `html/istdbadmin` | Symlink preservado para `/usr/share/phpmyadmin`, lido sem seguir seu conteúdo |
+
+Arquivos/diretórios administrativos não podem ser symlinks. Ancestrais precisam ser diretórios reais de root/admin, sem escrita de grupo/outros e sem bits especiais. Modos de payload são registrados no manifesto, recusando escrita de grupo/outros e bits especiais. Proprietários precisam ser root/admin; symlinks de runtime e de pacotes pertencem ao UID/GID de admin. Metadados reais devem coincidir com o manifesto. Nenhuma permissão é corrigida automaticamente.
+
+ACLs são consultadas com `getfacl -cpn`: apenas user/group/other básicos são aceitos; entradas nomeadas, mask e default são recusadas. Falta da ferramenta ou leitura insuficiente gera incerteza. `getent passwd/group` identifica admin. Para aceitar 640, o grupo deve ser exclusivamente de admin e NSS de passwd/group deve ser apenas `files`; provedores externos ou composição não comprovada impedem assumir exclusividade. Isso pode bloquear conservadoramente configurações que exigem revisão humana. A enumeração de produção e ACLs reais precisam de homologação posterior.
+
+### Schemas versão 1
+
+Todos os schemas recusam campos desconhecidos, IDs inválidos, traversal, tipos indevidos e referências incoerentes. IDs são UUIDs em hexadecimal minúsculo; commits são SHA Git de 40 caracteres e hashes SHA-256 têm 64. Datas são UTC canônicas. Arquivos JSON têm leitura limitada a 32 MiB, sem seguir symlink final, com conferência de inode/metadados antes e depois.
+
+`active.json`: `version`, `generation` monotônica a partir de 1, `transactionId`, `previousGeneration`, `confirmedAt`, `backend`, `frontend`, `pm2`. Backend contém `kind: release`, `releaseId`, `commitSha`, `manifestSha256`. Frontend contém seu próprio `releaseId`, `manifestSha256`, `indexSha256`, permitindo registrar gerações diferentes sem presumir compatibilidade funcional. PM2 contém `name: ist-api`, `user: admin`, `home: /home/admin/.pm2`, `cwd` canônico da release, `script` igual a seu `server.js` e `node: 20.19.6`. Não persistir PID como identidade durável nem ambientes/credenciais. Legacy é reconhecido pela ausência de active e execução no repositório original, sem gerar active automaticamente.
+
+Manifesto de release: `version`, `releaseId`, `declaredCommitSha`, `gitProvenance`, `runtime`, `entries`. Runtime registra Linux, arquitetura, Node 20.19.6 e ABI. Entradas possuem `path`, `type`, `mode`, `uid`, `gid`; arquivos acrescentam `size`, `sha256`, symlinks acrescentam `target`. Lista exata, hierarquia de diretórios e arquivos obrigatórios são conferidos. O diretório da release contém exclusivamente backend, frontend e manifesto. Arquivos têm hash calculado em blocos de 64 KiB. O frontend publicado deve corresponder exatamente à subárvore frontend do manifesto, exceto o symlink istdbadmin. Arquivos públicos desconhecidos são divergência; o diagnóstico nunca os apaga.
+
+`gitProvenance` pode ser nulo ou uma alegação armazenada com `commitSha`, `treeSha`, `verifiedAt`. **Uma alegação armazenada não é proveniência Git comprovada.** O relatório sempre apresenta `independentlyVerified: false` nesta fase, mesmo com todos os hashes válidos; verificação independente de Git/build pertence à preparação de releases futura. SHA-256 confere integridade, não autentica contra quem puder substituir payload e manifesto.
+
+O schema proposto de backup de produção é separado do formato isolado da Fase 1: `version`, `backupId`, `sourceGeneration` (0 admite baseline legacy), `declaredCommitSha`, `runtime`, `entries`, com as mesmas raízes backend/frontend, incluindo node_modules em backend. Credenciais, privados e vínculos de runtime não entram no payload. `READY` é JSON com `version`, `backupId`, `manifestSha256`, `transactionId`; exige referência a journal existente. O diagnóstico valida estrutura/hash/inventário se esses artefatos existirem. Isso não cria backups nem comprova restauração operacional, retenção ou durabilidade de publicação.
+
+Journal: envelope `{record, sha256}`, hash de `JSON.stringify(record)`. Record contém `version`, `transactionId`, `operation` (deploy/rollback), `generation`, `releaseId`, `events`. Eventos possuem `phase`, `at`, com ordem started → prepared → backend_activated → frontend_published → health_verified → confirmed; failed/interrupted só podem terminar uma sequência ainda não confirmada. Active deve referenciar journal confirmed da mesma geração/release. Transações não confirmadas exigem revisão, inclusive failed.
+
+Lock: `version`, `transactionId`, `token`, `operation`, `pid`, `startTicks`, `bootId`, `createdAt`. PID e idade isoladamente nunca provam propriedade ou abandono seguro. Um lock válido, ligado a processo admin com início/boot compatíveis e comando canônico do futuro `production-operation.mjs`, mais journal pendente da geração seguinte, pode ser IN_PROGRESS. Esse executor não existe nesta fase. Processo encerrado, identidade divergente, journal terminal ou proprietário ilegível não autorizam remover lock. Existência de `.deploy.lock` gera incerteza: esta versão não tenta observar/adquirir seu flock.
+
+### Vínculos de runtime e dependências do diretório de execução
+
+Somente estes vínculos de runtime são aprovados, sem criá-los:
+
+- `<release>/backend/.env` → `<repositório original>/.env`;
+- `<release>/backend/istbrasil.private` → `<repositório original>/istbrasil.private`.
+
+Links relativos internos de node_modules são uma categoria separada: destino declarado e realpath precisam permanecer dentro do próprio node_modules e não podem ser dangling. Não são permitidos vínculos extras para `.env.backup`, `.env_old`, uploads ou backend-php. Arquivos protegidos não são copiados para payload. Links aprovados são lidos como links; conteúdo de configs/privados não é lido.
+
+`server.js` e `db.js` carregam dotenv/config, cujo padrão depende de cwd; overrides e ambiente já definido podem mudar a origem efetiva. Caminhos estáticos de livros/documentos e `profilePhotoService.js` usam localização dos módulos, exigindo o vínculo privado ao mudar para releases. `bookController.js` usa `PRODUCTS_PATH`, com default `/var/www/istbrasil_private/products/livros/`, distinto da árvore estática; valor relativo dependeria de cwd. Não há autorização para escolher outro destino ou reescrever essa variável.
+
+O coletor não importa a aplicação, não lê `.env` e não trata `/proc/environ` como prova do ambiente efetivo após dotenv. Seleciona internamente campos de identidade PM2; nunca retorna/imprime ambiente completo. A confirmação da origem efetiva de dotenv/PRODUCTS_PATH continua pendente e gera `EFFECTIVE_RUNTIME_PATHS_NOT_PROVEN`/INCONCLUSIVE no coletor real. Os testes que comprovam classificação CONSISTENT usam evidência fictícia explícita, sem simular validação da configuração real.
+
+### Estados e capacidade
+
+| Estado | Significado diagnóstico |
+| --- | --- |
+| UNINITIALIZED | Active ausente, instalação legacy reconhecida, sem artefatos operacionais ou incertezas impeditivas |
+| CONSISTENT | Active, journals, hashes, publicação e observações de processo concordam; nunca autoriza deploy |
+| IN_PROGRESS | Lock/processo/journal pendente comprovadamente vinculados; nenhum outro bloqueio |
+| RECOVERY_REQUIRED | Divergência operacional conhecida, transação interrompida/não confirmada, lock abandonado ou publicação parcial |
+| UNKNOWN_PROCESS | Processo/daemon/listener visível com identidade incompatível ou concorrente |
+| INCONCLUSIVE | Evidência insuficiente, ACL/processo/lock/caminho ilegível ou alteração durante leitura |
+| INVALID | Schema, referência, integridade, propriedade/permissão insegura ou capacidade declarada insuficiente |
+
+Precedência conservadora: INVALID → UNKNOWN_PROCESS → RECOVERY_REQUIRED → INCONCLUSIVE → IN_PROGRESS → UNINITIALIZED/CONSISTENT. Não se transforma ausência de leitura em ausência de estado. O relatório só inclui códigos de diagnóstico, SHA declarado e resumo de capacidade; não inclui conteúdo arbitrário de JSON, erros de ferramentas ou dados privados. `deployAuthorized` e `rollbackAuthorized` são sempre false.
+
+Coleta PM2 não usa CLI PM2/sudo: lê metadados de pm2.pid/rpc.sock, /proc e `ss -H -ltnp 'sport = :3000'`. PID sem LF final é aceito. Confere owner, título God Daemon, vínculo por ancestralidade, cwd/script, exclusividade do listener e evidência do executável Node igual ao do diagnóstico Node 20.19.6. Outros daemons visíveis e processos desconhecidos bloqueiam; falhas de leitura/hidepid impedem certeza. Isso não prova visibilidade fora do namespace atual nem substitui testes reais de PM2 fork/cluster/reboot.
+
+Capacidade é observada com stat/statfs, agrupada por device, sem criar arquivos. Orçamento exige candidate + backup + restore + temporary/cache e inodes por filesystem, somando a reserva operacional de **10 GiB por filesystem**. Custos ausentes, filesystem não observado ou contagem desconhecida resultam UNKNOWN; orçamento suficiente resulta SUFFICIENT_FOR_DECLARED_PLAN, nunca autorização. Nenhum custo futuro é inventado pelo CLI; os 46 GB históricos não são usados como evidência. Espaço/inodes não são reservados e quotas/concorrência podem mudar; revalidação antes de futuras mutações será obrigatória. CONSISTENT pode ter capacidade UNKNOWN porque consistência de uma instalação existente não prova capacidade para outra operação.
+
+### Execução e validação isolada
+
+O CLI aceita somente `node scripts/deploy/production-inspect.mjs`, sem argumentos de caminhos/overrides. Imprime JSON e retorna 0 para UNINITIALIZED/CONSISTENT, 2 para os demais estados. Exit 0 não autoriza implantação. Não executar contra produção sem autorização de inspeção específica.
+
+O export `inspectProduction()` aceita coletores/caminhos/orçamentos fictícios para testes. `ancestorBoundary` limita exclusivamente a fixture ao seu diretório temporário; o CLI usa `/` e caminhos fixos. Esses adaptadores nunca concedem capacidade de mutação. Não há criação de diretórios, arquivos, locks, logs, journal ou active. Conteúdo, modos, inodes, mtime e symlinks das fixtures são comparados antes/depois; leituras podem afetar atime conforme o filesystem. Metadados e arquivos são conferidos durante a leitura, e mudanças de active/lock/journals entre início/fim impedem consistência. Não se promete snapshot atômico de toda a instalação.
+
+```bash
+node --check scripts/deploy/production-contract.mjs
+node --check scripts/deploy/production-inspect.mjs
+node --check tests/deploy-production-contract.test.mjs
+node --test tests/deploy-production-contract.test.mjs
+# Regressão Fase 1, Linux, não root:
+bash tests/deploy.integration.test.sh
+```
+
+Novos testes usam somente fixtures geradas, labels fictícios de configuração, placeholders privados e arquivos de código não executados. Exercitam sete estados, todos os vínculos aprovados/recusados, permissões POSIX, exclusividade de grupo, parser ACL, hashes/arquivos desconhecidos, identidade/processo incerta, locks abandonados/ilegíveis, journals corrompidos/não confirmados, mudanças durante leitura, backup de produção fictício e ausência de escrita. ACLs e identidades positivas são coletores sintéticos explícitos; não equivalem a testar ACLs estendidas reais, NSS ou daemon PM2 na VPS. O cenário SIGKILL real continua na suíte intacta da Fase 1.
+
+Validação local da Fase 2.1: 55 testes novos aprovados em Linux, zero falhas/skips, junto aos 42 testes intactos da Fase 1 (também zero falhas/skips), com Node 20.19.6 e UID 1000. No Windows, a suíte nova aprovou 26 testes, com 29 skips POSIX explícitos e zero falhas. Sintaxe dos módulos/testes Node e dos scripts Bash conferida; `git diff --check` sem erros. Os hashes dos módulos/testes da Fase 1 e de deploy.sh permaneceram iguais. A suíte antiga de diagnóstico/dependências, Angular, build e instalação não foi repetida nesta fase; aplicação, dependências e deploy.sh não foram alterados. Não houve inspeção da VPS nem validação de PM2/NSS/ACLs de produção.
+
+Para Linux isolado, usar a imagem/digest e isolamento descritos na Fase 1, acrescentando mount somente leitura de `tests/deploy-production-contract.test.mjs`. Executar esse arquivo com Node 20.19.6/não root e também o runner original, mantendo `/work/deploy.sh` disponível. Não montar configurações, arquivos privados ou a árvore completa do projeto. Windows executa os testes puros; fixtures POSIX ficam explicitamente skip.
+
+### Próximas fases dependem de aprovação
+
+Permanecem pendentes: proveniência Git independente e build, origem efetiva de dotenv/PRODUCTS_PATH, custos medidos da operação, execução PM2 real como admin, módulos nativos bcrypt/sharp em Linux, compatibilidade funcional entre frontend/backend de gerações diferentes, health checks operacionais, recuperação comprovada após reinício/perda de energia, retenção, publicação/ativação e homologação Ubuntu 20.04. Decisões sobre esses pontos devem ser aprovadas antes de integrar um executor. Nenhum módulo novo adapta ou amplia os caminhos aceitos pela Fase 1.
 
 Traps de deploy.sh somente registram estágio e abortam. Não fazem rollback. O journal isolado não é integrado ao deploy; sua adoção em produção exige revisão e testes adicionais. Não alegar zero downtime. Não haverá SQL/migrations nem reload Nginx automático.
 
