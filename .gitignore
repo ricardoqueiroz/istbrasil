@@ -57,3 +57,4 @@ src/environments/environment.ts
 
 # Demo/inspection only, not shipped to production
 src/app/pages/uikit/
+.env_old
