@@ -2,7 +2,7 @@
 
 ## Estado real desta versão
 
-`--check` implementado. `--deploy` e `--rollback` são **bloqueados intencionalmente**. `deploy.sh` permanece inalterado e não faz backup, recuperação, publicação ou reinício. A Fase 1 acrescenta módulos independentes de backup e recuperação **somente em workspace temporário isolado**, sem conectar essas operações ao script de produção.
+`--check` preserva o diagnóstico somente leitura. `--deploy` e `--rollback` estão integrados aos módulos operacionais, mas continuam **bloqueados por padrão**: exigem um marcador de aprovação criado manualmente após a homologação e o lock externo já provisionado. Sem o marcador, nenhuma preparação, publicação ou troca do PM2 ocorre.
 
 O backend continua em `/var/www/istbrasil.org.br/backend-node/istbrasil`; não existe mudança no PM2, Nginx ou dados. O alvo é apenas `origin/main` já disponível localmente; nenhum modo executa fetch nesta versão.
 
@@ -50,7 +50,7 @@ A regressão encontrou ObjectUnsubscribedError ao clicar novamente no aceite da 
 
 O rollback operacional está implementado e validado apenas em Linux isolado; ainda não foi homologado na VPS. A restauração da Fase 1 descrita abaixo continua sem trocar releases, publicar frontend ou reconfigurar PM2. Releases usam seus próprios node_modules, evitando npm ci no diretório ativo. Nenhuma implantação é permitida enquanto `deploy.sh` permanecer bloqueado e até a homologação específica no ambiente Ubuntu 20.04 do usuário `admin`.
 
-`--deploy`/`--rollback`, após diagnóstico válido, exigem lock previamente provisionado em `/var/www/istbrasil.org.br/.deploy.lock`; não criam arquivos de infraestrutura. Usam flock exclusivo sem espera, depois recusam publicação/recuperação. Em ambiente com conflito de peers, abortam antes do lock porque nenhuma operação mutante é possível. Essa ordem deverá mudar quando operações reais forem autorizadas: adquirir lock antes de qualquer preparação/validação que proteja mutações e revalidar o estado.
+`--deploy`/`--rollback`, após diagnóstico válido, exigem lock previamente provisionado em `/var/www/istbrasil.org.br/.deploy.lock`; não criam esse arquivo. Usam `flock` exclusivo sem espera e, adicionalmente, o lock transacional do módulo operacional. Conflitos de Git, runtime, peers, espaço, PM2 ou configuração abortam antes da mutação. O marcador `/var/www/istbrasil.org.br/.deploy/state/PRODUCTION_APPROVED` precisa ser regular, pertencente a `admin`, modo 600 e conter exatamente `IST_DEPLOY_PRODUCTION_APPROVED_V1` seguido de LF.
 
 ## Fase 1 implementada — backup e recuperação isolada
 
@@ -316,9 +316,9 @@ Testes isolados cobrem packs via Git, fluxo normal, falhas de instalação/build
 
 O formato de workspace/teste não aceita caminhos da VPS. Não são executados serviços, SQL/migrations, operações Git remotas, deploy ou rollback. Fases 1/2.1 e deploy.sh permanecem inalterados.
 
-## Fase 2.3: ativação e rollback operacional (desconectados)
+## Fase 2.3: ativação e rollback operacional
 
-`scripts/deploy/production-operation.mjs` implementa `activatePreparedRelease()` e `rollbackRelease()`, mas permanece sem CLI e sem integração com `deploy.sh`. Portanto `--deploy` e `--rollback` continuam bloqueados. O módulo não executa Git, npm, migration, SQL, Nginx ou PayPal. Sua execução futura exige chamada explícita após revisão e habilitação separada.
+`scripts/deploy/production-operation.mjs` implementa `activatePreparedRelease()` e `rollbackRelease()`. `scripts/deploy/deployment-runner.mjs` faz somente a orquestração: clona localmente o repositório já presente, exporta o SHA fixado em `origin/main`, prepara a release e chama o módulo operacional. O entrypoint não executa fetch, migration, SQL, Nginx ou PayPal.
 
 Cada operação usa o contrato canônico da Fase 2.1. Cria `operation.lock` por exclusividade com PID, boot ID, start ticks e token; lock preexistente nunca é removido automaticamente. Journals seguem `started → prepared → backend_activated → frontend_published → health_verified → confirmed`, ou terminam em `failed`. Falha de rollback automático ou de confirmação do estado retém o lock para revisão manual.
 
@@ -332,7 +332,15 @@ Se PM2, frontend, health check, active.json ou journal falhar depois do início 
 
 O rollback explícito valida novamente hashes e inventário do backup, converte o payload em uma nova release imutável com novos vínculos persistentes, ativa essa release e grava uma nova geração. O backend não é executado diretamente do diretório de backup.
 
-Os testes usam árvores fictícias e cobrem sucesso, falha de ativação do backend, falha de publicação, rollback explícito, persistência, integridade e lock. A integração instala PM2 6.0.14 apenas em tmpfs descartável e comprova a troca real entre dois servidores HTTP como usuário não root. Ainda será necessária homologação no Ubuntu 20.04 com o usuário `admin`, caminhos canônicos, permissões/ACLs e visibilidade `/proc` antes de conectar o módulo ao entrypoint.
+Os testes usam árvores fictícias e cobrem sucesso, falha de ativação do backend, falha de publicação, rollback explícito, persistência, integridade e lock. A integração instala PM2 6.0.14 apenas em ambiente descartável e comprova a troca real entre dois servidores HTTP como usuário não root. A prova local não substitui a conferência de permissões/ACLs e visibilidade `/proc` na VPS.
+
+## Integração final e primeira implantação controlada
+
+`deploy.sh --deploy` usa exclusivamente o SHA completo da referência local `origin/main`, já verificada como avanço rápido de `HEAD`. A cópia Git é local, sem hardlinks e com configuração controlada; não há fetch implícito. Instalação e build ocorrem no workspace temporário privado. Em sucesso, a saída informa `transactionId`, `backupId`, `releaseId` e geração. Em falha recuperável, o módulo tenta restaurar PM2 e frontend. Se a recuperação ou a confirmação do estado falhar, mantém o lock transacional e informa que é necessária recuperação manual.
+
+O rollback exige o UUID explícito de um backup selado: `bash deploy.sh --rollback <backupId>`. Ele valida novamente manifesto, SHA-256 e payload, cria uma nova release imutável, restaura PM2 e frontend e registra uma nova geração. `.env`, `.env.backup`, `.env_old`, `istbrasil.private`, uploads, backend-php, banco e `html/istdbadmin` permanecem fora da substituição.
+
+Para a primeira implantação, após publicar e inspecionar o commit na VPS, executar `bash deploy.sh --check`. Somente após aprovação humana da homologação, provisionar como `admin` os diretórios administrativos privados e o lock, criar o marcador exato com modo 600, repetir `--check` e então executar `bash deploy.sh --deploy`. Guardar o `backupId` retornado. Se a validação funcional falhar, executar `bash deploy.sh --rollback <backupId>`. A criação do marcador é uma habilitação operacional deliberada e não é feita pelo script.
 
 ## Testes locais
 

@@ -328,10 +328,11 @@ test('read-only production archive validation detects real payload corruption', 
     await f.write(`${payload}/backend/server.js`, 'fixture corruption');
     const before = await snapshot(f.base); assert.equal((await f.inspect()).status, 'INVALID'); assert.deepEqual(await snapshot(f.base), before);
 });
-test('production modules stay disconnected and blocked deploy/rollback protections remain', async () => {
+test('production contract is integrated only through the gated deployment entrypoint', async () => {
     const deploy = await fs.readFile(new URL('../deploy.sh', import.meta.url), 'utf8');
-    assert.ok(!deploy.includes('production-contract.mjs')); assert.ok(!deploy.includes('production-inspect.mjs'));
-    assert.match(deploy, /DEPLOY DISABLED/); assert.match(deploy, /Rollback unavailable/);
+    assert.ok(deploy.includes('production-contract.mjs')); assert.ok(!deploy.includes('production-inspect.mjs'));
+    assert.match(deploy, /PRODUCTION_APPROVED/); assert.match(deploy, /Rollback unavailable/);
+    assert.match(deploy, /deployment-runner\.mjs/);
     for (const name of ['production-contract.mjs', 'production-inspect.mjs']) {
         const source = await fs.readFile(new URL(`../scripts/deploy/${name}`, import.meta.url), 'utf8');
         assert.ok(!/^import .*['"].*(?:server\.js|db\.js|backup\.mjs|state\.mjs)['"]/m.test(source));
