@@ -198,8 +198,9 @@ test('real fixture hashes, journal, PM2 observations and published tree yield CO
     assert.equal(report.provenance.independentlyVerified, false);
     assert.deepEqual(await snapshot(f.base), before);
 });
-test('.env_old is optional but must be protected when present', linux, async t => {
+test('legacy environment files are optional but must be protected when present', linux, async t => {
     const f = await fixture(t); assert.equal((await f.inspect()).status, 'CONSISTENT');
+    await fs.unlink(f.paths.envBackup); assert.equal((await f.inspect()).status, 'CONSISTENT');
     await f.write(f.paths.envOld, 'FIXTURE_LABEL=old'); assert.equal((await f.inspect()).status, 'CONSISTENT');
     await fs.chmod(f.paths.envOld, 0o644); assert.equal((await f.inspect()).status, 'INVALID');
 });

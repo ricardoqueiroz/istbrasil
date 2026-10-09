@@ -119,7 +119,7 @@ async function readActive(paths) {
 async function prepareInfrastructure(paths) {
     for (const directory of [paths.admin, paths.releases, paths.backups, paths.state, paths.transactions, paths.logs]) await ensureDirectory(directory);
     for (const persistent of [paths.repo, paths.html, paths.uploads, paths.backendPhp, paths.private]) if (!await exists(persistent)) throw fail('PERSISTENT_PATH_MISSING');
-    for (const config of [paths.env, paths.envBackup]) if (!await exists(config)) throw fail('PERSISTENT_CONFIG_MISSING');
+    if (!await exists(paths.env)) throw fail('PERSISTENT_CONFIG_MISSING');
     const link = `${paths.html}/istdbadmin`;
     if (!(await fs.lstat(link)).isSymbolicLink() || await fs.readlink(link) !== paths.phpMyAdmin) throw fail('PHPMYADMIN_LINK_INVALID');
 }

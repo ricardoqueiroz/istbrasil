@@ -44,7 +44,7 @@ ADMIN_RECORD=$(printf '%s\n' "$PASSWD_RECORDS" | awk -F: '$1 == "admin" {print $
 [[ $ADMIN_RECORD == "$ADMIN_UID:$ADMIN_GID" ]] || fail 'Admin account missing/divergent in NSS enumeration.'
 OTHER_MEMBERS=$(printf '%s\n' "$PASSWD_RECORDS" | awk -F: -v gid="$ADMIN_GID" '$4 == gid && $1 != "admin" {print "other"}')
 [[ -z $OTHER_MEMBERS ]] || fail 'Admin primary group is shared with other accounts.'
-for file in "$REPO/.env" "$REPO/.env.backup"; do
+for file in "$REPO/.env"; do
     [[ -f $file && ! -L $file ]] || fail 'Persistent configuration missing or not regular.'
     [[ $(stat -c %u -- "$file") == "$ADMIN_UID" ]] || fail 'Configuration owner is not admin.'
     [[ $(stat -c %g -- "$file") == "$ADMIN_GID" ]] || fail 'Configuration group is not admin exclusive primary group.'
@@ -55,6 +55,18 @@ for file in "$REPO/.env" "$REPO/.env.backup"; do
         fail 'Extended configuration ACL requires manual review.'
     fi
 done
+for file in "$REPO/.env.backup" "$REPO/.env_old"; do
+    [[ ! -e $file ]] && continue
+    [[ -f $file && ! -L $file ]] || fail 'Legacy configuration exists but is not regular.'
+    [[ $(stat -c %u -- "$file") == "$ADMIN_UID" ]] || fail 'Legacy configuration owner is not admin.'
+    [[ $(stat -c %g -- "$file") == "$ADMIN_GID" ]] || fail 'Legacy configuration group is not admin exclusive primary group.'
+    perms=$(stat -c %a -- "$file")
+    [[ $perms == 600 || $perms == 640 ]] || fail 'Legacy configuration permissions must be exactly 600 or 640.'
+    ACL=$(getfacl -cp -- "$file" 2>/dev/null) || fail 'Cannot inspect legacy configuration ACL.'
+    if printf '%s\n' "$ACL" | grep -Eq '^(user|group):[^:]|^default:'; then
+        fail 'Extended legacy configuration ACL requires manual review.'
+    fi
+done
 STAGE=git
 [[ $(git -C "$REPO" rev-parse --show-toplevel) == "$REPO" ]] || fail 'Unexpected Git root.'
 [[ $(git -C "$REPO" branch --show-current) == main ]] || fail 'Branch must be main.'
@@ -63,7 +75,7 @@ git -C "$REPO" diff --cached --quiet || fail 'Staged changes.'
 # NUL stream preserves spaces, newlines and quoted filenames. pipefail propagates Git errors.
 git -C "$REPO" ls-files --others -z | while IFS= read -r -d '' file; do
     case "$file" in
-        .env|.env.backup) ;;
+        .env|.env.backup|.env_old) ;;
         node_modules/*|dist/*|.angular/cache/*)
             git -C "$REPO" check-ignore -q -- "$file" || fail 'Generated artifact is not ignored; manual review required.' ;;
         istbrasil.private/*)
@@ -78,7 +90,7 @@ git -C "$REPO" ls-files --others -z | while IFS= read -r -d '' file; do
         *) fail 'Untracked file outside explicit allowlist; manual review required.' ;;
     esac
 done
-for config in .env .env.backup; do
+for config in .env .env.backup .env_old; do
     if git -C "$REPO" ls-files --error-unmatch -- "$config" >/dev/null 2>&1; then
         fail 'Sensitive configuration is tracked by Git.'
     fi

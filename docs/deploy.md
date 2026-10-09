@@ -16,9 +16,9 @@ Cada linha de socket em ss para a porta 3000 precisa revelar exatamente um PID. 
 
 Confere ferramentas, Git main sem mudanças rastreadas/staged, allowlist explícita de não rastreados (inclusive ignorados), diretórios canônicos, symlink phpMyAdmin, configurações privadas, espaço mínimo de 10 GiB, dependências instaladas e peers. Esse limiar não comprova capacidade de backup: a versão executora deverá medir os tamanhos reais.
 
-`.env` e `.env.backup` devem existir como arquivos regulares sem symlink e ter UID de admin. São aceitos exclusivamente modos 600 e 640. Em ambos, o GID deve coincidir com o grupo primário de admin, que não pode ter outros membros explícitos nem ser grupo primário de outra conta enumerada por getent passwd. A enumeração NSS também precisa conter admin com o UID/GID efetivos. Grupos compartilhados, grupo diferente, bits especiais e qualquer outro modo são recusados. getfacl é obrigatório: ACLs nomeadas de usuário/grupo, ACLs default ou leitura inacessível bloqueiam; não há alteração de permissões ou ACLs. Valida apenas `NODE_ENV=production` e `FESTIVAL_II_ETAPA_INSCRICOES_ID=1` na combinação do arquivo dotenv com o ambiente do processo. Lê dados em memória sem imprimir conteúdo, erros brutos ou variáveis completas. Não usa `source .env` nem importa `server.js`.
+Somente `.env` é obrigatório e contém a configuração real. Deve ser arquivo regular sem symlink, com UID/GID de admin e modo 600 ou 640. `.env.backup` e `.env_old` são legados opcionais: podem estar ausentes e, se existirem, recebem as mesmas validações sem serem sobrescritos, copiados ou recriados. O grupo primário de admin não pode ter outros membros explícitos nem ser grupo primário de outra conta enumerada por getent passwd. getfacl é obrigatório e ACLs nomeadas/default ou leitura inacessível bloqueiam. O diagnóstico lê somente os valores necessários em memória e nunca imprime conteúdo ou variáveis completas.
 
-Git ls-files --others -z enumera não rastreados incluindo ignorados, sem dividir nomes com espaços/quebras de linha. Falha de Git é propagada por pipefail. Configurações exatas .env/.env.backup são aceitas depois das validações anteriores; se rastreadas pelo Git, o diagnóstico aborta. node_modules/, dist/ e .angular/cache/ só são admitidos quando cada entrada também passa git check-ignore. Um arquivo ignorado fora dessas áreas não é automaticamente seguro.
+Git ls-files --others -z enumera não rastreados incluindo ignorados, sem dividir nomes com espaços/quebras de linha. Falha de Git é propagada por pipefail. As configurações exatas `.env`, `.env.backup` e `.env_old` são aceitas depois das validações anteriores; se qualquer uma estiver rastreada, o diagnóstico aborta. node_modules/, dist/ e .angular/cache/ só são admitidos quando cada entrada também passa git check-ignore.
 
 Dados não rastreados em istbrasil.private/ são admitidos exclusivamente com extensão minúscula pdf, png, jpg, jpeg, webp, gif, mp4, webm, mp3, wav, ogg ou m4a, como arquivos regulares não executáveis e com caminho canônico idêntico (sem symlinks no caminho). A extensão é uma classificação operacional, não validação do conteúdo. Scripts, formatos desconhecidos, symlinks e executáveis exigem revisão manual. Arquivos rastreados privados continuam sujeitos à verificação de working tree limpo. uploads/ externo ao repositório não é percorrido nem modificado. Nunca executar git clean ou ampliar a allowlist para todo arquivo ignorado.
 
@@ -107,7 +107,7 @@ Somente a operação que criou o lock pode removê-lo, após confirmar seu resul
 
 `inspectTransactions()` identifica estados incompletos e bloqueia novas cópias/restaurações. O teste SIGKILL interrompe uma cópia real, verifica concorrência entre processos e comprova que registrar failed sozinho não remove o lock abandonado. A recuperação do backup anterior só acontece após revisão explícita da transação e remoção manual do lock da fixture cujo processo já terminou. Não há retomada automática, limpeza de locks abandonados, garbage collection, retenção automática ou coordenação de deploy. A exclusão mútua de operações de produção continua pertencendo ao flock do deploy e deverá ser implementada antes de conectar os módulos.
 
-O diagnóstico existente continua com suas proteções originais: a presença de `.env_old` ainda pode bloquear a allowlist de `deploy.sh`. Sua preservação pelo novo módulo não amplia essa allowlist nem dispensa a revisão necessária antes da Fase 2.
+O diagnóstico aceita `.env.backup` e `.env_old` como legados opcionais na allowlist explícita. Quando presentes, continuam sujeitos às mesmas verificações de tipo, propriedade, modo e ACL de `.env`; sua ausência é válida.
 
 Execução local sem dependências adicionais:
 
@@ -158,8 +158,8 @@ Base fixa do CLI: `/var/www/istbrasil.org.br`. Repositório original: `backend-n
 | `.deploy/state/active.json` | Arquivo regular 600, um único hardlink; existência não é confirmação de publicação |
 | `.deploy/state/transactions/<UUID>.json` | Arquivo regular 600, envelope com hash e transições válidas |
 | `.deploy/state/operation.lock` e `.deploy.lock` | Arquivos regulares 600; nenhum lock é criado, adquirido ou removido pelo diagnóstico |
-| `backend-node/istbrasil/.env` e `.env.backup` | Obrigatórios, regulares, sem symlink/hardlink; 600 ou 640 com propriedade/grupo compatíveis com admin |
-| `backend-node/istbrasil/.env_old` | Opcional; se existir, mesma proteção de `.env` |
+| `backend-node/istbrasil/.env` | Obrigatório, regular, sem symlink/hardlink; 600 ou 640 com propriedade/grupo compatíveis com admin |
+| `backend-node/istbrasil/.env.backup` e `.env_old` | Opcionais; se existirem, mesma proteção de `.env`; nunca criados ou sobrescritos pelo deploy |
 | `html`, `uploads`, `backend-php`, `backend-node/istbrasil/istbrasil.private` | Diretórios originais preservados; diagnóstico não percorre conteúdo privado/persistente |
 | `html/istdbadmin` | Symlink preservado para `/usr/share/phpmyadmin`, lido sem seguir seu conteúdo |
 

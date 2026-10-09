@@ -84,6 +84,16 @@ test('successful activation backs up legacy runtime, switches backend and publis
     assert.equal(report.status, 'CONSISTENT');
 });
 
+test('activation and rollback require only .env and do not recreate absent legacy environment files', linux, async t => {
+    const f = await fixture(t); await fs.unlink(f.paths.envBackup);
+    const deployed = await activatePreparedRelease({ base: f.base, workspace: f.workspace, preparationId: f.preparationId, adapter: f.adapter, verifyPrepared: f.verifyPrepared });
+    await assert.rejects(fs.lstat(f.paths.envBackup), { code: 'ENOENT' });
+    await assert.rejects(fs.lstat(f.paths.envOld), { code: 'ENOENT' });
+    await rollbackRelease({ base: f.base, backupId: deployed.backupId, adapter: f.adapter });
+    await assert.rejects(fs.lstat(f.paths.envBackup), { code: 'ENOENT' });
+    await assert.rejects(fs.lstat(f.paths.envOld), { code: 'ENOENT' });
+});
+
 test('backend activation failure restores previous PM2 target and frontend', linux, async t => {
     const f = await fixture(t), originalSwitch = f.adapter.switchTo.bind(f.adapter); let failed = false;
     f.adapter.switchTo = async target => { if (!failed && target.cwd.includes('/releases/')) { failed = true; throw Object.assign(new Error('fixture PM2 failure'), { code: 'PM2_SWITCH_FAILED' }); } await originalSwitch(target); };

@@ -250,7 +250,7 @@ export async function inspectProduction({ paths = PATHS, identityReader = operat
         catch (error) { return error.code === 'ENOENT' ? false : null; }
     };
     for (const filename of [paths.base, paths.repo, paths.html, paths.uploads, paths.backendPhp, paths.private]) await inspect(filename, directory);
-    for (const filename of [paths.env, paths.envBackup, paths.envOld]) await inspect(filename, { type: 'file', private: true, config: true, modes: [0o600, 0o640] }, filename === paths.envOld);
+    for (const filename of [paths.env, paths.envBackup, paths.envOld]) await inspect(filename, { type: 'file', private: true, config: true, modes: [0o600, 0o640] }, filename !== paths.env);
     try {
         const php = `${paths.html}/istdbadmin`, stat = await fs.lstat(php);
         if (!stat.isSymbolicLink() || await fs.readlink(php) !== paths.phpMyAdmin) problems('invalid', 'PHPMYADMIN_LINK_INVALID');

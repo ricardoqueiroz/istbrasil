@@ -22,7 +22,8 @@ case "$name" in
    *'diff --quiet'*) [[ $SCENARIO != dirty ]] ;;
    *'diff --cached --quiet'*) true ;;
    *'ls-files --others'*)
-    printf '.env\0.env.backup\0'
+    printf '.env\0'
+    [[ $SCENARIO == optional-env-absent ]] || printf '.env.backup\0'
     case "$SCENARIO" in
      unknown|ignored-unknown) printf 'unknown.txt\0' ;;
      newline-unknown) printf 'unknown\nname.txt\0' ;;
@@ -127,6 +128,7 @@ run_case() {
  mkdir -p "$FIXTURE/backend-node/istbrasil/istbrasil.private/documents" "$FIXTURE/html" "$FIXTURE/uploads" "$FIXTURE/pm2" "$FIXTURE/proc/111" "$FIXTURE/proc/222" "$FIXTURE/proc/999"
  printf 'NEVER_LOG_THIS_SECRET\n' > "$FIXTURE/backend-node/istbrasil/.env"
  cp "$FIXTURE/backend-node/istbrasil/.env" "$FIXTURE/backend-node/istbrasil/.env.backup"
+ [[ $scenario != optional-env-absent ]] || rm -- "$FIXTURE/backend-node/istbrasil/.env.backup"
  echo preserve > "$FIXTURE/uploads/sentinel"
  echo preserve > "$FIXTURE/backend-node/istbrasil/istbrasil.private/sentinel"
  ln -s "$TMP/phpmyadmin" "$FIXTURE/html/istdbadmin"
@@ -169,7 +171,9 @@ name.pdf"
  [[ $(readlink "$FIXTURE/html/istdbadmin") == "$TMP/phpmyadmin" ]]
  grep -q preserve "$FIXTURE/uploads/sentinel"
  grep -q preserve "$FIXTURE/backend-node/istbrasil/istbrasil.private/sentinel"
- cmp "$FIXTURE/backend-node/istbrasil/.env" "$FIXTURE/backend-node/istbrasil/.env.backup"
+ if [[ -e "$FIXTURE/backend-node/istbrasil/.env.backup" ]]; then
+  cmp "$FIXTURE/backend-node/istbrasil/.env" "$FIXTURE/backend-node/istbrasil/.env.backup"
+ fi
  ! grep -Eq '^(pm2|rsync|curl) |npm (ci|install|run)|git .* (fetch|merge|pull|reset)' "$CALLS"
  if [[ $operation == --check ]]; then ! grep -q '^flock ' "$CALLS"; fi
  case "$scenario" in
@@ -200,6 +204,7 @@ name.pdf"
 }
 for scenario in root wrong-user dirty unknown bad-link root-pm2 port-conflict missing-dependencies peer-conflict; do run_case "$scenario" --check fail; done
 run_case valid --check pass
+run_case optional-env-absent --check pass
 run_case pm2-pid-no-lf --check pass
 run_case lock-conflict --deploy fail
 for scenario in build-failure publication-failure pm2-failure; do run_case "$scenario" --deploy fail; done
