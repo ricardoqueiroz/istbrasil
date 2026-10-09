@@ -265,8 +265,30 @@ else
     if OPERATION_OUTPUT=$(node "$REPO/scripts/deploy/deployment-runner.mjs" rollback "$ROLLBACK_ID" 2>&1); then OPERATION_STATUS=0; else OPERATION_STATUS=$?; fi
 fi
 if (( OPERATION_STATUS != 0 )); then
+    EXPECTED_MANUAL=false
+    (( OPERATION_STATUS == 3 )) && EXPECTED_MANUAL=true
+    if SANITIZED_OPERATION_ERROR=$(EXPECTED_MANUAL="$EXPECTED_MANUAL" node -e '
+const fs=require("node:fs");
+try {
+    const input=fs.readFileSync(0,"utf8").trim();
+    const value=JSON.parse(input), keys=Object.keys(value).sort();
+    const allowed=["code","manualRecoveryRequired","status","workspaceRetained"];
+    if (JSON.stringify(keys)!==JSON.stringify(allowed)
+        || value.status!=="FAILED"
+        || typeof value.code!=="string" || !/^[A-Z][A-Z0-9_]{1,63}$/.test(value.code)
+        || typeof value.manualRecoveryRequired!=="boolean"
+        || typeof value.workspaceRetained!=="boolean"
+        || value.manualRecoveryRequired!==(process.env.EXPECTED_MANUAL==="true")) process.exit(2);
+    process.stdout.write(JSON.stringify({status:value.status,code:value.code,
+        manualRecoveryRequired:value.manualRecoveryRequired,workspaceRetained:value.workspaceRetained}));
+} catch { process.exit(2); }
+' <<< "$OPERATION_OUTPUT"); then
+        printf '%s\n' "$SANITIZED_OPERATION_ERROR" >&2
+    else
+        fail 'Executor returned invalid sanitized diagnostics; raw output suppressed.'
+    fi
     if (( OPERATION_STATUS == 3 )); then fail 'Operation failed; manual recovery required. Inspect operation.lock and transaction journal.'; fi
-    fail 'Operation failed safely; runtime rollback was attempted. Review sanitized runner diagnostics.'
+    fail 'Operation failed safely; runtime rollback was attempted.'
 fi
 log "$OPERATION_OUTPUT"
 log "${MODE#--} completed successfully."

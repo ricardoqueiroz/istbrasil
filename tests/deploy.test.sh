@@ -83,6 +83,18 @@ case "$name" in
  esac ;;
  df) printf 'Filesystem 1024-blocks Used Available Capacity Mounted\nfake 50000000 1 46000000 1%% /\n' ;;
  node)
+  if [[ $* == *deployment-runner.mjs* ]]; then
+   case "$SCENARIO" in
+    operation-success) echo '{"status":"SUCCESS","operation":"deploy","transactionId":"fixture","backupId":"fixture","releaseId":"fixture","generation":1}'; exit 0 ;;
+    operation-failure) echo '{"status":"FAILED","code":"ACTIVATION_FAILED","manualRecoveryRequired":false,"workspaceRetained":true}' >&2; exit 2 ;;
+    operation-manual) echo '{"status":"FAILED","code":"OPERATION_LOCK_EXISTS","manualRecoveryRequired":true,"workspaceRetained":false}' >&2; exit 3 ;;
+    operation-invalid) echo 'PRIVATE_PATH=/private/NEVER_LOG_THIS_SECRET'; exit 2 ;;
+   esac
+  fi
+  if [[ $* == *'const fs=require("node:fs")'* ]]; then
+   "$REAL_NODE" "$@"
+   exit $?
+  fi
   input=$(cat)
   if [[ $input == *'// PM2 inspection:'* ]]; then
    # Exercise the actual PM2 Node code. Translate fixture paths only on Windows.
@@ -154,6 +166,10 @@ name.pdf"
  [[ $scenario != pm2-pid-no-lf ]] || printf '111' > "$FIXTURE/pm2/pm2.pid"
  : > "$FIXTURE/pm2/rpc.sock"
  : > "$FIXTURE/.deploy.lock"
+ if [[ $scenario == operation-* ]]; then
+  mkdir -p "$FIXTURE/.deploy/state"
+  printf 'IST_DEPLOY_PRODUCTION_APPROVED_V1\n' > "$FIXTURE/.deploy/state/PRODUCTION_APPROVED"
+ fi
  # Test-only socket adapter; production still requires a Unix socket.
  sed -e "s|^BASE=.*|BASE='$FIXTURE'|" \
   -e "s|^EXPECTED_PM2_HOME=.*|EXPECTED_PM2_HOME='$FIXTURE/pm2'|" \
@@ -199,6 +215,16 @@ name.pdf"
   peer-conflict) grep -q 'peer dependency conflict' "$FIXTURE/output" ;;
   rollback) grep -q 'Rollback unavailable' "$FIXTURE/output" ;;
   build-failure|publication-failure|pm2-failure) grep -q 'DEPLOY DISABLED' "$FIXTURE/output" ;;
+  operation-success) grep -q 'deploy completed successfully' "$FIXTURE/output" ;;
+  operation-failure)
+   grep -q '"code":"ACTIVATION_FAILED"' "$FIXTURE/output"
+   grep -q '"workspaceRetained":true' "$FIXTURE/output" ;;
+  operation-manual)
+   grep -q '"code":"OPERATION_LOCK_EXISTS"' "$FIXTURE/output"
+   grep -q 'manual recovery required' "$FIXTURE/output" ;;
+  operation-invalid)
+   grep -q 'raw output suppressed' "$FIXTURE/output"
+   ! grep -q 'PRIVATE_PATH' "$FIXTURE/output" ;;
  esac
  COUNT=$((COUNT+1)); printf 'PASS %s (%s)\n' "$scenario" "$operation"
 }
@@ -208,6 +234,10 @@ run_case optional-env-absent --check pass
 run_case pm2-pid-no-lf --check pass
 run_case lock-conflict --deploy fail
 for scenario in build-failure publication-failure pm2-failure; do run_case "$scenario" --deploy fail; done
+run_case operation-success --deploy pass
+run_case operation-failure --deploy fail
+run_case operation-manual --deploy fail
+run_case operation-invalid --deploy fail
 run_case rollback --rollback fail
 for scenario in perm640 backup640 quoted-private private-pdf ignored-generated root-node-unrelated port-duplicate; do run_case "$scenario" --check pass; done
 for scenario in wrong-owner wrong-group shared-group shared-primary missing-nss-admin root-node-empty perm644 perm660 perm400 perm4600 extended-acl acl-inaccessible tracked-env ignored-unknown newline-unknown private-executable private-script private-symlink unignored-generated git-enumeration-error pm2-owner daemon-stale api-unrelated api-hidden root-node-pm2 root-node-hidden port-owner port-hidden port-partly-hidden; do run_case "$scenario" --check fail; done
