@@ -107,6 +107,7 @@ log "Available: $AVAILABLE KiB; actual backup size still needs validation."
 STAGE=pm2
 RUNTIME_CWD=$REPO
 RUNTIME_SCRIPT="$REPO/server.js"
+RUNTIME_KIND=legacy
 if [[ -e $BASE/.deploy/state/active.json ]]; then
     [[ -f $BASE/.deploy/state/active.json && ! -L $BASE/.deploy/state/active.json
        && $(stat -c %u -- "$BASE/.deploy/state/active.json") == "$ADMIN_UID"
@@ -121,6 +122,7 @@ process.stdout.write(releasePaths(paths,active.backend.releaseId).backend);
 ACTIVE
     ) || fail 'Active state metadata is invalid.'
     RUNTIME_SCRIPT="$RUNTIME_CWD/server.js"
+    RUNTIME_KIND=release
 fi
 # Do not invoke PM2 CLI: even --version/jlist may start a missing daemon.
 [[ -f $EXPECTED_PM2_HOME/pm2.pid && ! -L $EXPECTED_PM2_HOME/pm2.pid
@@ -193,20 +195,28 @@ try {
 } catch { reject('Insufficient /proc visibility or process changed during inspection; no process action taken.'); }
 PM2CHECK
 STAGE=runtime
-node --input-type=commonjs - "$RUNTIME_CWD" "$RUNTIME_SCRIPT" "$API_PID" "$DAEMON_PID" "$(command -v pm2)" <<'NODE'
+node --input-type=commonjs - "$RUNTIME_CWD" "$RUNTIME_SCRIPT" "$RUNTIME_KIND" "$API_PID" "$DAEMON_PID" "$(command -v pm2)" <<'NODE'
 const fs = require('node:fs');
 const path = require('node:path');
 const { createRequire } = require('node:module');
-const [runtimeCwd, runtimeScript, pid, daemon, pm2bin] = process.argv.slice(2);
+const [runtimeCwd, runtimeScript, runtimeKind, pid, daemon, pm2bin] = process.argv.slice(2);
 const reject = message => { console.error('[IST deploy] ERROR [runtime]: '+message); process.exit(1); };
 try {
     const req = createRequire(path.join(runtimeCwd,'package.json'));
     const semver = req('semver'), dotenv = req('dotenv');
-    const pkgs = JSON.parse(fs.readFileSync(path.join(runtimeCwd,'package-lock.json'),'utf8')).packages || {};
+    if (process.versions.node !== '20.19.6') reject('Node version differs from the homologated runtime.');
+    if (!['legacy','release'].includes(runtimeKind)) reject('Unknown runtime kind.');
     for (const name of ['@angular/cli','@angular/core','primeng','express','sharp','bcrypt']) {
-        const info = pkgs['node_modules/'+name];
-        if (!info || !semver.satisfies(process.versions.node, info.engines?.node || '*')) reject('Node incompatible or lock incomplete.');
         const installed = JSON.parse(fs.readFileSync(path.join(runtimeCwd,'node_modules',name,'package.json'),'utf8'));
+        if (!installed.version || !semver.satisfies(process.versions.node, installed.engines?.node || '*')) reject('Installed runtime dependency is invalid or incompatible with Node.');
+    }
+    const pkgs = runtimeKind === 'release'
+        ? JSON.parse(fs.readFileSync(path.join(runtimeCwd,'package-lock.json'),'utf8')).packages || {}
+        : null;
+    if (runtimeKind === 'release') for (const name of ['@angular/cli','@angular/core','primeng','express','sharp','bcrypt']) {
+        const info = pkgs['node_modules/'+name];
+        const installed = JSON.parse(fs.readFileSync(path.join(runtimeCwd,'node_modules',name,'package.json'),'utf8'));
+        if (!info || !semver.satisfies(process.versions.node, info.engines?.node || '*')) reject('Node incompatible or lock incomplete.');
         if (installed.version !== info.version) reject('Installed dependency differs from lockfile.');
     }
     const entries = fs.readFileSync('/proc/'+pid+'/environ','utf8').split('\0');
@@ -218,11 +228,13 @@ try {
     if (config.NODE_ENV !== 'production' || config.FESTIVAL_II_ETAPA_INSCRICOES_ID !== '1') reject('Selected production variables are missing/invalid.');
     const pm2version = JSON.parse(fs.readFileSync(path.resolve(fs.realpathSync(pm2bin),'../../package.json'),'utf8')).version;
     console.log('[IST deploy] Node '+process.versions.node+'; PM2 '+pm2version+'; selected configuration validated.');
-    for (const info of Object.values(pkgs)) {
-        for (const [peer, range] of Object.entries(info.peerDependencies || {})) {
-            const actual = pkgs['node_modules/'+peer];
-            if (!actual && info.peerDependenciesMeta?.[peer]?.optional) continue;
-            if (!actual || !semver.satisfies(actual.version, range)) reject('Peer dependency conflict: reproducible installation blocked.');
+    if (runtimeKind === 'release') {
+        for (const info of Object.values(pkgs)) {
+            for (const [peer, range] of Object.entries(info.peerDependencies || {})) {
+                const actual = pkgs['node_modules/'+peer];
+                if (!actual && info.peerDependenciesMeta?.[peer]?.optional) continue;
+                if (!actual || !semver.satisfies(actual.version, range)) reject('Peer dependency conflict: reproducible installation blocked.');
+            }
         }
     }
 } catch { reject('Cannot validate runtime/configuration/dependencies; sensitive details omitted.'); }

@@ -234,7 +234,11 @@ assert.equal(manifest.dependencies.hono,undefined);
 assert.equal(manifest.devDependencies.hono,undefined);
 // Execute the production peer gate against the real lock and in-memory fixtures.
 const deploy=fs.readFileSync(path.join(repo,'deploy.sh'),'utf8');
-const gate=deploy.match(/    for \(const info of Object\.values\(pkgs\)\) \{[\s\S]*?\n    \}\n(?=\} catch)/);
+assert.match(deploy,/RUNTIME_KIND=legacy/);
+assert.match(deploy,/RUNTIME_KIND=release/);
+assert.match(deploy,/runtimeKind === 'release'[\s\S]*Installed dependency differs from lockfile/);
+console.log('PASS legacy runtime is not compared with the target lockfile');
+const gate=deploy.match(/        for \(const info of Object\.values\(pkgs\)\) \{[\s\S]*?\n        \}/);
 assert(gate,'Production peer gate not found');
 const check=new Function('pkgs','semver','reject',gate[0]);
 const validate=packages => check(packages,semver,message => { throw new Error(message); });
@@ -258,4 +262,4 @@ optional['node_modules/examplePeer']={version:'2.0.0'};
 assert.throws(() => validate(optional),/Peer dependency conflict/);
 console.log('PASS isolated incompatible installed optional peer');
 NODE
-printf '%s isolated diagnostic cases + 5 dependency checks passed.\n' "$COUNT"
+printf '%s isolated diagnostic cases + 6 dependency checks passed.\n' "$COUNT"
