@@ -325,7 +325,7 @@ export async function exportCommit({ workspace, commitSha, approvedMainSha }) {
         const read = objectReader(git);
         const commit = await commitInfo(read, commitSha);
         await proveAncestry(read, commitSha, approvedMainSha);
-        const files = [], directories = [], excluded = [], collisions = new Set(), protectedOids = new Set();
+        const files = [], directories = [], excluded = [], collisions = new Set();
         const scan = async (oid, prefix = '', depth = 0) => {
             if (depth > 64) throw fail('TREE_DEPTH_EXCEEDED');
             const object = await read(oid);
@@ -342,7 +342,6 @@ export async function exportCommit({ workspace, commitSha, approvedMainSha }) {
                 const reason = exclusionReason(relative);
                 if (reason) {
                     excluded.push({ path: relative, type: entry.mode === '40000' ? 'tree' : 'blob', gitObjectSha: entry.oid, reason });
-                    protectedOids.add(entry.oid);
                     continue; // before reading a protected blob or excluded subtree
                 }
                 if (entry.mode === '40000') { directories.push(relative); await scan(entry.oid, relative, depth + 1); }
@@ -350,7 +349,6 @@ export async function exportCommit({ workspace, commitSha, approvedMainSha }) {
             }
         };
         await scan(commit.tree);
-        if (files.some(file => protectedOids.has(file.gitBlobSha))) throw fail('OBJECT_SHARED_WITH_EXCLUDED_PATH');
         await mainSnapshot(git, approvedMainSha);
         const exportId = randomUUID(), destination = `${workspace}/exports/${exportId}`, payload = `${destination}/source`;
         await requireExportWorkspace(workspace);

@@ -281,9 +281,39 @@ test('symlinked Git storage is refused without reading its destination', linux, 
     await fs.unlink(objectFile); await fs.symlink('/fictional/outside', objectFile);
     await assert.rejects(f.run(), { code: 'REPOSITORY_UNSAFE' });
 });
-test('a blob shared with an excluded path is conservatively refused', linux, async t => {
+test('a non-empty blob shared by an allowed path and .env exports only the allowed path', linux, async t => {
     const f = await fixture(t, { 'server.js': 'fictional shared bytes', '.env': 'fictional shared bytes' });
-    await assert.rejects(f.run(), { code: 'OBJECT_SHARED_WITH_EXCLUDED_PATH' });
+    const result = await f.run();
+    assert.equal(f.commit.blobs.get('server.js'), f.commit.blobs.get('.env'));
+    assert.deepEqual(result.record.files.map(file => file.path), ['server.js']);
+    assert.ok(result.record.excluded.some(entry => entry.path === '.env' && entry.reason === 'ENVIRONMENT_FILE'));
+    assert.equal(await fs.readFile(`${result.source}/server.js`, 'utf8'), 'fictional shared bytes');
+    await assert.rejects(fs.lstat(`${result.source}/.env`), { code: 'ENOENT' });
+    await verifyExport({ workspace: f.workspace, exportId: result.record.exportId });
+});
+test('empty CSS and SCSS can share a blob with excluded SQLTools sessions', linux, async t => {
+    const f = await fixture(t, {
+        'src/app/pages/example/example.component.css': '',
+        'src/app/pages/example/example.component.scss': '',
+        'IST Brasil Local.session.sql': '',
+        'VPS Locaweb MariaDB.session.sql': ''
+    });
+    const result = await f.run(), emptyOid = f.commit.blobs.get('src/app/pages/example/example.component.css');
+    assert.equal(emptyOid, f.commit.blobs.get('src/app/pages/example/example.component.scss'));
+    assert.equal(emptyOid, f.commit.blobs.get('IST Brasil Local.session.sql'));
+    assert.equal(emptyOid, f.commit.blobs.get('VPS Locaweb MariaDB.session.sql'));
+    assert.deepEqual(result.record.files.map(file => file.path), [
+        'src/app/pages/example/example.component.css',
+        'src/app/pages/example/example.component.scss'
+    ]);
+    assert.deepEqual(result.record.excluded.map(entry => [entry.path, entry.reason]), [
+        ['IST Brasil Local.session.sql', 'PROTECTED_FILE'],
+        ['VPS Locaweb MariaDB.session.sql', 'PROTECTED_FILE']
+    ]);
+    for (const relative of ['IST Brasil Local.session.sql', 'VPS Locaweb MariaDB.session.sql']) {
+        await assert.rejects(fs.lstat(`${result.source}/${relative}`), { code: 'ENOENT' });
+    }
+    await verifyExport({ workspace: f.workspace, exportId: result.record.exportId });
 });
 test('existing lock, including an abandoned lock, is never removed automatically', linux, async t => {
     const f = await fixture(t), filename = `${f.workspace}/EXPORT.lock`;
