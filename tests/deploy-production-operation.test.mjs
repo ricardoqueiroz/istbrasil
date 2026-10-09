@@ -6,7 +6,7 @@ import path from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
 import { canonicalPaths, validateActive, validateJournal } from '../scripts/deploy/production-contract.mjs';
 import { inspectProduction } from '../scripts/deploy/production-inspect.mjs';
-import { activatePreparedRelease, rollbackRelease } from '../scripts/deploy/production-operation.mjs';
+import { activatePreparedRelease, rollbackRelease, publicationExitCode, publishNoReplace } from '../scripts/deploy/production-operation.mjs';
 
 const linux = { skip: process.platform !== 'linux' || process.getuid?.() === 0 ? 'Linux non-root required' : false };
 const SHA = 'a'.repeat(40), TREE = 'b'.repeat(40);
@@ -62,6 +62,26 @@ async function persistentSnapshot(f) {
     return { env: await fs.readFile(f.paths.env, 'utf8'), envBackup: await fs.readFile(f.paths.envBackup, 'utf8'),
         private: await snapshot(f.paths.private), uploads: await snapshot(f.paths.uploads), php: await snapshot(f.paths.backendPhp) };
 }
+async function assertNoPreparedSnapshot(f) {
+    assert.deepEqual(await fs.readdir(f.paths.backups), []);
+    assert.ok(!(await fs.readdir(f.paths.admin)).some(name => name.startsWith('.snapshot-')));
+    assert.equal(f.adapter.switches.length, 0);
+    assert.equal(await fs.readFile(`${f.paths.html}/index.html`, 'utf8'), '<title>legacy frontend</title>');
+    assert.equal(await fs.readFile(`${f.paths.repo}/server.js`, 'utf8'), '// legacy server fixture\n');
+}
+function arrangeConcurrentDestination(t, f, content = null) {
+    const original = fs.lstat; let destination;
+    t.mock.method(fs, 'lstat', async (filename, ...args) => {
+        if (!destination && String(filename).endsWith('/scripts/deploy/bin/rename-noreplace-linux-x64')) {
+            const staging = (await fs.readdir(f.paths.admin)).find(name => name.startsWith('.snapshot-'));
+            const backupId = staging.slice(-36); destination = `${f.paths.backups}/${backupId}`;
+            await fs.mkdir(destination, { mode: 0o700 });
+            if (content !== null) await write(`${destination}/sentinel`, content);
+        }
+        return original(filename, ...args);
+    });
+    return () => destination;
+}
 
 test('successful activation backs up legacy runtime, switches backend and publishes index last', linux, async t => {
     const f = await fixture(t), persistent = await persistentSnapshot(f);
@@ -75,7 +95,10 @@ test('successful activation backs up legacy runtime, switches backend and publis
     assert.deepEqual(await persistentSnapshot(f), persistent);
     const envelope = JSON.parse(await fs.readFile(`${f.paths.transactions}/${result.transactionId}.json`, 'utf8'));
     assert.equal(validateJournal(envelope), true); assert.equal(envelope.record.events.at(-1).phase, 'confirmed');
-    assert.ok(await fs.lstat(`${f.paths.backups}/${result.backupId}/READY`));
+    const backupRoot = `${f.paths.backups}/${result.backupId}`;
+    assert.deepEqual((await fs.readdir(backupRoot)).sort(), ['READY', 'manifest.json', 'payload']);
+    assert.ok(await fs.lstat(`${backupRoot}/READY`));
+    assert.ok(!(await fs.readdir(f.paths.admin)).some(name => name.startsWith('.snapshot-')));
     await assert.rejects(fs.lstat(f.paths.lock), { code: 'ENOENT' });
     const report = await inspectProduction({ paths: f.paths, ancestorBoundary: f.base,
         identityReader: async () => ({ uid: process.getuid(), gid: process.getgid(), exclusiveGroup: true, verified: true }),
@@ -92,6 +115,182 @@ test('activation and rollback require only .env and do not recreate absent legac
     await rollbackRelease({ base: f.base, backupId: deployed.backupId, adapter: f.adapter });
     await assert.rejects(fs.lstat(f.paths.envBackup), { code: 'ENOENT' });
     await assert.rejects(fs.lstat(f.paths.envOld), { code: 'ENOENT' });
+});
+
+test('legacy snapshot normalizes only backup file modes and preserves executables and internal package links', linux, async t => {
+    const f = await fixture(t), legacy = [
+        [`${f.paths.repo}/src/group-writable.js`, 0o664],
+        [`${f.paths.repo}/src/world-writable.js`, 0o666],
+        [`${f.paths.repo}/node_modules/fixture/tool`, 0o775],
+        [`${f.paths.repo}/node_modules/fixture/run`, 0o777],
+        [`${f.paths.html}/legacy-writable.js`, 0o666]
+    ];
+    for (const [filename, mode] of legacy) { await write(filename, `fixture-${mode.toString(8)}`); await fs.chmod(filename, mode); }
+    await fs.mkdir(`${f.paths.repo}/node_modules/.bin`, { mode: 0o700 });
+    await fs.symlink('../fixture/tool', `${f.paths.repo}/node_modules/.bin/fixture-tool`);
+    const originalModes = new Map(await Promise.all(legacy.slice(0, 4).map(async ([filename]) => [filename, (await fs.stat(filename)).mode & 0o777])));
+    const originalSwitch = f.adapter.switchTo.bind(f.adapter); let frontendModeBeforePublication;
+    f.adapter.switchTo = async target => {
+        if (frontendModeBeforePublication === undefined) frontendModeBeforePublication = (await fs.stat(`${f.paths.html}/legacy-writable.js`)).mode & 0o777;
+        await originalSwitch(target);
+    };
+
+    const result = await activatePreparedRelease({ base: f.base, workspace: f.workspace, preparationId: f.preparationId, adapter: f.adapter, verifyPrepared: f.verifyPrepared });
+    const backup = `${f.paths.backups}/${result.backupId}`, manifest = JSON.parse(await fs.readFile(`${backup}/manifest.json`, 'utf8'));
+    const expected = new Map([
+        ['backend/src/group-writable.js', 0o644],
+        ['backend/src/world-writable.js', 0o644],
+        ['backend/node_modules/fixture/tool', 0o755],
+        ['backend/node_modules/fixture/run', 0o755],
+        ['frontend/legacy-writable.js', 0o644]
+    ]);
+    for (const [relative, mode] of expected) {
+        assert.equal((await fs.stat(`${backup}/payload/${relative}`)).mode & 0o777, mode);
+        assert.equal(manifest.entries.find(entry => entry.path === relative)?.mode, mode);
+    }
+    for (const [filename, mode] of originalModes) assert.equal((await fs.stat(filename)).mode & 0o777, mode);
+    assert.equal(frontendModeBeforePublication, 0o666);
+    assert.equal(await fs.readlink(`${backup}/payload/backend/node_modules/.bin/fixture-tool`), '../fixture/tool');
+    assert.equal(manifest.entries.find(entry => entry.path === 'backend/node_modules/.bin/fixture-tool')?.target, '../fixture/tool');
+    assert.ok(await fs.lstat(`${backup}/READY`));
+    const rolled = await rollbackRelease({ base: f.base, backupId: result.backupId, adapter: f.adapter });
+    for (const [relative, mode] of expected) if (relative.startsWith('backend/')) assert.equal((await fs.stat(`${rolled.active.pm2.cwd}/${relative.slice('backend/'.length)}`)).mode & 0o777, mode);
+    assert.equal((await fs.stat(`${f.paths.html}/legacy-writable.js`)).mode & 0o777, 0o644);
+});
+
+test('unsafe legacy links and protected paths remain rejected before activation', linux, async t => {
+    await t.test('link escaping the backend', async t => {
+        const f = await fixture(t);
+        await fs.symlink('../../../../outside', `${f.paths.repo}/node_modules/fixture/escape`);
+        await assert.rejects(activatePreparedRelease({ base: f.base, workspace: f.workspace, preparationId: f.preparationId, adapter: f.adapter, verifyPrepared: f.verifyPrepared }), { code: 'SOURCE_LINK_UNSAFE' });
+        await assertNoPreparedSnapshot(f);
+    });
+    await t.test('protected nested file', async t => {
+        const f = await fixture(t);
+        await write(`${f.paths.repo}/src/private.key`, 'fictional-key-marker');
+        await assert.rejects(activatePreparedRelease({ base: f.base, workspace: f.workspace, preparationId: f.preparationId, adapter: f.adapter, verifyPrepared: f.verifyPrepared }), { code: 'BACKUP_MANIFEST_INVALID' });
+        await assertNoPreparedSnapshot(f);
+    });
+});
+
+test('snapshot preparation failures never publish an incomplete backup', linux, async t => {
+    const cases = [
+        ['inventory', async (t, f) => {
+            const original = fs.readFile;
+            t.mock.method(fs, 'readFile', async (filename, ...args) => {
+                if (String(filename).includes('/.snapshot-') && String(filename).endsWith('/payload/backend/server.js')) throw Object.assign(new Error('fixture inventory failure'), { code: 'EIO' });
+                return original(filename, ...args);
+            });
+        }],
+        ['manifest write', async (t) => {
+            const original = fs.open;
+            t.mock.method(fs, 'open', async (filename, flags, ...args) => {
+                if (String(filename).includes('/.snapshot-') && String(filename).endsWith('/manifest.json') && flags & fs.constants.O_CREAT) throw Object.assign(new Error('fixture manifest failure'), { code: 'EIO' });
+                return original(filename, flags, ...args);
+            });
+        }],
+        ['seal write', async (t) => {
+            const original = fs.open;
+            t.mock.method(fs, 'open', async (filename, flags, ...args) => {
+                if (String(filename).includes('/.snapshot-') && String(filename).endsWith('/READY') && flags & fs.constants.O_CREAT) throw Object.assign(new Error('fixture seal failure'), { code: 'EIO' });
+                return original(filename, flags, ...args);
+            });
+        }],
+        ['directory sync', async (t) => {
+            const original = fs.open;
+            t.mock.method(fs, 'open', async (filename, flags, ...args) => {
+                const handle = await original(filename, flags, ...args);
+                if (String(filename).includes('/.snapshot-') && String(filename).endsWith('/payload/backend/src') && !(flags & fs.constants.O_CREAT)) {
+                    handle.sync = async () => { throw Object.assign(new Error('fixture sync failure'), { code: 'EIO' }); };
+                }
+                return handle;
+            });
+        }]
+    ];
+    for (const [label, arrange] of cases) await t.test(label, async t => {
+        const f = await fixture(t); await arrange(t, f);
+        await assert.rejects(activatePreparedRelease({ base: f.base, workspace: f.workspace, preparationId: f.preparationId, adapter: f.adapter, verifyPrepared: f.verifyPrepared }));
+        await assertNoPreparedSnapshot(f);
+    });
+});
+
+for (const [label, content] of [['empty', null], ['non-empty', 'preexisting']]) test(`atomic publication preserves a concurrent ${label} destination`, linux, async t => {
+    const f = await fixture(t), destination = arrangeConcurrentDestination(t, f, content);
+    await assert.rejects(activatePreparedRelease({ base: f.base, workspace: f.workspace, preparationId: f.preparationId, adapter: f.adapter, verifyPrepared: f.verifyPrepared }), { code: 'BACKUP_DESTINATION_EXISTS' });
+    assert.deepEqual(await fs.readdir(destination()), content === null ? [] : ['sentinel']);
+    if (content !== null) assert.equal(await fs.readFile(`${destination()}/sentinel`, 'utf8'), content);
+    assert.ok(!(await fs.readdir(f.paths.admin)).some(name => name.startsWith('.snapshot-')));
+    assert.equal(f.adapter.switches.length, 0);
+});
+
+test('missing helper fails closed before publication', linux, async t => {
+    const f = await fixture(t), original = fs.lstat;
+    t.mock.method(fs, 'lstat', async (filename, ...args) => {
+        if (String(filename).endsWith('/scripts/deploy/bin/rename-noreplace-linux-x64')) throw Object.assign(new Error('fixture missing helper'), { code: 'ENOENT' });
+        return original(filename, ...args);
+    });
+    await assert.rejects(activatePreparedRelease({ base: f.base, workspace: f.workspace, preparationId: f.preparationId, adapter: f.adapter, verifyPrepared: f.verifyPrepared }), { code: 'BACKUP_HELPER_UNAVAILABLE' });
+    await assertNoPreparedSnapshot(f);
+});
+
+test('unsupported no-replace primitive fails closed with its distinct result', linux, async t => {
+    const f = await fixture(t), transactionId = randomUUID(), backupId = randomUUID();
+    const staging = `${f.paths.admin}/.snapshot-${transactionId}-${backupId}`, root = `${f.paths.backups}/${backupId}`;
+    await fs.mkdir(f.paths.backups, { recursive: true, mode: 0o700 }); await fs.mkdir(staging, { mode: 0o700 });
+    await assert.rejects(publishNoReplace(f.paths, transactionId, backupId, staging, root, async () => { throw Object.assign(new Error('fixture unavailable'), { code: 11 }); }), { code: 'BACKUP_PUBLISH_UNAVAILABLE' });
+    assert.equal(publicationExitCode(11), 'BACKUP_PUBLISH_UNAVAILABLE');
+    assert.ok(await fs.lstat(staging)); await assert.rejects(fs.lstat(root), { code: 'ENOENT' });
+});
+
+test('uncertain interruption after atomic rename preserves the complete backup and requires recovery', linux, async t => {
+    const f = await fixture(t), original = fs.lstat; let destination, failRoot = false;
+    t.mock.method(fs, 'lstat', async (filename, ...args) => {
+        if (!destination && String(filename).endsWith('/scripts/deploy/bin/rename-noreplace-linux-x64')) {
+            const staging = (await fs.readdir(f.paths.admin)).find(name => name.startsWith('.snapshot-'));
+            destination = `${f.paths.backups}/${staging.slice(-36)}`; failRoot = true;
+        }
+        if (failRoot && filename === destination) { failRoot = false; throw Object.assign(new Error('fixture post-rename inspection'), { code: 'EIO' }); }
+        return original(filename, ...args);
+    });
+    await assert.rejects(activatePreparedRelease({ base: f.base, workspace: f.workspace, preparationId: f.preparationId, adapter: f.adapter, verifyPrepared: f.verifyPrepared }), error => error.code === 'BACKUP_PUBLICATION_UNCERTAIN' && error.rollbackError?.code === 'BACKUP_PUBLICATION_UNCERTAIN');
+    assert.deepEqual((await fs.readdir(destination)).sort(), ['READY', 'manifest.json', 'payload']);
+    assert.ok(await fs.lstat(f.paths.lock));
+    assert.equal(f.adapter.switches.length, 0);
+});
+
+for (const target of ['staging', 'root']) test(`secondary ${target} lstat failure preserves the snapshot error and lock`, linux, async t => {
+    const f = await fixture(t); await write(`${f.paths.repo}/src/private.key`, 'fictional-key-marker');
+    const original = fs.lstat; let stagingChecks = 0;
+    t.mock.method(fs, 'lstat', async (filename, ...args) => {
+        const value = String(filename);
+        if (target === 'staging' && value.includes('/.snapshot-') && !value.includes('/payload') && ++stagingChecks === 2) throw Object.assign(new Error('fixture staging inspection failure'), { code: 'EIO' });
+        if (target === 'root' && value.startsWith(`${f.paths.backups}/`) && value !== f.paths.backups) throw Object.assign(new Error('fixture root inspection failure'), { code: 'EIO' });
+        return original(filename, ...args);
+    });
+    await assert.rejects(activatePreparedRelease({ base: f.base, workspace: f.workspace, preparationId: f.preparationId, adapter: f.adapter, verifyPrepared: f.verifyPrepared }), error => error.code === 'BACKUP_MANIFEST_INVALID' && error.rollbackError?.code === 'EIO');
+    assert.ok(await fs.lstat(f.paths.lock)); assert.equal(f.adapter.switches.length, 0);
+});
+
+test('cleanup failure preserves the snapshot error and retains recovery evidence', linux, async t => {
+    const f = await fixture(t); await write(`${f.paths.repo}/src/private.key`, 'fictional-key-marker');
+    const original = fs.rm;
+    t.mock.method(fs, 'rm', async (filename, ...args) => {
+        if (String(filename).includes('/.snapshot-')) throw Object.assign(new Error('fixture cleanup failure'), { code: 'EACCES' });
+        return original(filename, ...args);
+    });
+    await assert.rejects(activatePreparedRelease({ base: f.base, workspace: f.workspace, preparationId: f.preparationId, adapter: f.adapter, verifyPrepared: f.verifyPrepared }), error => error.code === 'BACKUP_MANIFEST_INVALID' && error.rollbackError?.code === 'EACCES');
+    assert.deepEqual(await fs.readdir(f.paths.backups), []);
+    assert.ok((await fs.readdir(f.paths.admin)).some(name => name.startsWith('.snapshot-')));
+    assert.ok(await fs.lstat(f.paths.lock));
+    assert.equal(f.adapter.switches.length, 0);
+});
+
+test('managed candidate files with unsafe modes remain rejected', linux, async t => {
+    const f = await fixture(t);
+    await fs.chmod(`${f.candidate}/backend/server.js`, 0o666);
+    await assert.rejects(activatePreparedRelease({ base: f.base, workspace: f.workspace, preparationId: f.preparationId, adapter: f.adapter, verifyPrepared: f.verifyPrepared }), { code: 'RELEASE_MANIFEST_INVALID' });
+    assert.equal(f.adapter.switches.length, 0);
+    assert.equal((await fs.stat(`${f.candidate}/backend/server.js`)).mode & 0o777, 0o666);
 });
 
 test('backend activation failure restores previous PM2 target and frontend', linux, async t => {

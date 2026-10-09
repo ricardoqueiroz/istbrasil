@@ -4,12 +4,15 @@ import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { fileURLToPath } from 'node:url';
 import { canonicalPaths, releasePaths, validateActive, validateBackupManifest, validateBackupSeal, validateJournal, validateLock, validateManifest, sha256 } from './production-contract.mjs';
 import { verifyPreparedRelease } from './release-prepare.mjs';
 
 const execute = promisify(execFile);
 const FORMAT_VERSION = 1;
 const PM2_NAME = 'ist-api';
+const PUBLISH_HELPER = fileURLToPath(new URL('./bin/rename-noreplace-linux-x64', import.meta.url));
+const PUBLISH_HELPER_SHA256 = 'aea83c5ef4f37b97ebc98c6dce39e527a3e23b99cbbb317d84e2cef61727470b';
 const fileHash = bytes => createHash('sha256').update(bytes).digest('hex');
 const fail = (code, cause) => Object.assign(new Error(code, cause ? { cause } : undefined), { code });
 const now = () => new Date().toISOString();
@@ -28,6 +31,60 @@ async function writeAtomic(filename, bytes) {
     const handle = await fs.open(temporary, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600);
     try { await handle.writeFile(bytes); await handle.sync(); } finally { await handle.close(); }
     await fs.rename(temporary, filename);
+}
+async function syncFile(filename) {
+    const handle = await fs.open(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+    try { await handle.sync(); } finally { await handle.close(); }
+}
+async function syncDirectory(filename) {
+    const handle = await fs.open(filename, fs.constants.O_RDONLY | (fs.constants.O_DIRECTORY || 0) | fs.constants.O_NOFOLLOW);
+    try { await handle.sync(); } finally { await handle.close(); }
+}
+async function writeDurable(filename, bytes) {
+    const handle = await fs.open(filename, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600);
+    try { await handle.writeFile(bytes); await handle.sync(); } finally { await handle.close(); }
+}
+function secondaryFailure(error, failure) {
+    try { if (!error.rollbackError) Object.defineProperty(error, 'rollbackError', { value: failure }); } catch { /* original wins */ }
+}
+export function publicationExitCode(code) {
+    if (code === 10) return 'BACKUP_DESTINATION_EXISTS';
+    if (code === 11) return 'BACKUP_PUBLISH_UNAVAILABLE';
+    if (code === 12) return 'BACKUP_CROSS_DEVICE';
+    if (code === 13) return 'BACKUP_PUBLICATION_FAILED';
+    return null;
+}
+async function validatePublishHelper() {
+    if (process.platform !== 'linux' || process.arch !== 'x64') throw fail('BACKUP_HELPER_INCOMPATIBLE');
+    let stat, real;
+    try { stat = await fs.lstat(PUBLISH_HELPER); real = await fs.realpath(PUBLISH_HELPER); }
+    catch (error) { throw fail('BACKUP_HELPER_UNAVAILABLE', error); }
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || ![0, process.getuid()].includes(stat.uid)
+        || (stat.mode & 0o7777) !== 0o755 || real !== PUBLISH_HELPER) throw fail('BACKUP_HELPER_INVALID');
+    const bytes = await fs.readFile(PUBLISH_HELPER);
+    if (bytes.length < 20 || bytes[0] !== 0x7f || bytes.subarray(1, 4).toString() !== 'ELF' || bytes[4] !== 2 || bytes[5] !== 1
+        || bytes.readUInt16LE(18) !== 62 || fileHash(bytes) !== PUBLISH_HELPER_SHA256) throw fail('BACKUP_HELPER_INVALID');
+}
+export async function publishNoReplace(paths, transactionId, backupId, staging, root, run = execute) {
+    const expectedStaging = `${paths.admin}/.snapshot-${transactionId}-${backupId}`, expectedRoot = `${paths.backups}/${backupId}`;
+    if (staging !== expectedStaging || root !== expectedRoot || path.posix.dirname(staging) !== paths.admin || path.posix.dirname(root) !== paths.backups) throw fail('BACKUP_PUBLICATION_PATH_INVALID');
+    await validatePublishHelper();
+    const before = await fs.lstat(staging);
+    if (!before.isDirectory() || before.isSymbolicLink() || before.uid !== process.getuid() || before.mode & 0o022) throw fail('BACKUP_STAGING_INVALID');
+    try {
+        await run(PUBLISH_HELPER, [staging, root], { env: { PATH: '/usr/bin:/bin', LANG: 'C', LC_ALL: 'C' }, timeout: 10000, maxBuffer: 1024, windowsHide: true });
+    } catch (error) {
+        const mapped = publicationExitCode(error.code);
+        if (mapped) throw fail(mapped, error);
+        const uncertain = fail('BACKUP_PUBLICATION_UNCERTAIN', error); uncertain.publicationUncertain = true; throw uncertain;
+    }
+    try {
+        const after = await fs.lstat(root);
+        if (!after.isDirectory() || after.dev !== before.dev || after.ino !== before.ino || await exists(staging)) throw fail('BACKUP_PUBLICATION_UNCERTAIN');
+    } catch (error) {
+        if (error.code === 'BACKUP_PUBLICATION_UNCERTAIN') { error.publicationUncertain = true; throw error; }
+        const uncertain = fail('BACKUP_PUBLICATION_UNCERTAIN', error); uncertain.publicationUncertain = true; throw uncertain;
+    }
 }
 
 async function processIdentity() {
@@ -68,7 +125,7 @@ function excludedBackend(relative) {
     return ['.env', '.env.backup', '.env_old', '.git', 'istbrasil.private', 'html', 'dist', '.angular'].includes(first);
 }
 
-async function copyTree(source, destination, { skip = () => false, indexLast = false } = {}) {
+async function copyTree(source, destination, { skip = () => false, indexLast = false, normalizeFileModes = false, durable = false } = {}) {
     const boundary = source;
     await ensureDirectory(destination);
     const visit = async (fromDirectory, toDirectory, relative = '') => {
@@ -77,13 +134,19 @@ async function copyTree(source, destination, { skip = () => false, indexLast = f
       for (const name of names) {
         const current = relative ? `${relative}/${name}` : name, from = `${fromDirectory}/${name}`, to = `${toDirectory}/${name}`, stat = await fs.lstat(from);
         if (stat.isDirectory() && !stat.isSymbolicLink()) { await ensureDirectory(to); await visit(from, to, current); }
-        else if (stat.isFile() && !stat.isSymbolicLink()) { await fs.copyFile(from, to, fs.constants.COPYFILE_EXCL); await fs.chmod(to, stat.mode & 0o777); }
+        else if (stat.isFile() && !stat.isSymbolicLink()) {
+            await fs.copyFile(from, to, fs.constants.COPYFILE_EXCL);
+            const mode = stat.mode & 0o777;
+            await fs.chmod(to, normalizeFileModes ? mode & ~0o022 : mode);
+            if (durable) await syncFile(to);
+        }
         else if (stat.isSymbolicLink()) {
             const target = await fs.readlink(from), resolved = path.resolve(path.dirname(from), target);
             if (path.isAbsolute(target) || path.relative(boundary, resolved).startsWith('..')) throw fail('SOURCE_LINK_UNSAFE');
             await fs.symlink(target, to);
         } else throw fail('SOURCE_TYPE_UNSAFE');
       }
+      if (durable) await syncDirectory(toDirectory);
     }
     await visit(source, destination);
 }
@@ -125,21 +188,45 @@ async function prepareInfrastructure(paths) {
 }
 
 async function snapshotCurrent(paths, transactionId, active, runtime) {
-    const backupId = randomUUID(), root = `${paths.backups}/${backupId}`, payload = `${root}/payload`;
-    await ensureDirectory(root); await ensureDirectory(payload);
-    const backend = active ? releasePaths(paths, active.backend.releaseId).backend : paths.repo;
-    const runtimeRoots = new Set(['server.js', 'package.json', 'package-lock.json', 'angular.json', 'tsconfig.json', 'tsconfig.app.json', 'tsconfig.spec.json', '.postcssrc.json', 'src', 'node_modules']);
-    await copyTree(backend, `${payload}/backend`, { skip: name => excludedBackend(name) || !runtimeRoots.has(name) });
-    await copyTree(paths.html, `${payload}/frontend`, { skip: name => name === 'istdbadmin' });
-    const entries = await inventory(`${payload}/backend`, 'backend'); await inventory(`${payload}/frontend`, 'frontend', entries);
-    const manifest = { version: 1, backupId, sourceGeneration: active?.generation || 0, declaredCommitSha: active?.backend.commitSha || runtime.commitSha,
-        runtime: { platform: process.platform, arch: process.arch, node: process.versions.node, abi: process.versions.modules }, entries };
-    if (!validateBackupManifest(manifest, paths)) throw fail('BACKUP_MANIFEST_INVALID');
-    const bytes = Buffer.from(JSON.stringify(manifest)); await fs.writeFile(`${root}/manifest.json`, bytes, { flag: 'wx', mode: 0o600 });
-    const seal = { version: 1, backupId, manifestSha256: sha256(bytes), transactionId };
-    if (!validateBackupSeal(seal)) throw fail('BACKUP_SEAL_INVALID');
-    await fs.writeFile(`${root}/READY`, JSON.stringify(seal), { flag: 'wx', mode: 0o600 });
-    return { backupId, root, payload, manifest, runtime };
+    const backupId = randomUUID(), root = `${paths.backups}/${backupId}`;
+    const staging = `${paths.admin}/.snapshot-${transactionId}-${backupId}`, payload = `${staging}/payload`;
+    let published = false;
+    try {
+        await ensureDirectory(staging); await ensureDirectory(payload); await syncDirectory(paths.admin);
+        const backend = active ? releasePaths(paths, active.backend.releaseId).backend : paths.repo;
+        const runtimeRoots = new Set(['server.js', 'package.json', 'package-lock.json', 'angular.json', 'tsconfig.json', 'tsconfig.app.json', 'tsconfig.spec.json', '.postcssrc.json', 'src', 'node_modules']);
+        await copyTree(backend, `${payload}/backend`, { skip: name => excludedBackend(name) || !runtimeRoots.has(name), normalizeFileModes: true, durable: true });
+        await copyTree(paths.html, `${payload}/frontend`, { skip: name => name === 'istdbadmin', normalizeFileModes: true, durable: true });
+        const entries = await inventory(`${payload}/backend`, 'backend'); await inventory(`${payload}/frontend`, 'frontend', entries);
+        const manifest = { version: 1, backupId, sourceGeneration: active?.generation || 0, declaredCommitSha: active?.backend.commitSha || runtime.commitSha,
+            runtime: { platform: process.platform, arch: process.arch, node: process.versions.node, abi: process.versions.modules }, entries };
+        if (!validateBackupManifest(manifest, paths)) throw fail('BACKUP_MANIFEST_INVALID');
+        const bytes = Buffer.from(JSON.stringify(manifest)); await writeDurable(`${staging}/manifest.json`, bytes);
+        const seal = { version: 1, backupId, manifestSha256: sha256(bytes), transactionId };
+        if (!validateBackupSeal(seal)) throw fail('BACKUP_SEAL_INVALID');
+        await writeDurable(`${staging}/READY`, JSON.stringify(seal));
+        const actual = await inventory(`${payload}/backend`, 'backend'); await inventory(`${payload}/frontend`, 'frontend', actual);
+        if (JSON.stringify(actual) !== JSON.stringify(entries)) throw fail('BACKUP_INTEGRITY_FAILED');
+        if (sha256(await fs.readFile(`${staging}/manifest.json`)) !== seal.manifestSha256
+            || JSON.stringify(JSON.parse(await fs.readFile(`${staging}/READY`, 'utf8'))) !== JSON.stringify(seal)) throw fail('BACKUP_INTEGRITY_FAILED');
+        await syncDirectory(staging);
+        await publishNoReplace(paths, transactionId, backupId, staging, root);
+        published = true;
+        await syncDirectory(paths.backups); await syncDirectory(paths.admin);
+        return { backupId, root, payload: `${root}/payload`, manifest, runtime };
+    } catch (error) {
+        let stagingPresent, rootPresent;
+        try { stagingPresent = await exists(staging); rootPresent = await exists(root); }
+        catch (inspectionError) { secondaryFailure(error, inspectionError); throw error; }
+        if (!published && !stagingPresent && rootPresent) published = true;
+        if (!published && stagingPresent && !error.publicationUncertain) {
+            try { await privateDirectory(staging); await fs.rm(staging, { recursive: true, force: false }); await syncDirectory(paths.admin); }
+            catch (cleanupError) { secondaryFailure(error, cleanupError); }
+        } else if (published || error.publicationUncertain) {
+            secondaryFailure(error, fail('BACKUP_PUBLICATION_UNCERTAIN'));
+        }
+        throw error;
+    }
 }
 
 async function installCandidate(paths, workspace, preparationId, prepared) {
@@ -243,6 +330,7 @@ async function operation({ base, operation, workspace, preparationId, backupId, 
         return { active: next, backupId: recoverySnapshot.backupId, transactionId };
     } catch (error) {
         let rollbackError;
+        if (error.rollbackError) retain = true;
         if (recoverySnapshot && activationStarted) try { await restoreSnapshot(paths, recoverySnapshot, adapter); } catch (failure) { rollbackError = failure; retain = true; }
         if (activePublished) try { if (activeBytes) await writeAtomic(paths.active, activeBytes); else await fs.unlink(paths.active); }
         catch (failure) { rollbackError ||= failure; retain = true; }
