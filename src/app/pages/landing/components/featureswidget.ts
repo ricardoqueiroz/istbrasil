@@ -140,8 +140,8 @@ import { AccordionModule } from 'primeng/accordion';
 
                         <!-- Links para as páginas /patrono/biografia, /patrono/obra, /patrono/museu -->
                         <div class="mt-8 flex flex-col md:flex-row gap-8 justify-center" style="max-width: 800px; width: 100%;">
-                            <a routerLink="/patrono/biografia" class="px-6 py-3 bg-primary text-white font-semibold rounded-lg hover:bg-primary-dark transition-colors w-full md:w-56 text-center"><i class="layout-menuitem-icon pi pi-fw pi-info-circle mr-2"></i><span class="layout-menuitem-text ng-tns-c207508854-18">Biografia</span></a> 
-                            <a routerLink="/patrono/obra" class="px-6 py-3 bg-primary text-white font-semibold rounded-lg hover:bg-primary-dark transition-colors w-full md:w-56 text-center"><i class="layout-menuitem-icon pi-fw  pi pi-volume-up mr-2"></i><span class="layout-menuitem-text ng-tns-c207508854-18">Obra Musical</span></a> 
+                            <a routerLink="/patrono/biografia" class="px-6 py-3 bg-primary text-white font-semibold rounded-lg hover:bg-primary-dark transition-colors w-full md:w-56 text-center"><i class="layout-menuitem-icon pi pi-fw pi-info-circle mr-2"></i><span class="layout-menuitem-text ng-tns-c207508854-18">Biografia</span></a>
+                            <a routerLink="/patrono/obra" class="px-6 py-3 bg-primary text-white font-semibold rounded-lg hover:bg-primary-dark transition-colors w-full md:w-56 text-center"><i class="layout-menuitem-icon pi-fw  pi pi-volume-up mr-2"></i><span class="layout-menuitem-text ng-tns-c207508854-18">Obra Musical</span></a>
                             <a routerLink="/patrono/discografia" class="px-6 py-3 bg-primary text-white font-semibold rounded-lg hover:bg-primary-dark transition-colors w-full md:w-56 text-center"><i class="layout-menuitem-icon pi pi-fw pi-fw pi-headphones mr-2"></i><span class="layout-menuitem-text ng-tns-c207508854-18">Discografia</span></a>
                         </div>
 
@@ -151,7 +151,7 @@ import { AccordionModule } from 'primeng/accordion';
                         </div>
 
                         <div class="mt-8 flex flex-col md:flex-row gap-8 justify-center" style="max-width: 800px; width: 100%;">
-                            <p-accordion value="0">
+                            <p-accordion value="null">
                                 <p-accordion-panel value="0">
                                     <p-accordion-header>
                                         <div  class="flex items-center text-left">

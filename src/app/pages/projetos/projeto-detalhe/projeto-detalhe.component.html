@@ -1,0 +1,54 @@
+<div class="projeto-pagina">
+  <app-topbar [showMenuButton]="false"></app-topbar>
+  <main class="projeto-container" [attr.aria-busy]="carregando">
+    <a routerLink="/projetos" class="projeto-voltar"><i class="pi pi-arrow-left" aria-hidden="true"></i> Voltar aos projetos</a>
+    <div *ngIf="carregando" role="status" aria-label="Carregando projeto" class="projeto-estado"><p-skeleton height="20rem"></p-skeleton></div>
+    <div *ngIf="naoEncontrado" role="status" class="projeto-estado"><h1>Projeto não encontrado</h1><p>O projeto solicitado não está disponível.</p></div>
+    <div *ngIf="erro" role="alert" class="projeto-estado"><h1>Não foi possível carregar o projeto</h1><p>Tente novamente para consultar as informações.</p><p-button label="Tentar novamente" (onClick)="carregar()"></p-button></div>
+    <article *ngIf="projeto as p" class="projeto-artigo">
+      <img [src]="imagemSegura(p.banner_capa_url || p.imagem_card_url)" (error)="imagemFalhou($event)" [alt]="p.nome" class="projeto-capa">
+      <header class="projeto-cabecalho">
+        <p-tag [value]="p.status" severity="info"></p-tag>
+        <h1>{{ p.nome }}</h1>
+        <p *ngIf="p.subtitulo" class="projeto-subtitulo">{{ p.subtitulo }}</p>
+        <div *ngIf="p.tipicidade || p.tipologia" class="projeto-classificacoes" aria-label="Classificação do projeto">
+          <span *ngIf="p.tipicidade" class="projeto-etiqueta">{{ p.tipicidade }}</span>
+          <span *ngIf="p.tipologia" class="projeto-etiqueta projeto-etiqueta-secundaria">{{ p.tipologia }}</span>
+        </div>
+      </header>
+      <div class="projeto-conteudo">
+        <section class="projeto-apresentacao" aria-labelledby="titulo-apresentacao">
+          <h2 id="titulo-apresentacao">Sobre o projeto</h2>
+          <div *ngIf="p.descricao_completa; else resumo" class="descricao projeto-descricao" [innerHTML]="p.descricao_completa"></div>
+          <ng-template #resumo><p class="projeto-descricao">{{ p.resumo }}</p></ng-template>
+        </section>
+        <section *ngIf="p.local_nome || p.endereco || p.cidade || p.estado || p.data_inicio || p.data_fim || p.mecanismo" class="projeto-informacoes" aria-labelledby="titulo-informacoes">
+          <h2 id="titulo-informacoes">Informações gerais</h2>
+          <dl class="projeto-metadados">
+          <div *ngIf="p.local_nome || p.endereco || p.cidade || p.estado"><dt><i class="pi pi-map-marker" aria-hidden="true"></i> Localização</dt><dd><span *ngIf="p.local_nome">{{ p.local_nome }}</span><span *ngIf="p.endereco">{{ p.endereco }}</span><span *ngIf="p.cidade || p.estado">{{ p.cidade }}<ng-container *ngIf="p.cidade && p.estado"> / </ng-container>{{ p.estado }}</span></dd></div>
+          <div *ngIf="p.data_inicio"><dt><i class="pi pi-calendar" aria-hidden="true"></i> Início</dt><dd>{{ p.data_inicio | date:'dd/MM/yyyy' }}</dd></div>
+          <div *ngIf="p.data_fim"><dt><i class="pi pi-calendar" aria-hidden="true"></i> Término</dt><dd>{{ p.data_fim | date:'dd/MM/yyyy' }}</dd></div>
+          <div *ngIf="p.mecanismo"><dt><i class="pi pi-wallet" aria-hidden="true"></i> Mecanismo de financiamento</dt><dd>{{ p.mecanismo }}</dd></div>
+        </dl>
+        </section>
+        <section *ngIf="p.documentos?.length" class="projeto-documentos" aria-labelledby="titulo-documentos">
+          <h2 id="titulo-documentos">Documentos</h2>
+          <p class="projeto-secao-introducao">Consulte os materiais de apresentação e os documentos do projeto.</p>
+          <ul class="projeto-documentos-lista"><li *ngFor="let d of p.documentos">
+            <a *ngIf="documentoSeguro(d.arquivo_url) as url; else indisponivel" [href]="url" target="_blank" rel="noopener noreferrer" class="projeto-documento" [attr.aria-label]="d.titulo + ', abre em nova aba'">
+              <span class="projeto-documento-icone"><i [class]="d.formato?.toUpperCase() === 'PDF' ? 'pi pi-file-pdf' : 'pi pi-file'" aria-hidden="true"></i></span>
+              <span class="projeto-documento-texto"><span class="projeto-documento-titulo">{{ d.titulo }}</span><span *ngIf="d.formato || d.tamanho" class="projeto-documento-meta"><span *ngIf="d.formato">{{ d.formato }}</span><span *ngIf="d.formato && d.tamanho" aria-hidden="true">&middot;</span><span *ngIf="d.tamanho">{{ d.tamanho }}</span></span></span>
+              <i class="pi pi-external-link projeto-documento-externo" aria-hidden="true"></i>
+            </a>
+            <ng-template #indisponivel><div class="projeto-documento projeto-documento-indisponivel"><i class="pi pi-file" aria-hidden="true"></i><span class="projeto-documento-texto"><span class="projeto-documento-titulo">{{ d.titulo }}</span><span class="projeto-documento-meta">Link indisponível</span></span></div></ng-template>
+          </li></ul>
+        </section>
+        <ng-container *ngIf="cta as destino">
+          <div class="projeto-acao"><a *ngIf="destino.tipoLink === 'interno'; else externo" [routerLink]="destino.link" class="projeto-cta">{{ p.texto_cta || 'Saiba mais' }} <i class="pi pi-arrow-right" aria-hidden="true"></i></a>
+          <ng-template #externo><a [href]="destino.link" target="_blank" rel="noopener noreferrer" class="projeto-cta" [attr.aria-label]="(p.texto_cta || 'Saiba mais') + ', abre em nova aba'">{{ p.texto_cta || 'Saiba mais' }} <i class="pi pi-external-link" aria-hidden="true"></i></a></ng-template></div>
+        </ng-container>
+      </div>
+    </article>
+  </main>
+  <footer-widget></footer-widget>
+</div>

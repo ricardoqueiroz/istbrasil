@@ -58,3 +58,9 @@ src/environments/environment.ts
 # Demo/inspection only, not shipped to production
 src/app/pages/uikit/
 .env_old
+
+# Arquivos temporários de desenvolvimento e testes
+.tmp/
+
+# Documentos armazenados no servidor
+istbrasil.private/projetos/

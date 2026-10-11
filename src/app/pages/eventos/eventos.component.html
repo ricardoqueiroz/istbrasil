@@ -1,14 +1,18 @@
 <div class="bg-slate-50 min-h-screen pb-20 font-sans text-slate-800">
   <app-topbar [showMenuButton]="false"></app-topbar>
-  
+
   <header class="relative ist-background rounded-b-[2.5rem] overflow-hidden mb-12 mt-[50px]">
     <div class="absolute inset-0 opacity-10 pointer-events-none bg-[radial-gradient(circle_at_top_right,_var(--tw-gradient-stops))] from-white via-transparent to-transparent"></div>
-    
+
     <div class="container mx-auto px-6 py-12 flex flex-col items-center text-center relative z-10">
-      <div class="mb-6 p-4 bg-white rounded-full border border-white/20 shadow-lg inline-block">
-        <img src="assets/images/logo-ist.png" alt="Hero Image" class="w-9/12 md:w-auto max-h-32 object-contain mx-auto">
-      </div>
-      
+
+      <!-- Link para a página inicial -->
+      <a routerlink="/" href="/">
+          <div class="p-4 bg-white rounded-full border border-white/20 shadow-lg inline-block">
+            <img src="assets/images/logo-ist.png" alt="Voltar" class="w-9/12 md:w-auto max-h-32 object-contain mx-auto">
+          </div>
+      </a>
+
       <h1 class="text-3xl md:text-5xl font-bold text-emerald-900 mb-3 tracking-tight">
           Eventos & Projetos Culturais
       </h1>
@@ -20,7 +24,7 @@
 
   <!-- CONTEÚDO PRINCIPAL -->
   <main class="container mx-auto px-4 md:px-6 lg:px-8">
-    
+
     <!-- SKELETON LOADING (Exibido enquanto os dados carregam) -->
     <div *ngIf="carregando" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
       <div *ngFor="let item of [6-8]" class="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm">
@@ -41,20 +45,20 @@
 
     <!-- GRID DE CARDS DOS EVENTOS (PrimeNG + Tailwind) -->
     <div *ngIf="!carregando && eventos.length > 0" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
-      
-      <div *ngFor="let evento of eventos" 
+
+      <div *ngFor="let evento of eventos"
            class="group bg-white rounded-2xl border border-slate-200 shadow-sm hover:shadow-xl hover:border-emerald-500 transition-all duration-300 flex flex-col overflow-hidden cursor-pointer"
            (click)="abrirEvento(evento.slug)">
-        
+
         <!-- Imagem do Card com Badge de Status -->
         <div class="relative h-48 w-full overflow-hidden bg-slate-100">
-          <img [src]="evento.imagem_card_url || 'assets/images/eventos/default-event.jpg'" 
-               [alt]="evento.nome" 
+          <img [src]="evento.imagem_card_url || 'assets/images/eventos/default-event.jpg'"
+               [alt]="evento.nome"
                class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500">
-          
+
           <!-- Badge de Status do PrimeNG -->
           <div class="absolute top-3 right-3 z-10">
-            <p-tag [value]="getLabel(evento.status)" 
+            <p-tag [value]="getLabel(evento.status)"
                    [severity]="getSeverity(evento.status)"
                    [rounded]="true">
             </p-tag>
@@ -102,10 +106,10 @@
             <span class="text-xs font-bold text-slate-500 uppercase">
               {{ evento.valor_inscricao || 'Gratuito' }}
             </span>
-            
-            <p-button label="Saiba Mais" 
-                      icon="pi pi-arrow-right" 
-                      iconPos="right" 
+
+            <p-button label="Saiba Mais"
+                      icon="pi pi-arrow-right"
+                      iconPos="right"
                       styleClass="p-button-emerald p-button-sm p-button-rounded">
             </p-button>
           </div>

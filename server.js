@@ -24,6 +24,8 @@ import obraRoutes from './src/routes/obra.routes.js';
 import contactRoutes from './src/routes/contact.routes.js';
 import usuariosRoutes from './src/routes/usuarios.routes.js';
 import eventosRoutes from './src/routes/eventos.routes.js';
+import projetosRoutes from './src/routes/projetos.routes.js';
+import projetosDocumentosRoutes from './src/routes/projetosDocumentos.routes.js';
 import adminRoutes from './src/routes/admin.routes.js';
 import juradoRoutes from './src/routes/jurado.routes.js';
 
@@ -62,8 +64,8 @@ const {
 const paypalEnabled = PAYPAL_ENABLED !== 'false';
 
 // Define o ambiente baseando-se em variável ou fixa para Production se for o caso
-const paypalEnvironment = (PAYPAL_ENV === 'production') 
-    ? Environment.Production 
+const paypalEnvironment = (PAYPAL_ENV === 'production')
+    ? Environment.Production
     : Environment.Sandbox;
 
 let paypalClient;
@@ -83,7 +85,7 @@ if (paypalEnabled) {
         },
     });
 
-    // Se você usa o ordersController dentro de paypal.routes.js, 
+    // Se você usa o ordersController dentro de paypal.routes.js,
     // certifique-se de estar exportando ou passando este 'client' para lá.
     // Se as rotas criam sua própria instância, verifique o arquivo paypal.routes.js também!
     paypalClient = client;
@@ -103,10 +105,12 @@ app.use('/api/timeline', timelineRoutes);
 app.use('/api/obra', obraRoutes);
 app.use('/api/usuarios', usuariosRoutes);
 app.use('/api/eventos', eventosRoutes);
+app.use('/api/projetos', projetosRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/jurado', juradoRoutes);
 
 // --- Arquivos Estáticos ---
+app.use('/istbrasil.private/projetos', projetosDocumentosRoutes);
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 

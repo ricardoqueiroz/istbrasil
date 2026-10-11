@@ -1,13 +1,17 @@
 <div class="bg-slate-50 min-h-screen pb-20 font-sans text-slate-800">
-      
+
       <header class="relative ist-background rounded-b-[2.5rem] overflow-hidden mb-12">
         <div class="absolute inset-0 opacity-10 pointer-events-none bg-[radial-gradient(circle_at_top_right,_var(--tw-gradient-stops))] from-white via-transparent to-transparent"></div>
-        
+
         <div class="container mx-auto px-6 py-12 flex flex-col items-center text-center relative z-10">
-          <div class="mb-6 p-4 bg-white rounded-full border border-white/20 shadow-lg inline-block">
-            <img src="assets/images/logo-ist.png" alt="Hero Image" class="w-9/12 md:w-auto max-h-32 object-contain mx-auto">
-          </div>
-          
+
+          <!-- Link para a página inicial -->
+          <a routerlink="/" href="/">
+              <div class="p-4 bg-white rounded-full border border-white/20 shadow-lg inline-block">
+                <img src="assets/images/logo-ist.png" alt="Voltar" class="w-9/12 md:w-auto max-h-32 object-contain mx-auto">
+              </div>
+          </a>
+
           <h1 class="text-3xl md:text-5xl font-bold text-emerald-900 mb-3 tracking-tight">
             IST Editora
           </h1>
@@ -18,7 +22,7 @@
       </header>
 
       <main class="container mx-auto px-4 md:px-6 lg:px-8">
-      
+
         <section class="max-w-4xl mx-auto bg-white rounded-2xl shadow-sm border border-slate-100 p-8 md:p-10 mb-10 relative overflow-hidden">
           <div class="absolute top-0 left-0 h-full w-1 bg-emerald-500"></div>
 
@@ -28,7 +32,7 @@
             </span>
             IST Editora: A Voz e a Memória da Amazônia
           </h2>
-          
+
           <div class="prose prose-slate max-w-none text-slate-600  text-lg leading-relaxed space-y-4 text-justify md:text-left">
             <p>
               A <strong>IST Editora</strong>, o braço editorial do Instituto Sebastião Tapajós, nasce com uma missão clara: ser um elo entre o conhecimento e o leitor. Nosso objetivo é fomentar a cultura e a ciência através da produção de livros de alta qualidade editorial, atuando como parceira estratégica de autores independentes, centros acadêmicos e bibliotecas.
@@ -76,14 +80,14 @@
                     {{ books.length }} Livros Disponíveis
                 </span>
             </div>
-    
+
             <p-dataView [value]="books" [layout]="layout">
                 <ng-template #header>
                     <div class="flex justify-end">
-                        <p-selectButton 
-                            [(ngModel)]="layout" 
-                            [options]="options" 
-                            optionLabel="label" 
+                        <p-selectButton
+                            [(ngModel)]="layout"
+                            [options]="options"
+                            optionLabel="label"
                             optionValue="value"
                             [allowEmpty]="false">
                             <ng-template let-item>
@@ -121,10 +125,10 @@
                                         <span class="text-xl font-bold text-emerald-600">{{ 'R$ ' + book.price }}</span>
                                         <div class="flex gap-2">
                                             <p-button icon="pi pi-heart" [outlined]="true"></p-button>
-                                            <p-button 
-                                                icon="pi pi-shopping-cart" 
-                                                class="flex-auto md:flex-initial whitespace-nowrap" 
-                                                [label]="book.inventoryStatus === 'OUTOFSTOCK' ? 'Sold Out' : 'Comprar'" 
+                                            <p-button
+                                                icon="pi pi-shopping-cart"
+                                                class="flex-auto md:flex-initial whitespace-nowrap"
+                                                [label]="book.inventoryStatus === 'OUTOFSTOCK' ? 'Sold Out' : 'Comprar'"
                                                 [disabled]="book.inventoryStatus === 'OUTOFSTOCK'"
                                                 [routerLink]="['/editora/livro']"></p-button>
                                         </div>
@@ -169,8 +173,8 @@
                 </ng-template>
             </p-dataView>
       </section>
-  
+
     </main>
-    
+
   </div>
 <footer-widget></footer-widget>

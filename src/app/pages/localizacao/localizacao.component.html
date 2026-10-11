@@ -3,13 +3,16 @@
             <header class="relative ist-background rounded-b-[2.5rem] overflow-hidden mb-12">
                 <!-- Elementos decorativos de fundo -->
                 <div class="absolute inset-0 opacity-10 pointer-events-none bg-[radial-gradient(circle_at_top_right,_var(--tw-gradient-stops))] from-emerald-500 via-transparent to-transparent"></div>
-                
+
                 <div class="container mx-auto px-6 py-12 flex flex-col items-center text-center relative z-10">
-                    <!-- Imagem de Topo -->
-                    <div class="mb-6 p-4 bg-white rounded-full border border-white/20 shadow-lg inline-block animate-fade-in-down">
-                        <img src="assets/images/logo-ist.png" alt="Logo Instituto Sebastião Tapajós" class="w-9/12 md:w-auto max-h-32 object-contain mx-auto">
-                    </div>
-                    
+
+                    <!-- Link para a página inicial -->
+                    <a routerlink="/" href="/">
+                        <div class="p-4 bg-white rounded-full border border-white/20 shadow-lg inline-block">
+                            <img src="assets/images/logo-ist.png" alt="Voltar" class="w-9/12 md:w-auto max-h-32 object-contain mx-auto">
+                        </div>
+                    </a>
+
                     <h1 class="text-3xl md:text-5xl font-bold text-emerald-900 mb-3 tracking-tight font-serif">
                         Onde Estamos
                     </h1>
@@ -22,7 +25,7 @@
             <!-- CONTEÚDO PRINCIPAL -->
             <div class="container max-w-4xl mx-auto px-6 pb-12">
                 <div class="grid grid-cols-1 lg:grid-cols-2 gap-12 items-start">
-                    
+
                     <!-- Coluna de Texto Institucional -->
                     <div class="flex flex-col gap-6 animate-fade-in-left">
                         <div>
@@ -61,13 +64,13 @@
                             <ng-template pTemplate="header">
                                 <!-- Google Maps Embed (Iframe responsivo) -->
                                 <div class="relative w-full h-80 bg-gray-200">
-                                    <iframe 
-                                        width="100%" 
-                                        height="100%" 
-                                        frameborder="0" 
-                                        scrolling="no" 
-                                        marginheight="0" 
-                                        marginwidth="0" 
+                                    <iframe
+                                        width="100%"
+                                        height="100%"
+                                        frameborder="0"
+                                        scrolling="no"
+                                        marginheight="0"
+                                        marginwidth="0"
                                         title="Mapa IST Santarém"
                                         src="https://maps.google.com/maps?q=-2.4196351,-54.81521&hl=pt-br&z=16&amp;output=embed">
                                     </iframe>
@@ -96,14 +99,14 @@
                                     </div>
                                 </div>
 
-                                <a href="https://www.google.com/maps/place/IST+-+Instituto+Sebasti%C3%A3o+Tapaj%C3%B3s/@-2.4196351,-54.81521,1086m/data=!3m1!1e3!4m6!3m5!1s0x92885724fcf7a317:0xf1c75e32ab4ab616!8m2!3d-2.4196351!4d-54.81521!16s%2Fg%2F11q4j3zh1q!5m1!1e4?entry=ttu" 
-                                   target="_blank" 
-                                   rel="noopener noreferrer" 
+                                <a href="https://www.google.com/maps/place/IST+-+Instituto+Sebasti%C3%A3o+Tapaj%C3%B3s/@-2.4196351,-54.81521,1086m/data=!3m1!1e3!4m6!3m5!1s0x92885724fcf7a317:0xf1c75e32ab4ab616!8m2!3d-2.4196351!4d-54.81521!16s%2Fg%2F11q4j3zh1q!5m1!1e4?entry=ttu"
+                                   target="_blank"
+                                   rel="noopener noreferrer"
                                    title="Traçar Rota no Google Maps para o Instituto Sebastião Tapajós"
                                    class="no-underline">
-                                    <button pButton pRipple 
-                                            label="Traçar Rota no Google Maps" 
-                                            icon="pi pi-external-link" 
+                                    <button pButton pRipple
+                                            label="Traçar Rota no Google Maps"
+                                            icon="pi pi-external-link"
                                             class="w-full p-button-outlined p-button-success font-bold">
                                     </button>
                                 </a>

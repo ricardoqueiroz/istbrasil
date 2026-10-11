@@ -128,9 +128,9 @@ export const appRoutes: Routes = [
         component: AppLayout,
         children: [
             { path: '', component: EditoraComponent },
-            { 
-                path: 'livro/:id', 
-                loadComponent: () => import('./app/pages/editora/livro/livro.component').then(m => m.LivroComponent) 
+            {
+                path: 'livro/:id',
+                loadComponent: () => import('./app/pages/editora/livro/livro.component').then(m => m.LivroComponent)
             },
             { path: 'checkout', component: CheckoutComponent }
         ]
@@ -241,6 +241,8 @@ export const appRoutes: Routes = [
         path: 'eventos/:slug',
         loadComponent: () => import('./app/pages/eventos/evento-detalhe/evento-detalhe.component').then(m => m.EventoDetalheComponent)
     },
+    { path: 'projetos', loadComponent: () => import('./app/pages/projetos/projetos.component').then(m => m.ProjetosComponent) },
+    { path: 'projetos/:slug', loadComponent: () => import('./app/pages/projetos/projeto-detalhe/projeto-detalhe.component').then(m => m.ProjetoDetalheComponent) },
     { path: 'notfound', component: Notfound },
     { path: 'auth', loadChildren: () => import('./app/pages/auth/auth.routes') },
     { path: '**', redirectTo: '/notfound' }

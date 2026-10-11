@@ -32,7 +32,8 @@ import { RouterModule } from '@angular/router';
                     </div>
                 </a>
 
-                <a [routerLink]="['/projetos/camerata']" class="no-underline">
+                <!-- Grupo musical --><!--
+                <a [routerLink]="['/projetos']" class="no-underline">
                     <div class="grid grid-cols-12 gap-4 mt-10 mb-10 p-6 md:p-10 items-center bg-surface-0 dark:bg-surface-900 shadow-lg rounded-3xl border border-surface-200 dark:border-surface-700">
                         <div class="col-span-12 lg:col-span-8 text-left">
                             <div class="leading-none text-surface-900 dark:text-surface-0 text-3xl font-bold mb-4" style="color: var(--color-yellow-500)">Camerata Amazônica Tapajós</div>
@@ -53,8 +54,10 @@ import { RouterModule } from '@angular/router';
                         </div>
                     </div>
                 </a>
+                <-- Grupo musical -->
 
-                <a [routerLink]="['/projetos/festival-violoes-2026']" class="no-underline">
+                <!-- Festival de Violões -->
+                <a [routerLink]="['/eventos/ii-festival-de-violoes-sebastiao-tapajos']" class="no-underline">
                     <div class="grid grid-cols-12 gap-4 mb-10 p-6 md:p-10 items-center bg-surface-0 dark:bg-surface-900 shadow-lg rounded-3xl border border-surface-200 dark:border-surface-700">
                         <div class="col-span-12 lg:col-span-8 text-left">
                             <div class="leading-none text-surface-900 dark:text-surface-0 text-3xl font-bold mb-4" style="color: var(--color-yellow-500)">2º Festival de Violões Sebastião Tapajós</div>
@@ -63,10 +66,10 @@ import { RouterModule } from '@angular/router';
                                     <strong style="color: var(--p-gray-400)">Santarém - Pará - Brasil - 2026</strong>
                                 </div>
                                 <div class="mb-4">
-                                    <strong>Em Breve</strong>
+                                    <strong>Em Andamento</strong>
                                 </div>
                                 <div>
-                                    A ser realizado no segundo semestre de 2026, o <em><strong>2º Festival de Violão Amazônico Sebastião Tapajós</strong></em> visa celebrar e perpetuar o legado do renomado violonista. O evento reunirá músicos, estudantes e entusiastas do violão para uma série de apresentações, workshops e competições, promovendo a cultura amazônica e a música brasileira em um cenário internacional.
+                                    A ser realizado a partir de outubro de 2026, o <em><strong>2º Festival de Violões Sebastião Tapajós</strong></em> visa celebrar e perpetuar o legado do renomado violonista. O evento reunirá músicos, estudantes e entusiastas do violão para uma série de apresentações, workshops e competições, promovendo a cultura amazônica e a música brasileira.
                                 </div>
                             </div>
                         </div>
