@@ -1,4 +1,20 @@
 @use './loja-catalogo.component.scss';
+// A regra compartilhada de links sobrepoe a cor de texto do botao Aura.
+// Manter contraste tambem no hover, usando a paleta primaria do tema.
+.vazio a.p-button {
+    color: var(--p-surface-0);
+    background: var(--p-primary-700);
+    border-color: var(--p-primary-700);
+}
+.vazio a.p-button:hover {
+    color: var(--p-surface-0);
+    background: var(--p-primary-800);
+    border-color: var(--p-primary-800);
+}
+.vazio a.p-button:focus-visible {
+    outline-color: var(--p-primary-700);
+    box-shadow: 0 0 0 3px var(--p-surface-0);
+}
 .acoes { display: flex; flex-wrap: wrap; gap: .75rem; margin-bottom: 1.5rem; }
 .itens { list-style: none; padding: 0; margin: 0; }
 .item { display: grid; grid-template-columns: 5rem minmax(0, 1fr) auto auto; align-items: center; gap: 1.25rem; background: var(--surface-card); border: 1px solid var(--surface-border); border-radius: .75rem; padding: 1.25rem; margin-bottom: 1rem; }
