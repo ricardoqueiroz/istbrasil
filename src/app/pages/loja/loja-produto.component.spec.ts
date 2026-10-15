@@ -25,6 +25,73 @@ describe('LojaProdutoComponent', () => {
     const pagina = (id = '1') => { params.next(convertToParamMap({ id })); fixture = TestBed.createComponent(LojaProdutoComponent); fixture.detectChanges(); };
     const carregar = () => { pagina(); http.expectOne(`${url}/produtos/1`).flush(livro); fixture.detectChanges(); };
     const texto = () => fixture.nativeElement.textContent as string;
+    const carregarDescricao = (descricao: string | null) => {
+        pagina();
+        http.expectOne(`${url}/produtos/1`).flush({ ...livro, descricao });
+        fixture.detectChanges();
+    };
+
+    it('renderiza JSON em linhas separadas, com chaves em negrito e na ordem recebida', () => {
+        carregarDescricao(JSON.stringify({ Title: 'Livro de partituras', Content: '105 partituras', Format: 'PDF-XA, A4' }));
+        const linhas = [...fixture.nativeElement.querySelectorAll('[data-testid="descricao-propriedade"]')] as HTMLElement[];
+        expect(linhas.length).toBe(3);
+        expect(linhas.map((linha) => linha.querySelector('strong')?.textContent)).toEqual(['Title:', 'Content:', 'Format:']);
+        expect(linhas.map((linha) => linha.textContent?.trim())).toEqual(['Title: Livro de partituras', 'Content: 105 partituras', 'Format: PDF-XA, A4']);
+        expect(linhas.every((linha) => getComputedStyle(linha).display === 'block')).toBeTrue();
+        expect(Number(getComputedStyle(linhas[0].querySelector('strong')!).fontWeight)).toBeGreaterThanOrEqual(600);
+        expect(fixture.componentInstance.descricao()).toBe('');
+    });
+    it('preserva caracteres especiais, aspas, quebras de linha e normaliza entidades somente uma vez', () => {
+        carregarDescricao(JSON.stringify({ 'Title &amp; Content': 'Música & memória "viva"\n105 partituras &quot;A4&quot; &amp;lt;b&amp;gt;' }));
+        expect(fixture.componentInstance.descricaoPropriedades()).toEqual([
+            { chave: 'Title & Content', valor: 'Música & memória "viva"\n105 partituras "A4" &lt;b&gt;' }
+        ]);
+        expect(fixture.nativeElement.querySelector('[data-testid="descricao"]').textContent).toContain('Música & memória "viva"');
+    });
+    it('JSON invalido permanece texto seguro sem impedir os detalhes', () => {
+        const descricao = '{"Title": "Livro", <img src=x onerror=alert(1)>';
+        carregarDescricao(descricao);
+        expect(fixture.componentInstance.descricaoPropriedades()).toEqual([]);
+        const elemento = fixture.nativeElement.querySelector('[data-testid="descricao"]');
+        expect(elemento.textContent).toBe(descricao);
+        expect(elemento.querySelector('img')).toBeNull();
+        expect(texto()).toContain('SKU1');
+    });
+    for (const descricao of ['null', '[]', '42', '"texto"', '{"Content":{"nested":"valor"}}']) {
+        it(`JSON sem objeto simples de valores textuais usa fallback: ${descricao}`, () => {
+            carregarDescricao(descricao);
+            expect(fixture.componentInstance.descricaoPropriedades()).toEqual([]);
+            expect(fixture.nativeElement.querySelector('[data-testid="descricao"]').textContent).toBe(descricao);
+        });
+    }
+    for (const descricao of ['', null, '   ', '{}']) {
+        it(`descricao vazia nao exibe secao: ${JSON.stringify(descricao)}`, () => {
+            carregarDescricao(descricao);
+            expect(fixture.nativeElement.querySelector('.descricao')).toBeNull();
+            expect(fixture.componentInstance.descricaoPropriedades()).toEqual([]);
+        });
+    }
+    it('chaves e valores HTML maliciosos em JSON sao exibidos exclusivamente como texto', () => {
+        carregarDescricao(JSON.stringify({ '<img src=x onerror=alert(1)>': '<script>alert(2)</script> &lt;iframe src=x&gt;' }));
+        const elemento = fixture.nativeElement.querySelector('[data-testid="descricao"]');
+        expect(elemento.querySelector('img,script,iframe')).toBeNull();
+        expect(elemento.querySelector('strong').textContent).toBe('<img src=x onerror=alert(1)>:');
+        expect(elemento.textContent).toContain('<script>alert(2)</script> <iframe src=x>');
+    });
+    it('troca de produto limpa propriedades anteriores antes da nova resposta', () => {
+        carregarDescricao('{"Title":"Livro 1"}');
+        params.next(convertToParamMap({ id: '2' })); fixture.detectChanges();
+        expect(fixture.componentInstance.descricaoPropriedades()).toEqual([]);
+        http.expectOne(`${url}/produtos/2`).flush({ ...livro, id: 2, descricao: 'Texto simples do livro 2' }); fixture.detectChanges();
+        expect(fixture.nativeElement.querySelector('[data-testid="descricao"]').textContent).toBe('Texto simples do livro 2');
+    });
+    it('descricao estruturada preserva adicao e links de navegacao', () => {
+        carregarDescricao('{"Title":"Livro"}');
+        fixture.nativeElement.querySelector('[data-testid="adicionar"] button').click(); fixture.detectChanges();
+        expect(TestBed.inject(CarrinhoService).ids()).toEqual([1]);
+        expect(fixture.nativeElement.querySelector('a[href="/loja"]')).not.toBeNull();
+        expect(fixture.nativeElement.querySelector('a[href="/loja/carrinho"]').textContent).toContain('Carrinho (1)');
+    });
 
     it('mostra carregamento', () => { pagina(); expect(texto()).toContain('Carregando produto'); http.expectOne(`${url}/produtos/1`).flush(livro); });
     for (const id of ['1', '2']) it(`consulta ID valido ${id}`, () => { pagina(id); http.expectOne(`${url}/produtos/${id}`).flush({ ...livro, id: Number(id) }); fixture.detectChanges(); expect(texto()).toContain('SKU1'); expect(texto()).toContain('Inglês'); expect(texto()).toMatch(/95,00/); });

@@ -15,7 +15,17 @@
                     <p-button [label]="carrinho.contem(livro.id) ? 'Adicionado ao carrinho' : 'Adicionar ao carrinho'" [icon]="carrinho.contem(livro.id) ? 'pi pi-check' : 'pi pi-plus'" [disabled]="carrinho.contem(livro.id) || !livro.disponivel" (onClick)="adicionar()" data-testid="adicionar" />
                     @if (aviso()) { <p-message severity="warn">{{ aviso() }}</p-message> }
                 </div>
-                @if (descricao()) { <section class="descricao"><h2>Sobre o livro</h2><p data-testid="descricao">{{ descricao() }}</p></section> }
+                @if (descricaoPropriedades().length || descricao()) {
+                    <section class="descricao"><h2>Sobre o livro</h2>
+                        @if (descricaoPropriedades().length) {
+                            <div data-testid="descricao">
+                                @for (item of descricaoPropriedades(); track $index) {
+                                    <p data-testid="descricao-propriedade"><strong>{{ item.chave }}:</strong> {{ item.valor }}</p>
+                                }
+                            </div>
+                        } @else { <p data-testid="descricao">{{ descricao() }}</p> }
+                    </section>
+                }
             </article>
         }
     </section>
