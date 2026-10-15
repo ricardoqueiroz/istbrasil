@@ -1,0 +1,136 @@
+import { pool } from '../config/db.js';
+import sanitizeHtml from 'sanitize-html';
+
+export class ErroLoja extends Error {
+    constructor(status, codigo, mensagem) {
+        super(mensagem);
+        this.status = status;
+        this.codigo = codigo;
+    }
+}
+
+const invalido = () => new ErroLoja(400, 'ENTRADA_INVALIDA', 'Entrada inválida.');
+const indisponivel = () => new ErroLoja(422, 'PRODUTO_INDISPONIVEL', 'Um ou mais produtos estão indisponíveis.');
+const idValido = (id) => Number.isSafeInteger(id) && id > 0 && id <= 2147483647;
+export const validarProdutoId = (valor) => {
+    if (typeof valor !== 'string' || !/^[1-9]\d{0,9}$/.test(valor) || !idValido(Number(valor))) throw invalido();
+    return Number(valor);
+};
+export const validarCategoria = (slug) => {
+    if (slug !== undefined && (typeof slug !== 'string' || slug.length > 100 || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug))) throw invalido();
+    return slug;
+};
+
+// mysql2 devolve DECIMAL como string: nenhuma multiplicacao de ponto flutuante.
+export const decimalParaCentavos = (valor) => {
+    if (typeof valor !== 'string' || !/^\d+\.\d{2}$/.test(valor)) return null;
+    const centavos = BigInt(valor.replace('.', ''));
+    return centavos > 0n && centavos <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(centavos) : null;
+};
+
+const texto = (valor) => valor == null ? null : sanitizeHtml(String(valor), { allowedTags: [], allowedAttributes: {} });
+const imagemPublica = (valor) => typeof valor === 'string'
+    && /^\/?assets\/images\/(?:[a-zA-Z0-9_-]+\/)*[a-zA-Z0-9_-]+\.(?:png|jpe?g|webp|avif|gif)$/i.test(valor) ? valor : null;
+
+const validarItens = (entrada) => {
+    if (!entrada || typeof entrada !== 'object' || Array.isArray(entrada)
+        || Object.keys(entrada).length !== 1 || !Object.hasOwn(entrada, 'itens')
+        || !Array.isArray(entrada.itens) || entrada.itens.length > 100) throw invalido();
+    const ids = new Set();
+    for (const item of entrada.itens) {
+        if (!item || typeof item !== 'object' || Array.isArray(item)
+            || Object.keys(item).length !== 2 || !Object.hasOwn(item, 'produtoId')
+            || !Object.hasOwn(item, 'quantidade') || !idValido(item.produtoId)
+            || !Number.isInteger(item.quantidade)) throw invalido();
+        if (item.quantidade !== 1 || ids.has(item.produtoId)) {
+            throw new ErroLoja(422, 'ITENS_INVALIDOS', 'Cada título digital permite uma única unidade, sem duplicatas.');
+        }
+        ids.add(item.produtoId);
+    }
+    return entrada.itens;
+};
+
+export const criarLojaCatalogoService = ({ db = pool, agora = () => new Date() } = {}) => {
+    const lerCatalogo = async (operacao) => {
+        const conexao = await db.getConnection();
+        try {
+            await conexao.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ');
+            await conexao.query('START TRANSACTION WITH CONSISTENT SNAPSHOT, READ ONLY');
+            const [categorias] = await conexao.query('SELECT id, nome, slug, categoria_pai_id, ativo, ordem FROM ist_loja_categorias ORDER BY ordem, id');
+            const mapa = new Map(categorias.map((c) => [c.id, c]));
+            const caminho = (id) => {
+                const vistos = new Set();
+                while (id !== null) {
+                    const categoria = mapa.get(id);
+                    if (!categoria || categoria.ativo !== 1 || vistos.has(id)) return null;
+                    vistos.add(id);
+                    id = categoria.categoria_pai_id;
+                }
+                return vistos;
+            };
+            const categoriaPublica = (c) => ({ id: c.id, nome: texto(c.nome), slug: c.slug, categoriaPaiId: c.categoria_pai_id, ordem: c.ordem });
+            const carregarProdutos = async () => {
+                const [linhas] = await conexao.query(`SELECT p.id, p.sku, p.categoria_id, p.ativo,
+                    l.title, l.description, l.language, l.img, l.price, l.currency,
+                    l.onsale, l.format, l.inventory,
+                    (l.file IS NOT NULL AND CHAR_LENGTH(TRIM(l.file)) > 0) AS arquivo_presente
+                    FROM ist_loja_produtos p JOIN ist_livros l ON l.id = p.livro_id
+                    ORDER BY p.ordem, p.id`);
+                return linhas.flatMap((p) => {
+                    const precoCentavos = decimalParaCentavos(p.price);
+                    if (p.ativo !== 1 || !caminho(p.categoria_id) || p.onsale !== 1
+                        || p.format !== 'E-Book' || p.currency !== 'BRL' || precoCentavos === null
+                        || !['Em estoque', 'Poucas unidades'].includes(p.inventory) || p.arquivo_presente !== 1) return [];
+                    return [{ id: p.id, sku: p.sku, titulo: texto(p.title), descricao: texto(p.description),
+                        categoria: categoriaPublica(mapa.get(p.categoria_id)), idioma: texto(p.language),
+                        imagemUrl: imagemPublica(p.img), precoCentavos, moeda: 'BRL', disponivel: true, quantidadeMaxima: 1 }];
+                });
+            };
+            const resultado = await operacao({ categorias, caminho, categoriaPublica, carregarProdutos });
+            await conexao.commit();
+            return resultado;
+        } catch (erro) {
+            await conexao.rollback();
+            throw erro;
+        } finally {
+            conexao.release();
+        }
+    };
+    return {
+        listarCategorias: () => lerCatalogo(async ({ categorias, caminho, categoriaPublica }) =>
+            categorias.filter((c) => caminho(c.id)).map(categoriaPublica)),
+        listarProdutos: (categoria) => {
+            validarCategoria(categoria);
+            return lerCatalogo(async ({ categorias, caminho, carregarProdutos }) => {
+                const produtos = await carregarProdutos();
+                if (categoria === undefined) return produtos;
+                const filtro = categorias.find((c) => c.slug === categoria);
+                return filtro ? produtos.filter((p) => caminho(p.categoria.id).has(filtro.id)) : [];
+            });
+        },
+        obterProduto: (id) => {
+            if (!idValido(id)) throw invalido();
+            return lerCatalogo(async ({ carregarProdutos }) => {
+                const produto = (await carregarProdutos()).find((p) => p.id === id);
+                if (!produto) throw new ErroLoja(404, 'PRODUTO_NAO_ENCONTRADO', 'Produto não encontrado.');
+                return produto;
+            });
+        },
+        cotar: (entrada) => {
+            const itens = validarItens(entrada);
+            return lerCatalogo(async ({ carregarProdutos }) => {
+                const produtos = new Map((await carregarProdutos()).map((p) => [p.id, p]));
+                const cotados = itens.map(({ produtoId }) => {
+                    const produto = produtos.get(produtoId);
+                    if (!produto) throw indisponivel();
+                    return { produtoId, quantidade: 1, produto, precoUnitarioCentavos: produto.precoCentavos, subtotalCentavos: produto.precoCentavos };
+                });
+                const totalCentavos = cotados.reduce((total, item) => total + item.subtotalCentavos, 0);
+                if (!Number.isSafeInteger(totalCentavos)) throw indisponivel();
+                return { itens: cotados, moeda: 'BRL', totalCentavos, geradaEm: agora().toISOString() };
+            });
+        }
+    };
+};
+
+export const { listarCategorias, listarProdutos, obterProduto, cotar } = criarLojaCatalogoService();

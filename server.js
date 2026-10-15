@@ -16,6 +16,7 @@ import {
 
 // Importação das rotas
 import bookRoutes from './src/routes/book.routes.js';
+import lojaRoutes, { tratarErroLoja } from './src/routes/loja.routes.js';
 import releaseRoutes from './src/routes/releases.routes.js';
 import timelineRoutes from './src/routes/timeline.routes.js';
 import obraRoutes from './src/routes/obra.routes.js';
@@ -46,6 +47,9 @@ app.set('trust proxy', 'loopback');
 // Configurações
 app.use(cors());
 app.use(cookieParser());
+// Parser e limite da Loja antes dos parsers globais, inclusive para JSON invalido.
+app.use('/api/loja', lojaRoutes);
+app.use('/api/loja', tratarErroLoja);
 app.use(express.json());
 app.use(bodyParser.json());
 app.use('/api', contactRoutes);
