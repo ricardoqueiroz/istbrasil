@@ -6,6 +6,10 @@ import { tmpdir } from 'node:os';
 import { randomBytes, randomUUID } from 'node:crypto';
 import mysql from 'mysql2/promise';
 import { criarLojaPedidoService } from '../src/services/lojaPedidoService.js';
+import express from 'express';
+import { criarLojaRouter, tratarErroLoja } from '../src/routes/loja.routes.js';
+import { criarLojaSessaoService } from '../src/services/lojaSessaoService.js';
+import { criarConfiguracaoLojaSessao } from '../src/config/lojaSessao.js';
 
 // Opt-in exclusivo para instancia temporaria. Nao usa DB_* nem o pool recuperado.
 test('pedidos em MariaDB temporário isolado', { skip: !process.env.IST_LOJA_TEST_PORT }, async t => {
@@ -278,5 +282,67 @@ test('pedidos em MariaDB temporário isolado', { skip: !process.env.IST_LOJA_TES
         falharItem = true;
         await assert.rejects(auditado.criarPedido(await novaSessao(), dados, randomUUID()), { codigo: 'ERRO_INTERNO' });
         assert.deepEqual(estados, [0, 0]); assert.deepEqual(encerramentos, ['release', 'release']);
+    });
+    const iniciarHttp = async (contexto, pedidoService = service) => {
+        const app = express(); const origem = 'http://localhost:4200';
+        const config = criarConfiguracaoLojaSessao({ origens: [origem], segredoCsrf: randomBytes(32) });
+        const sessaoService = criarLojaSessaoService({ db });
+        app.use('/api/loja', criarLojaRouter({ pedidoService, sessaoService, obterConfiguracaoSessao: () => config,
+            obterConfiguracaoPedido: () => ({ ambiente: 'sandbox' }) }));
+        app.use('/api/loja', tratarErroLoja);
+        const server = await new Promise(resolve => { const s = app.listen(0, '127.0.0.1', () => resolve(s)); });
+        contexto.after(() => new Promise(resolve => { server.closeAllConnections(); server.close(resolve); }));
+        const url = `http://127.0.0.1:${server.address().port}/api/loja`;
+        const cabecalhos = { Origin: origem, 'Content-Type': 'application/json', 'X-IST-Loja': '1' };
+        const bootstrap = await fetch(url + '/sessao', { method: 'POST', headers: cabecalhos, body: '{}' });
+        assert.equal(bootstrap.status, 201);
+        const cookie = bootstrap.headers.get('set-cookie').split(';')[0];
+        const headers = { ...cabecalhos, Cookie: cookie, 'X-CSRF-Token': bootstrap.headers.get('x-csrf-token') };
+        const enviar = (chave, corpo = dados, extras = {}) => fetch(url + '/pedidos', { method: 'POST',
+            headers: { ...headers, 'Idempotency-Key': chave, ...extras }, body: JSON.stringify(corpo) });
+        return { enviar, sessaoService, cookie };
+    };
+    await t.test('HTTP real: 201/200, conflito 409 e concorrência sem pedido duplicado', async contexto => {
+        const http = await iniciarHttp(contexto); const chave = randomUUID();
+        const criada = await http.enviar(chave); assert.equal(criada.status, 201);
+        const pedido = await criada.json(); assert.equal(pedido.totalCentavos, 19000);
+        assert.equal(criada.headers.get('cache-control'), 'no-store');
+        assert.equal(Object.hasOwn(pedido, 'criado'), false);
+        const replay = await http.enviar(chave); assert.equal(replay.status, 200); assert.deepEqual(await replay.json(), pedido);
+        assert.equal((await http.enviar(chave, { ...dados, produtoIds: [1] })).status, 409);
+        const simultanea = randomUUID(); const respostas = await Promise.all([http.enviar(simultanea), http.enviar(simultanea)]);
+        assert.deepEqual(respostas.map(r => r.status).sort(), [200, 201]);
+        const corpos = await Promise.all(respostas.map(r => r.json())); assert.equal(corpos[0].publicId, corpos[1].publicId);
+        const [[contagem]] = await admin.query('SELECT COUNT(*) AS quantidade FROM ist_loja_pedidos WHERE public_id=?', [corpos[0].publicId]);
+        assert.equal(contagem.quantidade, 1);
+        const [[antes]] = await admin.query('SELECT COUNT(*) AS quantidade FROM ist_loja_pedidos');
+        assert.equal((await http.enviar(randomUUID(), dados, { Origin: 'http://evil.example' })).status, 403);
+        assert.equal((await http.enviar(randomUUID(), dados, { 'X-CSRF-Token': 'invalido' })).status, 403);
+        const [[depois]] = await admin.query('SELECT COUNT(*) AS quantidade FROM ist_loja_pedidos'); assert.equal(depois.quantidade, antes.quantidade);
+    });
+    for (const persistiu of [true, false]) await t.test(`HTTP real: 201/200 após COMMIT incerto, persistiu=${persistiu}`, async contexto => {
+        let falhou = false;
+        const adaptado = poolAdaptado(c => ({ ...c, async commit() {
+            if (!falhou) {
+                falhou = true; if (persistiu) await c.commit();
+                throw Object.assign(new Error('confirmacao perdida fixture'), { code: 'ECONNRESET' });
+            }
+            return c.commit();
+        } }));
+        const http = await iniciarHttp(contexto, criarLojaPedidoService({ db: adaptado })); const chave = randomUUID();
+        const primeira = await http.enviar(chave); assert.equal(primeira.status, persistiu ? 201 : 503);
+        const segunda = await http.enviar(chave); assert.equal(segunda.status, persistiu ? 200 : 201);
+        const terceira = await http.enviar(chave); assert.equal(terceira.status, 200);
+        assert.deepEqual(await segunda.json(), await terceira.json());
+    });
+    await t.test('HTTP real: revogação após middleware é revalidada na transação', async contexto => {
+        let http;
+        const adaptado = { async criarPedidoComResultado(...args) {
+            await http.sessaoService.revogarSessao(http.cookie.split('=')[1]);
+            return service.criarPedidoComResultado(...args);
+        } };
+        http = await iniciarHttp(contexto, adaptado);
+        const chave = randomUUID(); const resposta = await http.enviar(chave); assert.equal(resposta.status, 401);
+        const [[r]] = await admin.query('SELECT COUNT(*) AS quantidade FROM ist_loja_pedidos WHERE idempotencia_criacao=?', [chave]); assert.equal(r.quantidade, 0);
     });
 });

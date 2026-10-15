@@ -117,7 +117,7 @@ export const criarLojaPedidoService = ({ db = pool, ambiente = CONTRATO_PEDIDO.a
             throw erro;
         }
     };
-    const reconciliar = async (sessaoId, chave, hash, ids) => {
+    const reconciliar = async (sessaoId, chave, hash, ids, publicIdCriado = null) => {
         let conexao;
         let iniciada = false;
         try {
@@ -133,7 +133,7 @@ export const criarLojaPedidoService = ({ db = pool, ambiente = CONTRATO_PEDIDO.a
             validarSessaoTemporal(sessao, instanteUtc(agora));
             await conexao.commit();
             iniciada = false;
-            return publico;
+            return { pedido: publico, criado: publicIdCriado === pedido.public_id };
         } catch (erro) {
             if (conexao && iniciada) {
                 try { await conexao.rollback(); }
@@ -144,7 +144,7 @@ export const criarLojaPedidoService = ({ db = pool, ambiente = CONTRATO_PEDIDO.a
         } finally { if (conexao) conexao.release(); }
     };
 
-    const criarPedido = async (sessaoValidada, entrada, chaveIdempotencia) => {
+    const criarPedidoComResultado = async (sessaoValidada, entrada, chaveIdempotencia) => {
         const solicitacao = validarSolicitacaoPedido(entrada);
         const chave = validarChaveIdempotencia(chaveIdempotencia);
         if (!sessaoValidada || !uint32(sessaoValidada.id)) throw criarErroPedido('SESSAO_INVALIDA');
@@ -154,6 +154,7 @@ export const criarLojaPedidoService = ({ db = pool, ambiente = CONTRATO_PEDIDO.a
             let conexao;
             let iniciada = false;
             let commitIniciado = false;
+            let publicIdCriado = null;
             try {
                 conexao = await obterConexaoConfigurada();
                 iniciada = true;
@@ -182,6 +183,7 @@ export const criarLojaPedidoService = ({ db = pool, ambiente = CONTRATO_PEDIDO.a
                     [publicId, sessaoId, solicitacao.compradorEmail, CONTRATO_PEDIDO.estadoInicial, ambiente,
                         CONTRATO_PEDIDO.moeda, total, chave, hash, CONTRATO_PEDIDO.versaoInicial, sqlUtc(criadoEm), sqlUtc(criadoEm), sqlUtc(expiraEm)]);
                     if (!uint32(inserido.insertId) || inserido.warningStatus > 0) throw interno();
+                    publicIdCriado = publicId;
                     for (const [indice, item] of preparados.itens.entries()) {
                         const [resultado] = await conexao.query(`INSERT INTO ist_loja_pedido_itens
                             (pedido_id, produto_id, posicao, sku_snapshot, titulo_snapshot, descricao_snapshot,
@@ -214,13 +216,13 @@ export const criarLojaPedidoService = ({ db = pool, ambiente = CONTRATO_PEDIDO.a
                 commitIniciado = true;
                 await conexao.commit();
                 iniciada = false;
-                return publico;
+                return { pedido: publico, criado: publicIdCriado !== null };
             } catch (erro) {
                 if (commitIniciado) {
                     // Nao sabemos se COMMIT ocorreu. Fechar, nunca devolver ao pool,
                     // e consultar em nova conexao sem emitir INSERT novamente.
                     descartar(conexao); conexao = null;
-                    return reconciliar(sessaoId, chave, hash, solicitacao.produtoIds);
+                    return reconciliar(sessaoId, chave, hash, solicitacao.produtoIds, publicIdCriado);
                 }
                 if (conexao && iniciada) {
                     try { await conexao.rollback(); }
@@ -240,7 +242,9 @@ export const criarLojaPedidoService = ({ db = pool, ambiente = CONTRATO_PEDIDO.a
         }
         throw temporario();
     };
-    return { criarPedido };
+    // Interface anterior preservada; o adapter HTTP usa metadado explicito, nao o estado.
+    const criarPedido = async (...args) => (await criarPedidoComResultado(...args)).pedido;
+    return { criarPedido, criarPedidoComResultado };
 };
 
-export const { criarPedido } = criarLojaPedidoService();
+export const { criarPedido, criarPedidoComResultado } = criarLojaPedidoService();
