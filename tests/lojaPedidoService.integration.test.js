@@ -133,4 +133,150 @@ test('pedidos em MariaDB temporário isolado', { skip: !process.env.IST_LOJA_TES
             assert.equal(timeouts, 1); assert.equal(r.totalCentavos, 19000); assert.equal(await contar(sessao, chave), 1);
         } finally { if (!liberado) await bloqueador.rollback(); bloqueador.release(); }
     });
+    await t.test('auditoria: conexão com transação anterior aberta é descartada, sem reutilização', async () => {
+        const sessao = await novaSessao(); const chave = randomUUID();
+        const sujo = mysql.createPool({ host: '127.0.0.1', port, user: 'root', password: '', database: banco, connectionLimit: 1 });
+        try {
+            const anterior = await sujo.getConnection(); const threadAnterior = anterior.threadId;
+            await anterior.beginTransaction();
+            await anterior.query('SELECT id FROM ist_loja_sessoes WHERE id=? FOR UPDATE', [sessao.id]);
+            anterior.release(); // Simula consumidor anterior que devolveu conexao suja.
+            await assert.rejects(criarLojaPedidoService({ db: sujo }).criarPedido(sessao, dados, chave), { codigo: 'ERRO_INTERNO' });
+            const proxima = await sujo.getConnection();
+            try {
+                const [[estado]] = await proxima.query('SELECT @@in_transaction AS ativa');
+                await proxima.rollback(); // Limpeza tambem quando o teste reproduz a falha.
+                assert.equal(estado.ativa, 0, 'operacao deixou transacao aberta no pool');
+                assert.notEqual(proxima.threadId, threadAnterior, 'conexao comprometida foi reutilizada');
+            } finally { proxima.release(); }
+            assert.equal(await contar(sessao, chave), 0);
+        } finally { await sujo.end(); }
+    });
+    await t.test('auditoria: mesma chave e payloads divergentes simultâneos em conexões independentes', async () => {
+        const sessao = await novaSessao(); const chave = randomUUID(); const threads = new Set();
+        const adaptado = poolAdaptado(async c => {
+            const [[r]] = await c.query('SELECT CONNECTION_ID() AS id'); threads.add(r.id); return c;
+        });
+        const concorrente = criarLojaPedidoService({ db: adaptado });
+        const resultados = await Promise.allSettled([
+            concorrente.criarPedido(sessao, dados, chave),
+            concorrente.criarPedido(sessao, { ...dados, produtoIds: [1] }, chave)
+        ]);
+        assert.equal(threads.size, 2);
+        assert.equal(resultados.filter(r => r.status === 'fulfilled').length, 1);
+        assert.equal(resultados.find(r => r.status === 'rejected').reason.codigo, 'CONFLITO_IDEMPOTENCIA');
+        assert.equal(await contar(sessao, chave), 1);
+    });
+    for (const persistiu of [true, false]) await t.test(`auditoria: replay após COMMIT incerto, persistiu=${persistiu}`, async () => {
+        const sessao = await novaSessao(); const chave = randomUUID(); let falhou = false; let gravacoes = 0;
+        const adaptado = poolAdaptado(c => ({ ...c,
+            async query(sql, params) { if (sql.startsWith('INSERT')) gravacoes++; return c.query(sql, params); },
+            async commit() {
+                if (!falhou) {
+                    falhou = true;
+                    if (persistiu) await c.commit();
+                    throw Object.assign(new Error('COMMIT incerto fixture'), { code: 'ECONNRESET' });
+                }
+                return c.commit();
+            }
+        }));
+        const criador = criarLojaPedidoService({ db: adaptado }); let original;
+        if (persistiu) original = await criador.criarPedido(sessao, dados, chave);
+        else await assert.rejects(criador.criarPedido(sessao, dados, chave), { codigo: 'CONTENCAO_TEMPORARIA' });
+        assert.equal(gravacoes, 3, 'reconciliacao nao pode gravar');
+        const replay = await service.criarPedido(sessao, dados, chave);
+        if (persistiu) assert.deepEqual(replay, original);
+        assert.equal(await contar(sessao, chave), 1);
+        assert.deepEqual(await service.criarPedido(sessao, dados, chave), replay);
+    });
+    await t.test('auditoria: reconciliação com conexão encerrada retorna temporário e replay posterior recupera', async () => {
+        const sessao = await novaSessao(); const chave = randomUUID(); let obtidas = 0; let gravacoes = 0;
+        const adaptado = poolAdaptado(c => {
+            obtidas++;
+            if (obtidas === 2) { c.destroy(); return c; }
+            return { ...c,
+                async query(sql, params) { if (sql.startsWith('INSERT')) gravacoes++; return c.query(sql, params); },
+                async commit() { await c.commit(); throw Object.assign(new Error('confirmacao perdida'), { code: 'ECONNRESET' }); }
+            };
+        });
+        await assert.rejects(criarLojaPedidoService({ db: adaptado }).criarPedido(sessao, dados, chave), { codigo: 'CONTENCAO_TEMPORARIA' });
+        assert.equal(obtidas, 2); assert.equal(gravacoes, 3); assert.equal(await contar(sessao, chave), 1);
+        const replay = await service.criarPedido(sessao, dados, chave); assert.equal(replay.totalCentavos, 19000);
+    });
+    await t.test('auditoria: perda de conexão no segundo item não deixa pedido nem locks ativos', async () => {
+        const sessao = await novaSessao(); const chave = randomUUID(); let falhou = false;
+        const adaptado = poolAdaptado(c => ({ ...c, async query(sql, params) {
+            if (!falhou && sql.startsWith('INSERT INTO ist_loja_pedido_itens') && params[2] === 2) {
+                falhou = true; c.destroy(); throw Object.assign(new Error('conexao perdida'), { code: 'ECONNRESET' });
+            }
+            return c.query(sql, params);
+        } }));
+        await assert.rejects(criarLojaPedidoService({ db: adaptado }).criarPedido(sessao, dados, chave), { codigo: 'ERRO_INTERNO' });
+        assert.equal(await contar(sessao, chave), 0);
+        // A segunda chamada precisa obter o mesmo lock, provando sua liberacao.
+        assert.equal((await service.criarPedido(sessao, dados, chave)).totalCentavos, 19000);
+    });
+    await t.test('auditoria: três timeouts reais esgotam tentativas sem gravação parcial', async () => {
+        const sessao = await novaSessao(); const chave = randomUUID(); const bloqueador = await db.getConnection();
+        let obtidas = 0; let timeouts = 0; let rollbacks = 0; let liberadas = 0;
+        try {
+            await bloqueador.beginTransaction();
+            await bloqueador.query('SELECT id FROM ist_loja_sessoes WHERE id=? FOR UPDATE', [sessao.id]);
+            const adaptado = poolAdaptado(async c => {
+                obtidas++; await c.query('SET SESSION innodb_lock_wait_timeout=1');
+                return { ...c,
+                    async query(sql, params) {
+                        try { return await c.query(sql, params); }
+                        catch (erro) { if (erro.code === 'ER_LOCK_WAIT_TIMEOUT') timeouts++; throw erro; }
+                    },
+                    async rollback() { await c.rollback(); rollbacks++; },
+                    release() { liberadas++; c.release(); }
+                };
+            });
+            await assert.rejects(criarLojaPedidoService({ db: adaptado }).criarPedido(sessao, dados, chave), { codigo: 'CONTENCAO_TEMPORARIA' });
+            assert.deepEqual([obtidas, timeouts, rollbacks, liberadas], [3, 3, 3, 3]);
+            assert.equal(await contar(sessao, chave), 0);
+        } finally { await bloqueador.rollback(); bloqueador.release(); }
+    });
+    await t.test('auditoria: COMMIT incerto na reconciliação não dispara uma terceira transação', async () => {
+        const sessao = await novaSessao(); const chave = randomUUID(); let commits = 0; let gravacoes = 0;
+        const adaptado = poolAdaptado(c => ({ ...c,
+            async query(sql, params) { if (sql.startsWith('INSERT')) gravacoes++; return c.query(sql, params); },
+            async commit() { await c.commit(); commits++; throw Object.assign(new Error('sempre incerto'), { code: 'ECONNRESET' }); }
+        }));
+        await assert.rejects(criarLojaPedidoService({ db: adaptado }).criarPedido(sessao, dados, chave), { codigo: 'CONTENCAO_TEMPORARIA' });
+        assert.equal(commits, 2); assert.equal(gravacoes, 3); assert.equal(await contar(sessao, chave), 1);
+    });
+    await t.test('auditoria: conexão suja na reconciliação também é descartada', async () => {
+        const sessao = await novaSessao(); const chave = randomUUID(); let obtidas = 0; let descartadas = 0;
+        const adaptado = poolAdaptado(async c => {
+            if (++obtidas === 2) {
+                await c.beginTransaction();
+                await c.query('SELECT id FROM ist_loja_sessoes WHERE id=? FOR UPDATE', [sessao.id]);
+                return { ...c, destroy() { descartadas++; c.destroy(); } };
+            }
+            return { ...c, async commit() { await c.commit(); throw Object.assign(new Error('confirmacao perdida'), { code: 'ECONNRESET' }); } };
+        });
+        await assert.rejects(criarLojaPedidoService({ db: adaptado }).criarPedido(sessao, dados, chave), { codigo: 'CONTENCAO_TEMPORARIA' });
+        assert.equal(obtidas, 2); assert.equal(descartadas, 1); assert.equal(await contar(sessao, chave), 1);
+        assert.equal((await service.criarPedido(sessao, dados, chave)).totalCentavos, 19000);
+    });
+    await t.test('auditoria: sucesso e rollback confirmado liberam conexão sem transação aberta', async () => {
+        const estados = []; const encerramentos = []; let falharItem = false;
+        const adaptado = poolAdaptado(c => ({ ...c,
+            async query(sql, params) {
+                if (falharItem && sql.startsWith('INSERT INTO ist_loja_pedido_itens')) throw new Error('falha permanente fixture');
+                return c.query(sql, params);
+            },
+            async commit() { await c.commit(); const [[r]] = await c.query('SELECT @@in_transaction AS ativa'); estados.push(r.ativa); },
+            async rollback() { await c.rollback(); const [[r]] = await c.query('SELECT @@in_transaction AS ativa'); estados.push(r.ativa); },
+            release() { encerramentos.push('release'); c.release(); },
+            destroy() { encerramentos.push('destroy'); c.destroy(); }
+        }));
+        const auditado = criarLojaPedidoService({ db: adaptado });
+        await auditado.criarPedido(await novaSessao(), dados, randomUUID());
+        falharItem = true;
+        await assert.rejects(auditado.criarPedido(await novaSessao(), dados, randomUUID()), { codigo: 'ERRO_INTERNO' });
+        assert.deepEqual(estados, [0, 0]); assert.deepEqual(encerramentos, ['release', 'release']);
+    });
 });

@@ -105,13 +105,24 @@ const projetarPersistido = (pedido, itens, ids, sessao) => {
  */
 export const criarLojaPedidoService = ({ db = pool, ambiente = CONTRATO_PEDIDO.ambienteInicial,
     agora = () => new Date(), gerarUuid = randomUUID, prepararItens = prepararItensNaConexao } = {}) => {
+    const obterConexaoConfigurada = async () => {
+        const conexao = await db.getConnection();
+        try {
+            // MariaDB rejeita esta instrucao se houver transacao anterior aberta.
+            // Falha aqui nao comprova conexao limpa: nunca devolve-la ao pool.
+            await conexao.query('SET TRANSACTION ISOLATION LEVEL READ COMMITTED');
+            return conexao;
+        } catch (erro) {
+            descartar(conexao);
+            throw erro;
+        }
+    };
     const reconciliar = async (sessaoId, chave, hash, ids) => {
         let conexao;
         let iniciada = false;
         try {
             // Nova conexao e lock da sessao aguardam o desfecho da transacao anterior.
-            conexao = await db.getConnection();
-            await conexao.query('SET TRANSACTION ISOLATION LEVEL READ COMMITTED');
+            conexao = await obterConexaoConfigurada();
             iniciada = true;
             await conexao.beginTransaction();
             const sessao = await bloquearSessao(conexao, sessaoId, agora);
@@ -144,8 +155,7 @@ export const criarLojaPedidoService = ({ db = pool, ambiente = CONTRATO_PEDIDO.a
             let iniciada = false;
             let commitIniciado = false;
             try {
-                conexao = await db.getConnection();
-                await conexao.query('SET TRANSACTION ISOLATION LEVEL READ COMMITTED');
+                conexao = await obterConexaoConfigurada();
                 iniciada = true;
                 await conexao.beginTransaction();
                 const sessao = await bloquearSessao(conexao, sessaoId, agora);
