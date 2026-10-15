@@ -2,6 +2,7 @@ import express from 'express';
 import { rateLimit } from 'express-rate-limit';
 import { criarLojaController } from '../controllers/lojaController.js';
 import { ErroLoja } from '../services/lojaCatalogoService.js';
+import { criarLojaSessaoRouter } from './lojaSessao.routes.js';
 
 export const tratarErroLoja = (erro, req, res, next) => {
     if (res.headersSent) return next(erro);
@@ -19,14 +20,16 @@ export const tratarErroLoja = (erro, req, res, next) => {
     } });
 };
 
-export const criarLojaRouter = ({ service } = {}) => {
+export const criarLojaRouter = ({ service, sessaoService, obterConfiguracaoSessao, agoraSessao } = {}) => {
     const router = express.Router();
     const controller = criarLojaController(service);
     router.use('/cotacao', (req, res, next) => { res.set('Cache-Control', 'no-store'); next(); });
+    router.use('/sessao', (req, res, next) => { res.set('Cache-Control', 'no-store'); next(); });
     router.use(rateLimit({
         windowMs: 60_000, limit: 120, standardHeaders: 'draft-8', legacyHeaders: false,
         handler: (req, res) => res.status(429).json({ erro: { codigo: 'LIMITE_REQUISICOES', mensagem: 'Muitas requisições. Tente novamente em um minuto.' } })
     }));
+    router.use('/sessao', criarLojaSessaoRouter({ service: sessaoService, obterConfiguracao: obterConfiguracaoSessao, agora: agoraSessao }));
     router.use(express.json({ limit: '32kb' }));
     router.get('/categorias', controller.listarCategorias);
     router.get('/produtos', controller.listarProdutos);
