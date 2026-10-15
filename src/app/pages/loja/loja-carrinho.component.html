@@ -1,0 +1,30 @@
+<main class="loja" aria-labelledby="carrinho-titulo">
+    <header class="cabecalho"><div><p class="sobretitulo">Loja Virtual IST</p><h1 id="carrinho-titulo">Seu carrinho</h1><p>{{ carrinho.quantidadeTitulos() }} título(s) digital(is)</p></div><a routerLink="/loja">Voltar ao catálogo</a></header>
+    @if (carrinho.vazio()) {
+        <section class="vazio" role="status"><h2>Seu carrinho está vazio</h2><p>Explore os livros e escolha seus títulos.</p><a pButton routerLink="/loja">Explorar catálogo</a></section>
+    } @else {
+        <div class="acoes"><p-button label="Atualizar cotação" icon="pi pi-refresh" [outlined]="true" [disabled]="carrinho.carregando()" (onClick)="carrinho.cotar()" /><p-button label="Limpar carrinho" [text]="true" severity="secondary" (onClick)="carrinho.limpar()" /></div>
+        @if (carrinho.erro(); as erro) { <p-message [severity]="erro.status === 422 || erro.status === 429 ? 'warn' : 'error'">{{ erro.mensagem }}</p-message> }
+        @if (carrinho.inconsistencias().length) { <p class="discreto" role="status">A cotação precisa ser revisada. A disponibilidade dos títulos ainda não foi confirmada.</p> }
+        <section [attr.aria-busy]="carrinho.carregando()" aria-label="Itens do carrinho">
+            @if (carrinho.carregando()) { <p role="status">Consultando preços e disponibilidade…</p> }
+            <ul class="itens">@for (linha of linhas(); track linha.id) {
+                <li class="item">
+                    <div class="mini-capa">@if (linha.item?.produto?.imagemUrl; as imagem) { <img [src]="imagem" [alt]="'Capa de ' + (linha.item?.produto?.titulo ?? 'livro digital')" /> } @else { <span aria-hidden="true" class="pi pi-book"></span> }</div>
+                    <div class="informacoes"><h2><a [routerLink]="['/loja/produto', linha.id]">{{ linha.item?.produto?.titulo ?? 'Título #' + linha.id }}</a></h2>
+                        @if (linha.item; as item) { <p>{{ item.produto.categoria.nome }} @if (item.produto.idioma) { · {{ item.produto.idioma }} }</p> }
+                        <p class="discreto">Quantidade: 1</p>
+                        @if (!linha.item && !carrinho.carregando()) { <p class="discreto">Informações e preço aguardando cotação.</p> }
+                    </div>
+                    <div class="valor">@if (linha.item; as item) { <strong data-testid="subtotal">{{ preco(item.subtotalCentavos) }}</strong> } @else if (carrinho.carregando()) { <p-skeleton width="6rem" height="1.5rem" /> } @else { <span>Preço não confirmado</span> }</div>
+                    <p-button label="Remover" [text]="true" [ariaLabel]="'Remover título ' + (linha.item?.produto?.titulo ?? linha.id)" (onClick)="carrinho.remover(linha.id)" [attr.data-remover]="linha.id" />
+                </li>
+            }</ul>
+        </section>
+        <section class="resumo" aria-live="polite" aria-atomic="true"><h2>Total</h2>
+            @if (carrinho.cotacao(); as cotacao) { <strong class="preco" data-testid="total">{{ preco(cotacao.totalCentavos) }}</strong><p class="discreto">Cotação confirmada para os títulos selecionados.</p> }
+            @else if (carrinho.carregando()) { <p-skeleton width="8rem" height="2rem" /><p>Atualizando cotação…</p> }
+            @else { <p>Total não confirmado. Atualize a cotação para consultar os valores.</p> }
+        </section>
+    }
+</main>

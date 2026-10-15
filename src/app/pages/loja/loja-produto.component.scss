@@ -1,0 +1,9 @@
+@use './loja-catalogo.component.scss';
+.detalhe { display: grid; grid-template-columns: minmax(14rem, 1fr) minmax(0, 1.5fr); gap: 2rem; background: var(--surface-card); border-radius: 1rem; padding: 1.5rem; }
+.detalhe .capa { border-radius: .75rem; }
+.detalhe .capa img { height: 27rem; }
+dl { display: grid; grid-template-columns: auto 1fr; gap: .6rem 1rem; }
+dt { font-weight: 600; } dd { margin: 0; overflow-wrap: anywhere; }
+.descricao { grid-column: 1 / -1; }
+.descricao p { white-space: pre-wrap; overflow-wrap: anywhere; }
+@media (max-width: 40rem) { .detalhe { grid-template-columns: 1fr; padding: 1rem; } }

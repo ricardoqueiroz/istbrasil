@@ -1,0 +1,22 @@
+<main class="loja" aria-labelledby="produto-titulo">
+    <nav class="cabecalho" aria-label="Navegação da Loja"><a routerLink="/loja">Voltar ao catálogo</a><a pButton routerLink="/loja/carrinho" class="p-button-outlined">Carrinho ({{ carrinho.quantidadeTitulos() }})</a></nav>
+    <section [attr.aria-busy]="carregando()">
+        @if (carregando()) {
+            <h1 id="produto-titulo">Detalhes do livro</h1><p role="status">Carregando produto…</p><p-skeleton height="20rem" />
+        } @else if (erro()) {
+            <h1 id="produto-titulo">Detalhes do livro</h1><p-message severity="error">{{ erro() }}</p-message>
+            @if (podeTentar()) { <p-button label="Tentar novamente" (onClick)="recarregar()" /> }
+        } @else if (produto(); as livro) {
+            <article class="detalhe">
+                <div class="capa">@if (livro.imagemUrl) { <img [src]="livro.imagemUrl" [alt]="'Capa de ' + (livro.titulo ?? 'livro digital')" /> } @else { <span>Livro digital</span> }</div>
+                <div><p class="sobretitulo">{{ livro.categoria.nome }}</p><h1 id="produto-titulo">{{ livro.titulo ?? 'Livro digital' }}</h1>
+                    <dl><dt>SKU</dt><dd>{{ livro.sku }}</dd>@if (livro.idioma) { <dt>Idioma</dt><dd>{{ idioma(livro.idioma) }}</dd> }<dt>Formato</dt><dd>Livro digital</dd></dl>
+                    <p class="preco">{{ preco(livro.precoCentavos) }}</p><p class="discreto">Uma unidade por título digital.</p>
+                    <p-button [label]="carrinho.contem(livro.id) ? 'Adicionado ao carrinho' : 'Adicionar ao carrinho'" [icon]="carrinho.contem(livro.id) ? 'pi pi-check' : 'pi pi-plus'" [disabled]="carrinho.contem(livro.id) || !livro.disponivel" (onClick)="adicionar()" data-testid="adicionar" />
+                    @if (aviso()) { <p-message severity="warn">{{ aviso() }}</p-message> }
+                </div>
+                @if (descricao()) { <section class="descricao"><h2>Sobre o livro</h2><p data-testid="descricao">{{ descricao() }}</p></section> }
+            </article>
+        }
+    </section>
+</main>
