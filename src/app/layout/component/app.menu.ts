@@ -49,7 +49,8 @@ export class AppMenu {
             {
                 label: 'LOJA',
                 items: [
-                    { label: 'IST Editora', icon: 'pi pi-fw pi-shopping-cart', routerLink: ['/editora'] }
+                    { label: 'IST Editora', icon: 'pi pi-fw pi-shopping-cart', routerLink: ['/editora'] },
+                    { label: 'Loja Virtual', icon: 'pi pi-fw pi-shopping-bag', routerLink: ['/loja'] }
                 ]
             }
         ];

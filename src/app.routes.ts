@@ -78,6 +78,25 @@ export const appRoutes: Routes = [
         ]
     },
     {
+        path: 'loja',
+        component: AppLayout,
+        children: [
+            {
+                path: '',
+                pathMatch: 'full',
+                loadComponent: () => import('./app/pages/loja/loja-catalogo.component').then(m => m.LojaCatalogoComponent)
+            },
+            {
+                path: 'carrinho',
+                loadComponent: () => import('./app/pages/loja/loja-carrinho.component').then(m => m.LojaCarrinhoComponent)
+            },
+            {
+                path: 'produto/:id',
+                loadComponent: () => import('./app/pages/loja/loja-produto.component').then(m => m.LojaProdutoComponent)
+            }
+        ]
+    },
+    {
         path: 'admin',
         canActivate: [adminGuard],
         loadChildren: () => import('./app/pages/admin/admin.routes')
