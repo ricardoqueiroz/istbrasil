@@ -10,6 +10,8 @@ import express from 'express';
 import { criarLojaRouter, tratarErroLoja } from '../src/routes/loja.routes.js';
 import { criarLojaSessaoService } from '../src/services/lojaSessaoService.js';
 import { criarConfiguracaoLojaSessao } from '../src/config/lojaSessao.js';
+import { criarLojaCatalogoService } from '../src/services/lojaCatalogoService.js';
+import { hashTokenSessao } from '../src/services/lojaSessaoService.js';
 
 // Opt-in exclusivo para instancia temporaria. Nao usa DB_* nem o pool recuperado.
 test('pedidos em MariaDB temporário isolado', { skip: !process.env.IST_LOJA_TEST_PORT }, async t => {
@@ -29,7 +31,7 @@ test('pedidos em MariaDB temporário isolado', { skip: !process.env.IST_LOJA_TES
     await admin.query(`USE ${banco}`);
     await admin.query(`CREATE TABLE ist_livros (id INT PRIMARY KEY, title TEXT, description LONGTEXT,
         price DECIMAL(10,2), currency CHAR(3), onsale INT, format VARCHAR(32), inventory VARCHAR(32),
-        file TEXT) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+        file TEXT, language VARCHAR(32), img TEXT) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
     // DDL real das duas migrations, aplicado SOMENTE na instancia descartavel.
     for (const arquivo of ['ist_loja_catalogo.sql', 'ist_loja_pedidos_fundacao.sql']) {
         const sql = await readFile(new URL(`../migrations/${arquivo}`, import.meta.url), 'utf8');
@@ -37,7 +39,7 @@ test('pedidos em MariaDB temporário isolado', { skip: !process.env.IST_LOJA_TES
         assert.equal(tabelas.length, arquivo === 'ist_loja_catalogo.sql' ? 2 : 3);
         for (const tabela of tabelas) await admin.query(tabela);
     }
-    for (const id of [1, 2]) await admin.query(`INSERT INTO ist_livros VALUES (?, ?, ?, '95.00', 'BRL', 1, 'E-Book', 'Em estoque', '/fixture/privado.pdf')`,
+    for (const id of [1, 2]) await admin.query(`INSERT INTO ist_livros (id,title,description,price,currency,onsale,format,inventory,file) VALUES (?, ?, ?, '95.00', 'BRL', 1, 'E-Book', 'Em estoque', '/fixture/privado.pdf')`,
         [id, `Livro fixture ${id}`, '{"Content":"PDF & música"}']);
     await admin.query("INSERT INTO ist_loja_categorias (id,nome,slug,categoria_pai_id) VALUES (1,'Livros digitais','livros-digitais',NULL),(2,'Música','musica',1)");
     await admin.query("INSERT INTO ist_loja_produtos (id,categoria_id,livro_id,sku) VALUES (1,2,1,'FIXTURE-1'),(2,2,2,'FIXTURE-2')");
@@ -283,14 +285,15 @@ test('pedidos em MariaDB temporário isolado', { skip: !process.env.IST_LOJA_TES
         await assert.rejects(auditado.criarPedido(await novaSessao(), dados, randomUUID()), { codigo: 'ERRO_INTERNO' });
         assert.deepEqual(estados, [0, 0]); assert.deepEqual(encerramentos, ['release', 'release']);
     });
-    const iniciarHttp = async (contexto, pedidoService = service) => {
-        const app = express(); const origem = 'http://localhost:4200';
+    const iniciarHttp = async (contexto, pedidoService = service, { origem = 'http://localhost:4200', porta = 0 } = {}) => {
+        const app = express(); app.set('trust proxy', 'loopback'); // Configuracao real do server.js.
         const config = criarConfiguracaoLojaSessao({ origens: [origem], segredoCsrf: randomBytes(32) });
         const sessaoService = criarLojaSessaoService({ db });
-        app.use('/api/loja', criarLojaRouter({ pedidoService, sessaoService, obterConfiguracaoSessao: () => config,
+        app.get('/__ip', (req, res) => res.json({ ip: req.ip })); // Diagnostico so deste servidor de teste.
+        app.use('/api/loja', criarLojaRouter({ service: criarLojaCatalogoService({ db }), pedidoService, sessaoService, obterConfiguracaoSessao: () => config,
             obterConfiguracaoPedido: () => ({ ambiente: 'sandbox' }) }));
         app.use('/api/loja', tratarErroLoja);
-        const server = await new Promise(resolve => { const s = app.listen(0, '127.0.0.1', () => resolve(s)); });
+        const server = await new Promise(resolve => { const s = app.listen(porta, '127.0.0.1', () => resolve(s)); });
         contexto.after(() => new Promise(resolve => { server.closeAllConnections(); server.close(resolve); }));
         const url = `http://127.0.0.1:${server.address().port}/api/loja`;
         const cabecalhos = { Origin: origem, 'Content-Type': 'application/json', 'X-IST-Loja': '1' };
@@ -300,7 +303,7 @@ test('pedidos em MariaDB temporário isolado', { skip: !process.env.IST_LOJA_TES
         const headers = { ...cabecalhos, Cookie: cookie, 'X-CSRF-Token': bootstrap.headers.get('x-csrf-token') };
         const enviar = (chave, corpo = dados, extras = {}) => fetch(url + '/pedidos', { method: 'POST',
             headers: { ...headers, 'Idempotency-Key': chave, ...extras }, body: JSON.stringify(corpo) });
-        return { enviar, sessaoService, cookie };
+        return { enviar, sessaoService, cookie, url, headers, bootstrap };
     };
     await t.test('HTTP real: 201/200, conflito 409 e concorrência sem pedido duplicado', async contexto => {
         const http = await iniciarHttp(contexto); const chave = randomUUID();
@@ -344,5 +347,110 @@ test('pedidos em MariaDB temporário isolado', { skip: !process.env.IST_LOJA_TES
         http = await iniciarHttp(contexto, adaptado);
         const chave = randomUUID(); const resposta = await http.enviar(chave); assert.equal(resposta.status, 401);
         const [[r]] = await admin.query('SELECT COUNT(*) AS quantidade FROM ist_loja_pedidos WHERE idempotencia_criacao=?', [chave]); assert.equal(r.quantidade, 0);
+    });
+    await t.test('65.7: catálogo, cookie, CSRF, reutilização e persistência nas três tabelas', async contexto => {
+        const http = await iniciarHttp(contexto);
+        assert.equal((await fetch(http.url + '/categorias')).status, 200);
+        const catalogo = await (await fetch(http.url + '/produtos')).json();
+        assert.equal(catalogo.length, 2); assert.deepEqual(catalogo.map(p => p.precoCentavos), [9500, 9500]);
+        const setCookie = http.bootstrap.headers.get('set-cookie');
+        assert.ok(setCookie.includes('; HttpOnly') && setCookie.includes('; SameSite=Lax') && setCookie.includes('; Path=/'));
+        assert.ok(!/; Secure|Domain=/i.test(setCookie));
+        assert.ok(http.bootstrap.headers.get('x-csrf-token'));
+        const inicial = await http.bootstrap.json();
+        const reutilizada = await fetch(http.url + '/sessao', { method: 'POST', headers: http.headers, body: '{}' });
+        assert.equal(reutilizada.status, 200); assert.equal(reutilizada.headers.get('set-cookie'), null);
+        assert.deepEqual(await reutilizada.json(), inicial);
+        assert.ok(reutilizada.headers.get('x-csrf-token') === http.headers['X-CSRF-Token']);
+        const [[sessao]] = await admin.query('SELECT id, token_hash FROM ist_loja_sessoes WHERE token_hash=?', [hashTokenSessao(http.cookie.split('=')[1])]);
+        assert.ok(sessao && Buffer.isBuffer(sessao.token_hash) && sessao.token_hash.length === 32);
+        const chave = randomUUID(); const resposta = await http.enviar(chave); assert.equal(resposta.status, 201);
+        const pedido = await resposta.json(); assert.equal(pedido.totalCentavos, 19000);
+        const [[gravado]] = await admin.query('SELECT id, sessao_id, estado, versao, total_centavos FROM ist_loja_pedidos WHERE public_id=?', [pedido.publicId]);
+        assert.equal(gravado.sessao_id, sessao.id); assert.equal(gravado.estado, 'CRIADO'); assert.equal(gravado.versao, 1);
+        const [[soma]] = await admin.query('SELECT COUNT(*) AS quantidade,SUM(subtotal_centavos) AS total FROM ist_loja_pedido_itens WHERE pedido_id=?', [gravado.id]);
+        assert.equal(soma.quantidade, 2); assert.equal(Number(soma.total), Number(gravado.total_centavos));
+        assert.doesNotMatch(JSON.stringify(pedido), /sessao|token_hash|privado\.pdf|example.com/i);
+    });
+    await t.test('65.7: rejeições de segurança não criam pedidos e sempre usam no-store', async contexto => {
+        const http = await iniciarHttp(contexto);
+        const [[antes]] = await admin.query('SELECT COUNT(*) AS quantidade FROM ist_loja_pedidos');
+        for (const [extras, corpo, status] of [
+            [{ Origin: 'http://evil.example' }, dados, 403], [{ 'X-CSRF-Token': 'invalido' }, dados, 403],
+            [{ Cookie: '' }, dados, 401], [{ 'X-IST-Loja': '' }, dados, 403], [{}, { ...dados, totalCentavos: 1 }, 400]
+        ]) {
+            const r = await http.enviar(randomUUID(), corpo, extras); assert.equal(r.status, status); assert.equal(r.headers.get('cache-control'), 'no-store');
+        }
+        const [[depois]] = await admin.query('SELECT COUNT(*) AS quantidade FROM ist_loja_pedidos'); assert.equal(depois.quantidade, antes.quantidade);
+    });
+    await t.test('65.7: rate limit agrega IP real anexado pelo proxy e ignora X-Real-IP', async contexto => {
+        const http = await iniciarHttp(contexto);
+        for (let n = 1; n <= 21; n++) {
+            const r = await http.enviar(randomUUID(), dados, { Origin: 'http://evil.example',
+                'X-Forwarded-For': `203.0.113.${n}, 198.51.100.90`, 'X-Real-IP': `203.0.113.${n}` });
+            assert.equal(r.status, n <= 20 ? 403 : 429); assert.equal(r.headers.get('cache-control'), 'no-store');
+        }
+    });
+    await t.test('65.7 diagnóstico: acesso direto por loopback permite declarar X-Forwarded-For', async contexto => {
+        const http = await iniciarHttp(contexto);
+        const ipUrl = http.url.replace('/api/loja', '/__ip');
+        const r = await fetch(ipUrl, { headers: { 'X-Forwarded-For': '198.51.100.22' } });
+        assert.equal((await r.json()).ip, '198.51.100.22');
+        // Registra o risco existente, sem alterar trust proxy/arquitetura nesta etapa.
+        for (let n = 1; n <= 21; n++) {
+            const resposta = await http.enviar(randomUUID(), dados, { Origin: 'http://evil.example', 'X-Forwarded-For': `198.51.100.${n}` });
+            assert.equal(resposta.status, 403);
+        }
+    });
+    await t.test('65.7 navegador: same-origin pelo proxy Angular com cookie HttpOnly automático', {
+        skip: !process.env.IST_LOJA_BROWSER_PORT || !process.env.IST_LOJA_FRONT_PORT || !process.env.IST_LOJA_API_PORT
+    }, async contexto => {
+        const origem = `http://127.0.0.1:${Number(process.env.IST_LOJA_FRONT_PORT)}`;
+        const porta = Number(process.env.IST_LOJA_API_PORT);
+        assert.ok(porta > 1024 && porta !== 3000 && porta !== 3306);
+        await iniciarHttp(contexto, service, { origem, porta });
+        const limite = Date.now() + 60000;
+        while (true) {
+            try { const r = await fetch(origem + '/api/loja/categorias', { signal: AbortSignal.timeout(1000) }); if (r.status === 200) break; } catch {}
+            if (Date.now() > limite) throw new Error('Proxy Angular temporario nao ficou disponivel');
+            await new Promise(resolve => setTimeout(resolve, 500));
+        }
+        const alvo = await (await fetch(`http://127.0.0.1:${Number(process.env.IST_LOJA_BROWSER_PORT)}/json/new?${origem}/api/loja/categorias`, { method: 'PUT' })).json();
+        const { default: WebSocket } = await import('ws');
+        const ws = new WebSocket(alvo.webSocketDebuggerUrl); contexto.after(() => ws.close());
+        await new Promise((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject); });
+        const pendentes = new Map(); let sequencia = 0;
+        ws.on('message', mensagem => { const r = JSON.parse(mensagem); const p = pendentes.get(r.id); if (p) { pendentes.delete(r.id); r.error ? p.reject(new Error('CDP falhou')) : p.resolve(r.result); } });
+        const cdp = (method, params = {}) => new Promise((resolve, reject) => {
+            const id = ++sequencia; pendentes.set(id, { resolve, reject }); ws.send(JSON.stringify({ id, method, params }));
+        });
+        await cdp('Page.enable');
+        await cdp('Network.enable');
+        const carregou = new Promise(resolve => {
+            const observar = mensagem => { if (JSON.parse(mensagem).method === 'Page.loadEventFired') { ws.off('message', observar); resolve(); } };
+            ws.on('message', observar);
+        });
+        await cdp('Page.navigate', { url: origem + '/api/loja/categorias' });
+        await carregou;
+        const avaliacao = await cdp('Runtime.evaluate', { awaitPromise: true, returnByValue: true, expression: `(async () => {
+            const cabecalhos = {'Content-Type':'application/json','X-IST-Loja':'1'};
+            const iniciar = () => fetch('/api/loja/sessao',{method:'POST',headers:cabecalhos,body:'{}'});
+            const primeira = await iniciar(); const inicial = await primeira.json(); const csrf = primeira.headers.get('X-CSRF-Token');
+            const segunda = await iniciar(); const repetida = await segunda.json();
+            const chave = crypto.randomUUID(); const corpo = {produtoIds:[1,2],compradorEmail:'browser@example.com'};
+            const enviar = dados => fetch('/api/loja/pedidos',{method:'POST',headers:{...cabecalhos,'X-CSRF-Token':csrf,'Idempotency-Key':chave},body:JSON.stringify(dados)});
+            const criada = await enviar(corpo); const pedido = await criada.json();
+            const replay = await enviar(corpo); const conflito = await enviar({...corpo,produtoIds:[1]});
+            return {origem:location.origin,sessao:primeira.status,reutilizacao:segunda.status,validadeIgual:inicial.sessao.expiraEm===repetida.sessao.expiraEm,
+                cookieInacessivel:!document.cookie.includes('ist-loja-dev'),csrfRecebido:!!csrf,criada:criada.status,replay:replay.status,conflito:conflito.status,
+                total:pedido.totalCentavos,noStore:criada.headers.get('Cache-Control')==='no-store'};
+        })()` });
+        assert.ok(!avaliacao.exceptionDetails, 'Falha na execucao do navegador');
+        assert.deepEqual(avaliacao.result.value, { origem, sessao: 201, reutilizacao: 200, validadeIgual: true,
+            cookieInacessivel: true, csrfRecebido: true, criada: 201, replay: 200, conflito: 409, total: 19000, noStore: true });
+        const cookies = await cdp('Network.getCookies', { urls: [origem] });
+        const cookie = cookies.cookies.find(c => c.name === 'ist-loja-dev');
+        assert.ok(cookie?.httpOnly && cookie.sameSite === 'Lax' && cookie.path === '/' && !cookie.secure);
+        contexto.diagnostic('Chrome: proxy Angular same-origin, cookie HttpOnly automatico, 201/200/409, total 19000. Nenhum token registrado.');
     });
 });
