@@ -72,7 +72,74 @@ test('fontes de associacao contraditorias e links externos nao sao aceitos', asy
     for (const href of ['https://evil.example/v2/checkout/orders/OTHERORDER', 'https://api-m.sandbox.paypal.com/v2/checkout/orders/OTHERORDER']) {
         const d = recurso(); d.links = [{ rel: 'up', method: 'GET', href }];
         const r = await rodar(montar({ status: 200, data: d })); assert.equal(r.codigo, 1);
-        assert.notEqual(r.resultado.associacaoOrdem, 'CONFIRMADA'); assert.equal(r.linhas.join().includes(href), false);
+        assert.equal(r.resultado.associacaoOrdem, href.includes('evil.example') ? 'INVALIDA' : 'DIVERGENTE');
+        assert.equal(r.linhas.join().includes(href), false);
+    }
+});
+const AUTORIZACAO = '0T620041CK889853A';
+const upAutorizacao = () => ({ rel: 'up', method: 'GET', href: `https://api-m.sandbox.paypal.com/v2/payments/authorizations/${AUTORIZACAO}` });
+const upOrdem = (id = ORDEM) => ({ rel: 'up', method: 'GET', href: `https://api-m.sandbox.paypal.com/v2/checkout/orders/${id}` });
+
+for (const status of ['PENDING', 'COMPLETED']) test(`ordem correta com autorizacao pai e CONFIRMADA; status ${status} preservado`, async () => {
+    const d = recurso(status); d.supplementary_data.related_ids.authorization_id = AUTORIZACAO;
+    d.links = [{ rel: 'self', method: 'GET', href: `https://api-m.sandbox.paypal.com/v2/payments/captures/${ID}` },
+        { rel: 'refund', method: 'POST', href: `https://api-m.sandbox.paypal.com/v2/payments/captures/${ID}/refund` }, upAutorizacao()];
+    const m = montar({ status: 200, data: d }); const r = await rodar(m);
+    assert.equal(r.resultado.associacaoOrdem, 'CONFIRMADA'); assert.equal(r.resultado.validacao, 'CONSISTENTE');
+    assert.equal(r.resultado.statusFinanceiro, status); assert.equal(r.codigo, 0);
+    assert.deepEqual(r.resultado.ordensRelacionadas, [ORDEM]); assert.equal(m.chamadas.length, 2);
+});
+test('apenas up para autorizacao nao demonstra identidade da ordem', async () => {
+    const d = recurso(); delete d.supplementary_data; d.links = [upAutorizacao()];
+    const r = await rodar(montar({ status: 200, data: d }));
+    assert.equal(r.resultado.associacaoOrdem, 'NAO_DEMONSTRADA'); assert.deepEqual(r.resultado.ordensRelacionadas, []);
+    assert.equal(r.codigo, 1); assert.equal(r.resultado.limitacaoAssociacao, 'API_NAO_INFORMOU_ORDEM_RELACIONADA');
+});
+test('ordem diferente com autorizacao valida continua DIVERGENTE', async () => {
+    const d = recurso(); d.supplementary_data.related_ids.order_id = 'OTHERORDER'; d.links = [upAutorizacao()];
+    const r = await rodar(montar({ status: 200, data: d }));
+    assert.equal(r.resultado.associacaoOrdem, 'DIVERGENTE'); assert.equal(r.resultado.validacao, 'DIVERGENTE'); assert.equal(r.codigo, 1);
+});
+test('links simultaneos de ordem e autorizacao so acrescentam IDs de ordens', async () => {
+    const d = recurso(); delete d.supplementary_data; d.links = [upAutorizacao(), upOrdem()];
+    const m = montar({ status: 200, data: d }); const r = await rodar(m);
+    assert.equal(r.resultado.associacaoOrdem, 'CONFIRMADA'); assert.deepEqual(r.resultado.ordensRelacionadas, [ORDEM]);
+    assert.equal(m.chamadas.length, 2); // Os links nao sao seguidos.
+});
+test('ordens contraditorias nao sao ignoradas pela presenca de autorizacao valida', async () => {
+    const d = recurso(); d.links = [upOrdem('OTHERORDER'), upAutorizacao(), upOrdem()];
+    const r = await rodar(montar({ status: 200, data: d }));
+    assert.equal(r.resultado.associacaoOrdem, 'DIVERGENTE'); assert.deepEqual(r.resultado.ordensRelacionadas, [ORDEM, 'OTHERORDER']);
+    assert.equal(r.codigo, 1);
+});
+for (const [caso, alterar] of [
+    ['ID malformado', l => { l.href = l.href.replace(AUTORIZACAO, 'invalido-123'); }],
+    ['ID ausente', l => { l.href = l.href.replace(AUTORIZACAO, ''); }],
+    ['host externo', l => { l.href = l.href.replace('api-m.sandbox.paypal.com', 'evil.example'); }],
+    ['host ambiguo', l => { l.href = l.href.replace('api-m.sandbox.paypal.com', 'api-m.sandbox.paypal.com.evil.example'); }],
+    ['Live', l => { l.href = l.href.replace('api-m.sandbox.paypal.com', 'api-m.paypal.com'); }],
+    ['HTTP', l => { l.href = l.href.replace('https:', 'http:'); }],
+    ['query string', l => { l.href += '?extra=1'; }],
+    ['fragmento', l => { l.href += '#extra'; }],
+    ['credenciais', l => { l.href = l.href.replace('https://', 'https://user:secret@'); }],
+    ['metodo POST', l => { l.method = 'POST'; }],
+    ['metodo ausente', l => { delete l.method; }],
+    ['href nao textual', l => { l.href = {}; }],
+    ['URL longa', l => { l.href += 'A'.repeat(2048); }],
+    ['porta alternativa', l => { l.href = l.href.replace('.com/', '.com:8443/'); }],
+    ['normalizacao ambigua', l => { l.href = l.href.replace('/v2/', '/nao-oficial/../v2/'); }],
+    ['ID codificado', l => { l.href = l.href.replace(AUTORIZACAO, '%30T620041CK889853A'); }]
+]) test(`up de autorizacao inseguro ou malformado: ${caso}`, async () => {
+    const d = recurso(); const l = upAutorizacao(); alterar(l); d.links = [l];
+    const m = montar({ status: 200, data: d }); const r = await rodar(m);
+    assert.equal(r.resultado.associacaoOrdem, 'INVALIDA'); assert.equal(r.resultado.validacao, 'INCONCLUSIVA');
+    assert.deepEqual(r.resultado.ordensRelacionadas, [ORDEM]); assert.equal(r.codigo, 1); assert.equal(m.chamadas.length, 2);
+});
+test('estrutura links invalida nao confirma nem demonstra associacao ausente', async () => {
+    for (const links of [{}, 'nao e array']) {
+        const d = recurso(); d.links = links;
+        const r = await rodar(montar({ status: 200, data: d }));
+        assert.equal(r.resultado.associacaoOrdem, 'INVALIDA'); assert.equal(r.codigo, 1);
     }
 });
 test('datas ausentes nao sao inventadas e datas invalidas nao validam a resposta', async () => {

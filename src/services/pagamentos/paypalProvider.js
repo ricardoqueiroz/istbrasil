@@ -53,9 +53,13 @@ const diagnosticoCaptura = d => {
         try {
             if (l.method !== 'GET' || typeof l.href !== 'string' || l.href.length > 2048 || /\s/.test(l.href)) throw new Error();
             const u = new URL(l.href);
-            const m = /^\/v2\/checkout\/orders\/([A-Z0-9]{1,36})$/.exec(u.pathname);
-            if (u.origin !== HOST || u.username || u.password || u.search || u.hash || !m) throw new Error();
-            ordensRelacionadas.add(m[1]);
+            const ordem = /^\/v2\/checkout\/orders\/([A-Z0-9]{1,36})$/.exec(u.pathname);
+            const autorizacao = /^\/v2\/payments\/authorizations\/([A-Z0-9]{1,36})$/.test(u.pathname);
+            if (u.origin !== HOST || u.username || u.password || u.search || u.hash || (!ordem && !autorizacao)
+                || l.href !== `${HOST}${u.pathname}`) throw new Error();
+            // up pode identificar a autorizacao pai; seu ID nao e um Order ID.
+            // Validar esse relacionamento nao demonstra nem contradiz a ordem.
+            if (ordem) ordensRelacionadas.add(ordem[1]);
         } catch { associacaoInvalida = true; }
     }
     return { recursoDisponivel: true, capturaId, statusFinanceiro, moeda, valorCentavos,
