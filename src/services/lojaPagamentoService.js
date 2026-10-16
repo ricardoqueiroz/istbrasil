@@ -84,7 +84,7 @@ export const criarLojaPagamentoService = ({ db, adaptador, contexto, agora = () 
             ]);
         } finally { clearTimeout(timer); }
     };
-    const argsAdaptador = (ctx, pg, op) => ({ referencia: pg.public_id, ordemId: pg.ordem_externa_id,
+    const argsAdaptador = (ctx, pg, op) => ({ referencia: pg.public_id, ordemId: pg.ordem_externa_id, capturaId: pg.captura_externa_id,
         requestId: op.request_id_provedor, valorCentavos: pg.valor_centavos, moeda: pg.moeda,
         ambiente: pg.ambiente, contaRecebedora: pg.conta_recebedora,
         requestIdCriacao: ctx.operacoes.find(o => o.pagamento_id === pg.id && o.acao === 'CRIAR')?.request_id_provedor ?? null,
@@ -155,7 +155,13 @@ export const criarLojaPagamentoService = ({ db, adaptador, contexto, agora = () 
             await atualizar(ctx, 'ist_loja_pedidos', ctx.pedido, { estado: 'PAGO', pagamento_confirmado_em: r.capturadoEm });
         } else if (['RECUSADO', 'CANCELADO', 'EXPIRADO'].includes(r.estado)) {
             // Somente o adaptador pode declarar desfecho definitivo sem efeito pendente.
-            await mudar(ctx, pg, r.estado, { ordem_externa_id: r.ordemId, reserva_ativa: null, encerrado_em: ctx.instante });
+            if (r.estado === 'RECUSADO' && (BigInt(pg.capturado_centavos) !== 0n || pg.capturado_em
+                || (r.capturaId && (op.acao !== 'CAPTURAR' || !op.envio_iniciado_em)))) {
+                return revisar(ctx, pg, op, 'RECUSA_CONTRADITORIA', r);
+            }
+            await mudar(ctx, pg, r.estado, { ordem_externa_id: r.ordemId,
+                ...(r.estado === 'RECUSADO' && r.capturaId ? { captura_externa_id: r.capturaId } : {}),
+                reserva_ativa: null, encerrado_em: ctx.instante });
         } else if (op.acao === 'CAPTURAR' && op.envio_iniciado_em && ['APROVADO', 'AGUARDANDO_APROVACAO'].includes(r.estado)) {
             // Uma consulta ainda aprovada nao prova que a captura anterior falhou.
             await mudar(ctx, pg, 'DESCONHECIDO');

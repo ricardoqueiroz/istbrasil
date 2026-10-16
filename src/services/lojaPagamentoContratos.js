@@ -82,6 +82,8 @@ export const validarTransicaoPagamento = (de, para) => {
  * null significa nao observado, nunca igualdade com o esperado. IDs parciais
  * devem vir da resposta do provedor, associados a esta referencia e ambiente.
  * CAPTURADO exige todos os fatos financeiros, ID da captura e instante UTC.
+ * RECUSADO admite ID do recurso recusado, mas nunca instante de captura.
+ * valorCentavos continua sendo o valor da operacao, nao dinheiro recebido.
  */
 export const normalizarResultadoPagamento = r => {
     if (!r || Object.getPrototypeOf(r) !== Object.prototype
@@ -100,7 +102,8 @@ export const normalizarResultadoPagamento = r => {
         || (!ausente(r.ordemId) && !idExterno(r.ordemId))
         || (!ausente(r.capturaId) && !idExterno(r.capturaId))
         || (r.capturaId && !r.ordemId) || (r.capturadoEm && !r.capturaId)
-        || (['RECUSADO', 'CANCELADO', 'EXPIRADO', 'AGUARDANDO_APROVACAO', 'APROVADO'].includes(r.estado) && (r.capturaId || r.capturadoEm))
+        || (r.estado === 'RECUSADO' && !ausente(r.capturadoEm))
+        || (['CANCELADO', 'EXPIRADO', 'AGUARDANDO_APROVACAO', 'APROVADO'].includes(r.estado) && (r.capturaId || r.capturadoEm))
         || (r.estado !== 'DESCONHECIDO' && !r.ordemId)
         || (r.estado === 'CAPTURADO' && (!r.capturaId || !r.capturadoEm))) throw erroPagamento('ERRO_INTERNO');
     return { estado: r.estado, referencia: r.referencia, ordemId: r.ordemId ?? null, capturaId: r.capturaId ?? null,

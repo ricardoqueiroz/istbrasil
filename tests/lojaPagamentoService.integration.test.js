@@ -446,6 +446,116 @@ test('nucleo transacional em MariaDB descartavel e adaptador exclusivo de testes
         assert.equal(falha.categoria, 'INFRAESTRUTURA'); assert.equal(falha.envio, 'INDETERMINADO');
         assert.equal(dados.p.reserva_ativa, 1); assert.equal(dados.operacoes[0].estado, 'DESCONHECIDA');
     });
+    await t.test('recusa identificada persiste recurso, zero recebido e replay sem recaptura', async () => {
+        const compra = await novaCompra(); const { sim, service } = montar(); const pg = await criar(service, compra); sim.aprovado(pg.publicId);
+        let envios = 0; let recusa;
+        const adaptador = { ...sim.adaptador, async capturar(args) {
+            envios++; recusa = { ...await sim.adaptador.consultar(args), estado: 'RECUSADO', capturaId: `recusa-${pg.publicId}` };
+            throw criarFalhaPagamento({ categoria: 'RECUSA_DEFINITIVA', envio: 'ENVIADO', resultado: recusa });
+        } };
+        const novo = adaptador => criarLojaPagamentoService({ db: pool, contexto, adaptador }); const chave = randomUUID();
+        const resultado = await capturar(novo(adaptador), compra, pg, chave);
+        assert.equal(resultado.estado, 'RECUSADO'); assert.notEqual(resultado.pedidoEstado, 'PAGO');
+        let dados = await ler(pg); assert.equal(dados.p.captura_externa_id, recusa.capturaId);
+        assert.equal(String(dados.p.capturado_centavos), '0'); assert.equal(dados.p.capturado_em, null);
+        assert.equal(dados.pedido.pagamento_confirmado_em, null); assert.equal(dados.p.reserva_ativa, null);
+        assert.equal(dados.operacoes[1].estado, 'RECUSADA');
+        assert.deepEqual(await capturar(novo(adaptador), compra, pg, chave), resultado); assert.equal(envios, 1);
+        const consultar = { ...adaptador, async consultar(args) {
+            assert.equal(args.capturaId, recusa.capturaId); assert.equal(args.ordemId, recusa.ordemId); return recusa;
+        } };
+        assert.equal((await reconciliar(novo(consultar), compra, pg)).estado, 'RECUSADO');
+        dados = await ler(pg); assert.equal(dados.p.captura_externa_id, recusa.capturaId); assert.equal(envios, 1);
+        assert.notEqual((await criar(service, compra)).publicId, pg.publicId);
+    });
+    await t.test('ID parcial pode ser reconciliado apos reinicio como recusa definitiva', async () => {
+        const compra = await novaCompra(); const { sim, service } = montar(); const pg = await criar(service, compra); sim.aprovado(pg.publicId);
+        let fato;
+        const adaptador = { ...sim.adaptador, async capturar(args) {
+            fato = { ...await sim.adaptador.consultar(args), estado: 'RECUSADO', capturaId: `parcial-recusada-${pg.publicId}` };
+            return { estado: 'DESCONHECIDO', referencia: args.referencia, ambiente: args.ambiente, ordemId: args.ordemId, capturaId: fato.capturaId };
+        } };
+        const s = criarLojaPagamentoService({ db: pool, contexto, adaptador });
+        assert.equal((await capturar(s, compra, pg)).estado, 'DESCONHECIDO');
+        assert.equal((await ler(pg)).p.reserva_ativa, 1);
+        const novo = criarLojaPagamentoService({ db: pool, contexto, adaptador: { ...adaptador, async consultar(args) {
+            assert.equal(args.capturaId, fato.capturaId); return fato;
+        } } });
+        assert.equal((await reconciliar(novo, compra, pg)).estado, 'RECUSADO');
+        const dados = await ler(pg); assert.equal(String(dados.p.capturado_centavos), '0'); assert.equal(dados.p.reserva_ativa, null);
+        assert.equal(dados.pedido.pagamento_confirmado_em, null);
+    });
+    for (const caso of ['incompleta', 'instrumento', 'http422', 'pendente']) await t.test(`recusa nao comprovada: ${caso} conserva reserva`, async () => {
+        const compra = await novaCompra(); const { sim, service } = montar(); const pg = await criar(service, compra); sim.aprovado(pg.publicId);
+        const adaptador = { ...sim.adaptador, async capturar(args) {
+            if (caso === 'instrumento') throw Object.assign(new Error('INSTRUMENT_DECLINED'), { response: { status: 422, data: { details: [{ issue: 'INSTRUMENT_DECLINED' }] } } });
+            if (caso === 'http422') throw Object.assign(new Error('HTTP'), { status: 422 });
+            if (caso === 'incompleta') return { estado: 'RECUSADO', referencia: args.referencia, ambiente: args.ambiente,
+                ordemId: args.ordemId, capturaId: `insuficiente-${pg.publicId}` };
+            return { ...await sim.adaptador.consultar(args), estado: 'PENDENTE', capturaId: `pendente-${pg.publicId}` };
+        } };
+        const s = criarLojaPagamentoService({ db: pool, contexto, adaptador });
+        if (caso === 'pendente') assert.equal((await capturar(s, compra, pg)).estado, 'PENDENTE');
+        else await assert.rejects(capturar(s, compra, pg), codigo('RESULTADO_DESCONHECIDO'));
+        const dados = await ler(pg); assert.equal(dados.p.reserva_ativa, 1); assert.equal(String(dados.p.capturado_centavos), '0');
+        assert.equal(dados.p.capturado_em, null); assert.equal(dados.pedido.pagamento_confirmado_em, null);
+        await assert.rejects(criar(service, compra), codigo('TENTATIVA_ATIVA'));
+    });
+    await t.test('colisao de ID de captura recusada provoca revisao sem liberar reserva', async () => {
+        const recusar = async () => {
+            const compra = await novaCompra(); const { sim, service } = montar(); const pg = await criar(service, compra); sim.aprovado(pg.publicId);
+            const s = criarLojaPagamentoService({ db: pool, contexto, adaptador: { ...sim.adaptador, async capturar(args) {
+                return { ...await sim.adaptador.consultar(args), estado: 'RECUSADO', capturaId: 'recusa-colisao-compartilhada' };
+            } } });
+            return { compra, pg, resultado: await capturar(s, compra, pg) };
+        };
+        assert.equal((await recusar()).resultado.estado, 'RECUSADO');
+        const segundo = await recusar(); const dados = await ler(segundo.pg);
+        assert.equal(segundo.resultado.estado, 'REVISAO'); assert.equal(dados.p.captura_externa_id, null);
+        assert.equal(dados.p.reserva_ativa, 1); assert.equal(dados.p.motivo_revisao, 'IDENTIFICADOR_EXTERNO_DUPLICADO');
+    });
+    for (const campo of ['capturaId', 'ordemId', 'referencia']) await t.test(`recusa com ${campo} divergente nao sobrescreve IDs`, async () => {
+        const compra = await novaCompra(); const { sim, service } = montar(); const pg = await criar(service, compra); sim.aprovado(pg.publicId);
+        let fato;
+        const adaptador = { ...sim.adaptador, async capturar(args) {
+            fato = { ...await sim.adaptador.consultar(args), estado: 'DESCONHECIDO', capturaId: `identificado-${pg.publicId}` }; return fato;
+        } };
+        await capturar(criarLojaPagamentoService({ db: pool, contexto, adaptador }), compra, pg);
+        const antes = await ler(pg);
+        const s = criarLojaPagamentoService({ db: pool, contexto, adaptador: { ...adaptador, async consultar() {
+            return { ...fato, estado: 'RECUSADO', [campo]: 'divergente' };
+        } } });
+        assert.equal((await reconciliar(s, compra, pg)).estado, 'REVISAO');
+        const dados = await ler(pg); assert.equal(dados.p.captura_externa_id, antes.p.captura_externa_id);
+        assert.equal(dados.p.ordem_externa_id, antes.p.ordem_externa_id); assert.equal(dados.p.reserva_ativa, 1);
+        assert.equal(String(dados.p.capturado_centavos), '0');
+    });
+    await t.test('recusa identificada antes de qualquer captura autorizada exige revisao', async () => {
+        const compra = await novaCompra(); const { sim, service } = montar(); const pg = await criar(service, compra);
+        const s = criarLojaPagamentoService({ db: pool, contexto, adaptador: { ...sim.adaptador, async consultar(args) {
+            return { ...await sim.adaptador.consultar(args), estado: 'RECUSADO', capturaId: 'recusa-sem-envio' };
+        } } });
+        assert.equal((await reconciliar(s, compra, pg)).estado, 'REVISAO');
+        const dados = await ler(pg); assert.equal(dados.p.reserva_ativa, 1); assert.equal(dados.p.captura_externa_id, null);
+        assert.equal(dados.p.motivo_revisao, 'RECUSA_CONTRADITORIA');
+    });
+    await t.test('recusa nao apaga dinheiro previamente observado nem libera nova tentativa', async () => {
+        const compra = await novaCompra(); const { sim, service } = montar(); const pg = await criar(service, compra); sim.aprovado(pg.publicId);
+        let fato;
+        const adaptador = { ...sim.adaptador, async capturar(args) {
+            fato = { ...await sim.adaptador.consultar(args), estado: 'DESCONHECIDO', capturaId: `contraditoria-${pg.publicId}` }; return fato;
+        } };
+        await capturar(criarLojaPagamentoService({ db: pool, contexto, adaptador }), compra, pg);
+        // Contradicao controlada exclusivamente na fixture descartavel.
+        await admin.query('UPDATE ist_loja_pagamentos SET capturado_centavos=19000,capturado_em=atualizado_em WHERE public_id=?', [pg.publicId]);
+        const s = criarLojaPagamentoService({ db: pool, contexto, adaptador: { ...adaptador, async consultar() {
+            return { ...fato, estado: 'RECUSADO' };
+        } } });
+        assert.equal((await reconciliar(s, compra, pg)).estado, 'REVISAO');
+        const dados = await ler(pg); assert.equal(String(dados.p.capturado_centavos), '19000');
+        assert.equal(dados.p.reserva_ativa, 1); assert.equal(dados.pedido.pagamento_confirmado_em, null);
+        assert.equal(dados.p.motivo_revisao, 'RECUSA_CONTRADITORIA');
+    });
     await t.test('importacao/servico nao habilitam simulador em producao nem em live', async () => {
         const sim = criarPagamentoSimulado(); process.env.NODE_ENV = 'production';
         try { assert.throws(() => criarLojaPagamentoService({ db: pool, contexto, adaptador: sim.adaptador }), codigo('CONFIGURACAO_INVALIDA')); }

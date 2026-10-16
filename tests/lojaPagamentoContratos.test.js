@@ -38,6 +38,18 @@ test('erros externos nao sao serializados e nao ha adapter/pool padrao', () => {
 });
 
 const parcial = () => ({ estado: 'DESCONHECIDO', referencia: randomUUID(), ambiente: 'sandbox', ordemId: 'ordem-parcial' });
+test('RECUSADO admite recurso identificado ou sem ID, sem instante de captura', () => {
+    const r = { ...parcial(), estado: 'RECUSADO', valorCentavos: '19000', moeda: 'BRL', contaRecebedora: 'conta' };
+    assert.equal(normalizarResultadoPagamento(r).capturaId, null);
+    const identificado = { ...r, capturaId: 'captura-recusada', capturadoEm: null };
+    assert.equal(normalizarResultadoPagamento(identificado).capturaId, 'captura-recusada');
+    assert.equal(classificarFalhaPagamento(criarFalhaPagamento({ categoria: 'RECUSA_DEFINITIVA', envio: 'ENVIADO',
+        resultado: identificado })).resultado.capturaId, 'captura-recusada');
+    for (const extras of [{ capturadoEm: '2026-10-16T12:00:00.000Z' }, { capturadoEm: '' },
+        { capturaId: 'invalido\n' }, { ordemId: null }, { valorCentavos: null }, { moeda: null }, { contaRecebedora: null }]) {
+        assert.throws(() => normalizarResultadoPagamento({ ...identificado, ...extras }));
+    }
+});
 test('resultado inconclusivo admite fatos ausentes sem preencher valores esperados', () => {
     const r = normalizarResultadoPagamento(parcial());
     for (const k of ['valorCentavos', 'moeda', 'contaRecebedora', 'capturaId', 'capturadoEm']) assert.equal(r[k], null);
