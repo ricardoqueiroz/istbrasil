@@ -22,6 +22,46 @@ const lerInstante = v => {
     return instantePagamento(`${segundos}.${fracao.padEnd(3, '0')}Z`);
 };
 
+// Projecao diagnostica de Payments v2. Nao e resultado financeiro do contrato IST.
+const diagnosticoCaptura = d => {
+    if (!objeto(d)) falhar('RESPOSTA_INVALIDA', 'ENVIADO');
+    let respostaInvalida = false;
+    const lerOpcional = (valor, validar) => {
+        if (valor === undefined || valor === null) return null;
+        try { return validar(valor); } catch { respostaInvalida = true; return null; }
+    };
+    const identificador = v => { if (!ordemValida(v)) throw new Error(); return v; };
+    const capturaId = lerOpcional(d.id, identificador);
+    const estados = ['COMPLETED', 'PENDING', 'DECLINED', 'REFUNDED', 'PARTIALLY_REFUNDED', 'FAILED'];
+    const statusFinanceiro = estados.includes(d.status) ? d.status : 'DESCONHECIDO';
+    if (d.amount != null && !objeto(d.amount)) respostaInvalida = true;
+    const valorCentavos = lerOpcional(d.amount?.value, lerValor);
+    const moeda = lerOpcional(d.amount?.currency_code, v => { if (typeof v !== 'string' || !/^[A-Z]{3}$/.test(v)) throw new Error(); return v; });
+    const criadoEm = lerOpcional(d.create_time, lerInstante);
+    const atualizadoEm = lerOpcional(d.update_time, lerInstante);
+    if (criadoEm && atualizadoEm && atualizadoEm < criadoEm) respostaInvalida = true;
+    const ordensRelacionadas = new Set();
+    const orderId = d.supplementary_data?.related_ids?.order_id;
+    const idRelacionado = lerOpcional(orderId, identificador);
+    if (idRelacionado) ordensRelacionadas.add(idRelacionado);
+    let associacaoInvalida = orderId != null && !idRelacionado;
+    if (d.supplementary_data != null && (!objeto(d.supplementary_data)
+        || (d.supplementary_data.related_ids != null && !objeto(d.supplementary_data.related_ids)))) associacaoInvalida = true;
+    if (d.links != null && !Array.isArray(d.links)) associacaoInvalida = true;
+    for (const l of Array.isArray(d.links) ? d.links : []) {
+        if (l?.rel !== 'up') continue;
+        try {
+            if (l.method !== 'GET' || typeof l.href !== 'string' || l.href.length > 2048 || /\s/.test(l.href)) throw new Error();
+            const u = new URL(l.href);
+            const m = /^\/v2\/checkout\/orders\/([A-Z0-9]{1,36})$/.exec(u.pathname);
+            if (u.origin !== HOST || u.username || u.password || u.search || u.hash || !m) throw new Error();
+            ordensRelacionadas.add(m[1]);
+        } catch { associacaoInvalida = true; }
+    }
+    return { recursoDisponivel: true, capturaId, statusFinanceiro, moeda, valorCentavos,
+        criadoEm, atualizadoEm, ordensRelacionadas: [...ordensRelacionadas], associacaoInvalida, respostaInvalida };
+};
+
 // Somente configuracao e contexto confiaveis do backend. Nenhum efeito ao importar.
 // Transporte injetado deve obedecer a interface axios.request; nunca vem de HTTP publico.
 // Referencia e o public_id da tentativa, ligado ao pedido pelo nucleo IST.
@@ -175,6 +215,32 @@ export const criarPaypalProvider = ({ env = process.env, http = axios.create(), 
     };
     const consultarValidado = a => a.ordemId ? trocar(a, 'GET', `/v2/checkout/orders/${a.ordemId}`) : Promise.resolve(normalizarResultadoPagamento(parcial(a)));
     return Object.freeze({
+        // Leitura auxiliar: sem normalizar para CAPTURADO/PAGO, sem consultar banco
+        // e sem criar operacao financeira. OAuth compartilha cache e single-flight.
+        async consultarCaptura({ capturaId, ambiente, signal } = {}) {
+            if (ambiente !== 'sandbox' || !ordemValida(capturaId) || (signal && typeof signal.addEventListener !== 'function')) {
+                falhar('VALIDACAO_LOCAL', 'NAO_ENVIADO');
+            }
+            if (signal?.aborted) falhar('INFRAESTRUTURA', 'NAO_ENVIADO');
+            const acesso = await obterToken();
+            if (signal?.aborted) falhar('INFRAESTRUTURA', 'NAO_ENVIADO');
+            let resposta;
+            try {
+                resposta = await requisitar({ method: 'GET', url: `/v2/payments/captures/${capturaId}`, signal,
+                    headers: { Authorization: `Bearer ${acesso}`, Accept: 'application/json' } });
+            } catch (e) {
+                if (e?.response) resposta = e.response;
+                else falhar(e?.code === 'ERR_BAD_RESPONSE' || e instanceof SyntaxError ? 'RESPOSTA_INVALIDA' : 'INFRAESTRUTURA', 'INDETERMINADO');
+            }
+            const d = resposta?.data;
+            if (resposta?.status === 200) return diagnosticoCaptura(d);
+            if (resposta?.status === 404 && d?.name === 'RESOURCE_NOT_FOUND') return { recursoDisponivel: false };
+            if (d?.name === 'AUTHENTICATION_FAILURE' || ['invalid_client', 'invalid_token'].includes(d?.error)) {
+                if (token === acesso) { token = null; validoAte = 0; }
+                falhar('AUTENTICACAO', 'ENVIADO');
+            }
+            falhar(resposta?.status === 429 || resposta?.status >= 500 ? 'INFRAESTRUTURA' : 'OPERACAO', 'ENVIADO');
+        },
         async criar(args) {
             const a = validar(args, 'criar');
             // Recebedor explicito e referencia da tentativa, sem dados pessoais.
