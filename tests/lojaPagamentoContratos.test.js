@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { camposExatos, centavosPagamento, erroPagamentoPublico, hashPagamento, normalizarResultadoPagamento,
-    TRANSICOES_PAGAMENTO, validarTransicaoPagamento } from '../src/services/lojaPagamentoContratos.js';
+    criarFalhaPagamento, classificarFalhaPagamento, TRANSICOES_PAGAMENTO, validarTransicaoPagamento } from '../src/services/lojaPagamentoContratos.js';
 import { criarLojaPagamentoService } from '../src/services/lojaPagamentoService.js';
 
 test('contratos rejeitam autoridade financeira e getters no payload', () => {
@@ -35,4 +35,36 @@ test('normalizacao descarta extras e exige captura identificada e UTC', () => {
 test('erros externos nao sao serializados e nao ha adapter/pool padrao', () => {
     assert.deepEqual(erroPagamentoPublico(new Error('SQL segredo')), { erro: { codigo: 'ERRO_INTERNO', mensagem: 'Não foi possível processar o pagamento.' } });
     assert.throws(() => criarLojaPagamentoService(), { codigo: 'CONFIGURACAO_INVALIDA' });
+});
+
+const parcial = () => ({ estado: 'DESCONHECIDO', referencia: randomUUID(), ambiente: 'sandbox', ordemId: 'ordem-parcial' });
+test('resultado inconclusivo admite fatos ausentes sem preencher valores esperados', () => {
+    const r = normalizarResultadoPagamento(parcial());
+    for (const k of ['valorCentavos', 'moeda', 'contaRecebedora', 'capturaId', 'capturadoEm']) assert.equal(r[k], null);
+    assert.equal(r.ordemId, 'ordem-parcial');
+    assert.equal(normalizarResultadoPagamento({ ...parcial(), valorCentavos: '19000', moeda: 'BRL' }).contaRecebedora, null);
+});
+test('captura e demais resultados conclusivos continuam exigindo fatos financeiros completos', () => {
+    for (const estado of ['CAPTURADO', 'APROVADO', 'RECUSADO', 'AGUARDANDO_APROVACAO', 'PENDENTE']) {
+        assert.throws(() => normalizarResultadoPagamento({ ...parcial(), estado, capturaId: 'captura', capturadoEm: '2026-10-16T12:00:00.000Z' }));
+    }
+});
+test('parciais rejeitam tipos invalidos, contradicoes, referencia ausente e getters', () => {
+    for (const extras of [{ valorCentavos: '1.1' }, { moeda: 'brl' }, { contaRecebedora: '' },
+        { ordemId: 'id\n' }, { referencia: null }, { capturaId: 'captura', ordemId: null },
+        { capturadoEm: '2026-10-16T12:00:00.000Z' }]) {
+        assert.throws(() => normalizarResultadoPagamento({ ...parcial(), ...extras }));
+    }
+    assert.throws(() => normalizarResultadoPagamento([]));
+    assert.throws(() => normalizarResultadoPagamento(Object.defineProperty(parcial(), 'valorCentavos', { get() { assert.fail('getter executado'); } })));
+});
+test('classificacao e sanitizada, validada e nao inferida de HTTP ou propriedades arbitrarias', () => {
+    const falha = criarFalhaPagamento({ categoria: 'AUTENTICACAO', envio: 'NAO_ENVIADO', access_token: 'segredo' });
+    assert.deepEqual(classificarFalhaPagamento(falha), { categoria: 'AUTENTICACAO', envio: 'NAO_ENVIADO', resultado: null });
+    assert.equal(JSON.stringify(classificarFalhaPagamento(falha)).includes('segredo'), false);
+    assert.deepEqual(classificarFalhaPagamento({ status: 401, categoria: 'RECUSA_DEFINITIVA', envio: 'NAO_ENVIADO' }),
+        { categoria: 'OPERACAO', envio: 'INDETERMINADO', resultado: null });
+    assert.throws(() => criarFalhaPagamento({ categoria: 'RECUSA_DEFINITIVA', envio: 'ENVIADO' }));
+    assert.throws(() => criarFalhaPagamento({ categoria: 'VALIDACAO_LOCAL', envio: 'INDETERMINADO' }));
+    assert.throws(() => criarFalhaPagamento({ categoria: 'INVENTADA', envio: 'NAO_ENVIADO' }));
 });

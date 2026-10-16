@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { criarLojaPagamentoService } from '../src/services/lojaPagamentoService.js';
+import { criarFalhaPagamento } from '../src/services/lojaPagamentoContratos.js';
 import { criarPagamentoSimulado } from './fixtures/lojaPagamentoSimulado.js';
 import { criarBancoPagamentoIsolado } from './fixtures/lojaPagamentoBancoIsolado.js';
 
@@ -314,6 +315,136 @@ test('nucleo transacional em MariaDB descartavel e adaptador exclusivo de testes
         const compra = await novaCompra(); const { sim, service } = montar({ db });
         await assert.rejects(criar(service, compra), codigo('ERRO_INTERNO'));
         assert.equal(entregues, 1); assert.equal(descartadas, 1); assert.equal(liberadas, 0); assert.equal(sim.chamadas.criar, 0);
+    });
+    await t.test('ID parcial persiste e nova instancia reconcilia sem nova criacao', async () => {
+        const compra = await novaCompra(); const chave = randomUUID(); let criacoes = 0; let consultas = 0;
+        const adaptador = {
+            async criar(args) { criacoes++; return { estado: 'DESCONHECIDO', referencia: args.referencia, ambiente: args.ambiente, ordemId: 'ordem-parcial-reinicio' }; },
+            async consultar(args) {
+                consultas++; assert.equal(args.ordemId, 'ordem-parcial-reinicio');
+                return { estado: 'AGUARDANDO_APROVACAO', referencia: args.referencia, ambiente: args.ambiente,
+                    ordemId: args.ordemId, capturaId: null, capturadoEm: null,
+                    valorCentavos: '19000', moeda: 'BRL', contaRecebedora: contexto.contaRecebedora };
+            },
+            async capturar() { assert.fail('nao capturar'); }
+        };
+        const s = () => criarLojaPagamentoService({ db: pool, contexto, adaptador });
+        const pg = await criar(s(), compra, chave); let dados = await ler(pg);
+        assert.equal(pg.estado, 'DESCONHECIDO'); assert.equal(dados.p.ordem_externa_id, 'ordem-parcial-reinicio');
+        assert.equal(dados.p.reserva_ativa, 1); assert.equal(dados.operacoes[0].estado, 'DESCONHECIDA');
+        assert.equal(JSON.parse(dados.operacoes[0].resultado_json).valorCentavos, null);
+        await assert.rejects(criar(s(), compra), codigo('TENTATIVA_ATIVA'));
+        assert.equal((await criar(s(), compra, chave)).estado, 'AGUARDANDO_APROVACAO');
+        assert.equal(criacoes, 1); assert.equal(consultas, 1);
+        dados = await ler(pg); assert.equal(dados.pedido.pagamento_confirmado_em, null);
+    });
+    for (const campo of ['ordemId', 'referencia', 'contaRecebedora', 'ambiente']) await t.test(`parcial com ${campo} divergente exige revisao`, async () => {
+        const compra = await novaCompra(); const { sim, service } = montar(); const pg = await criar(service, compra);
+        const antes = await ler(pg);
+        const adaptador = { ...sim.adaptador, async consultar(args) {
+            return { estado: 'DESCONHECIDO', referencia: args.referencia, ambiente: args.ambiente,
+                ordemId: args.ordemId, [campo]: campo === 'ambiente' ? 'live' : 'divergente' };
+        } };
+        const s = criarLojaPagamentoService({ db: pool, contexto, adaptador });
+        assert.equal((await reconciliar(s, compra, pg)).estado, 'REVISAO');
+        const dados = await ler(pg); assert.equal(dados.p.ordem_externa_id, antes.p.ordem_externa_id);
+        assert.equal(dados.p.reserva_ativa, 1); assert.notEqual(dados.pedido.estado, 'PAGO');
+    });
+    await t.test('colisao UNIQUE entre IDs parciais bloqueia a segunda tentativa para revisao', async () => {
+        const adaptador = { async criar(args) { return { estado: 'DESCONHECIDO', referencia: args.referencia,
+            ambiente: args.ambiente, ordemId: 'ordem-parcial-colisao' }; }, async consultar() {}, async capturar() {} };
+        const s = criarLojaPagamentoService({ db: pool, contexto, adaptador });
+        await criar(s, await novaCompra()); const compra = await novaCompra(); const pg = await criar(s, compra);
+        const dados = await ler(pg); assert.equal(pg.estado, 'REVISAO'); assert.equal(dados.p.ordem_externa_id, null);
+        assert.equal(dados.p.reserva_ativa, 1); assert.equal(dados.p.motivo_revisao, 'IDENTIFICADOR_EXTERNO_DUPLICADO');
+    });
+    for (const [categoria, envio] of [['OPERACAO', 'NAO_ENVIADO'], ['INFRAESTRUTURA', 'ENVIADO'],
+        ['OPERACAO', 'INDETERMINADO'], ['AUTENTICACAO', 'INDETERMINADO'], ['AUTENTICACAO', 'NAO_ENVIADO'],
+        ['VALIDACAO_LOCAL', 'NAO_ENVIADO'], ['RESPOSTA_INVALIDA', 'ENVIADO']]) {
+        await t.test(`falha ${categoria}/${envio} preserva classificacao e nao autoriza nova cobranca`, async () => {
+            const compra = await novaCompra(); const chave = randomUUID(); let chamadas = 0;
+            const adaptador = { async criar() { chamadas++; throw criarFalhaPagamento({ categoria, envio, segredo: 'nao-persistir' }); },
+                async consultar(args) { return { estado: 'DESCONHECIDO', referencia: args.referencia, ambiente: args.ambiente }; }, async capturar() {} };
+            const s = criarLojaPagamentoService({ db: pool, contexto, adaptador });
+            await assert.rejects(criar(s, compra, chave), codigo('RESULTADO_DESCONHECIDO'));
+            const pg = await criar(s, compra, chave); const dados = await ler(pg);
+            assert.equal(chamadas, 1); assert.equal(dados.p.reserva_ativa, 1); assert.equal(pg.estado, 'DESCONHECIDO');
+            const falha = dados.eventos.map(e => JSON.parse(e.evidencia_json).falha).find(Boolean);
+            assert.equal(falha.categoria, categoria); assert.equal(falha.envio, envio); assert.equal(falha.metodo, 'criar');
+            assert.equal(JSON.stringify(dados).includes('nao-persistir'), false);
+            await assert.rejects(criar(s, compra), codigo('TENTATIVA_ATIVA'));
+        });
+    }
+    await t.test('falha com evidencia parcial preserva ID sem completar operacao', async () => {
+        const compra = await novaCompra(); const chave = randomUUID();
+        const adaptador = { async criar(args) { throw criarFalhaPagamento({ categoria: 'INFRAESTRUTURA', envio: 'ENVIADO',
+            resultado: { estado: 'DESCONHECIDO', referencia: args.referencia, ambiente: args.ambiente, ordemId: 'ordem-falha-parcial' } }); },
+            async consultar() {}, async capturar() {} };
+        const pg = await criar(criarLojaPagamentoService({ db: pool, contexto, adaptador }), compra, chave);
+        const dados = await ler(pg); assert.equal(dados.p.ordem_externa_id, 'ordem-falha-parcial');
+        assert.equal(dados.operacoes[0].estado, 'DESCONHECIDA'); assert.equal(dados.operacoes[0].codigo_erro, 'INFRAESTRUTURA');
+        assert.equal(dados.p.reserva_ativa, 1);
+    });
+    await t.test('recusa comprovada exige resultado completo e conserva classificacao', async () => {
+        const compra = await novaCompra(); const { sim, service } = montar(); const pg = await criar(service, compra); sim.aprovado(pg.publicId);
+        const adaptador = { ...sim.adaptador, async capturar(args) {
+            const r = await sim.adaptador.consultar(args);
+            throw criarFalhaPagamento({ categoria: 'RECUSA_DEFINITIVA', envio: 'ENVIADO', resultado: { ...r, estado: 'RECUSADO' } });
+        } };
+        const s = criarLojaPagamentoService({ db: pool, contexto, adaptador });
+        assert.equal((await capturar(s, compra, pg)).estado, 'RECUSADO');
+        const dados = await ler(pg); assert.equal(dados.p.reserva_ativa, null); assert.notEqual(dados.pedido.estado, 'PAGO');
+        assert.equal(dados.operacoes[1].codigo_erro, 'RECUSA_DEFINITIVA');
+    });
+    for (const malformado of [false, true]) await t.test(`captura incompleta nunca confirma PAGO; malformada=${malformado}`, async () => {
+        const compra = await novaCompra(); const { sim, service } = montar(); const pg = await criar(service, compra); sim.aprovado(pg.publicId);
+        const adaptador = { ...sim.adaptador, async capturar(args) {
+            return { estado: malformado ? 'CAPTURADO' : 'DESCONHECIDO', referencia: args.referencia, ambiente: args.ambiente,
+                ordemId: args.ordemId, capturaId: `captura-parcial-${pg.publicId}`, capturadoEm: new Date().toISOString() };
+        } };
+        const s = criarLojaPagamentoService({ db: pool, contexto, adaptador });
+        if (malformado) await assert.rejects(capturar(s, compra, pg), codigo('RESULTADO_DESCONHECIDO'));
+        else assert.equal((await capturar(s, compra, pg)).estado, 'DESCONHECIDO');
+        const dados = await ler(pg); assert.notEqual(dados.pedido.estado, 'PAGO'); assert.equal(dados.pedido.pagamento_confirmado_em, null);
+        assert.equal(dados.p.reserva_ativa, 1); assert.equal(String(dados.p.capturado_centavos), '0');
+        assert.equal(dados.operacoes[1].estado, 'DESCONHECIDA');
+        if (!malformado) assert.equal(dados.p.captura_externa_id, `captura-parcial-${pg.publicId}`);
+        else assert.equal(dados.operacoes[1].codigo_erro, 'RESPOSTA_INVALIDA');
+    });
+    await t.test('captura parcial e reconciliada apos reinicio sem reenviar captura nem perder IDs', async () => {
+        const compra = await novaCompra(); const { sim, service } = montar(); const pg = await criar(service, compra); sim.aprovado(pg.publicId);
+        let consultas = 0; let capturas = 0; let fato;
+        const adaptador = { ...sim.adaptador,
+            async capturar(args) {
+                capturas++; fato = await sim.adaptador.capturar(args);
+                return { estado: 'DESCONHECIDO', referencia: args.referencia, ambiente: args.ambiente,
+                    ordemId: fato.ordemId, capturaId: fato.capturaId, valorCentavos: fato.valorCentavos, moeda: fato.moeda };
+            },
+            async consultar(args) {
+                consultas++;
+                if (!fato) return sim.adaptador.consultar(args);
+                assert.equal(args.ordemId, fato.ordemId); return fato;
+            }
+        };
+        const novo = () => criarLojaPagamentoService({ db: pool, contexto, adaptador });
+        const chave = randomUUID(); assert.equal((await capturar(novo(), compra, pg, chave)).estado, 'DESCONHECIDO');
+        let dados = await ler(pg); assert.equal(dados.p.captura_externa_id, fato.capturaId);
+        assert.equal(dados.pedido.pagamento_confirmado_em, null); assert.equal(dados.p.reserva_ativa, 1);
+        const requestId = dados.operacoes[1].request_id_provedor;
+        assert.equal((await capturar(novo(), compra, pg, chave)).pedidoEstado, 'PAGO');
+        dados = await ler(pg); assert.equal(dados.operacoes[1].request_id_provedor, requestId);
+        assert.equal(capturas, 1); assert.equal(consultas, 2); assert.equal(sim.efeitosCaptura, 1);
+    });
+    await t.test('timeout imposto pelo nucleo preserva incerteza e classificacao de infraestrutura', async () => {
+        const compra = await novaCompra();
+        const adaptador = { async criar() { return new Promise(() => {}); }, async consultar() {}, async capturar() {} };
+        const s = criarLojaPagamentoService({ db: pool, contexto, adaptador, timeoutMs: 10, execucaoMs: 1000 });
+        await assert.rejects(criar(s, compra), codigo('RESULTADO_DESCONHECIDO'));
+        const [[pg]] = await admin.query('SELECT public_id FROM ist_loja_pagamentos WHERE pedido_id=?', [compra.pedidoId]);
+        const dados = await ler({ publicId: pg.public_id });
+        const falha = JSON.parse(dados.operacoes[0].resultado_json).falha;
+        assert.equal(falha.categoria, 'INFRAESTRUTURA'); assert.equal(falha.envio, 'INDETERMINADO');
+        assert.equal(dados.p.reserva_ativa, 1); assert.equal(dados.operacoes[0].estado, 'DESCONHECIDA');
     });
     await t.test('importacao/servico nao habilitam simulador em producao nem em live', async () => {
         const sim = criarPagamentoSimulado(); process.env.NODE_ENV = 'production';

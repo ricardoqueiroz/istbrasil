@@ -78,21 +78,60 @@ export const validarTransicaoPagamento = (de, para) => {
  * Resposta normalizada e permitida abaixo; nenhum payload bruto e persistido.
  * RECUSADO/CANCELADO/EXPIRADO devem ser definitivos, sem captura em andamento.
  * Ausencia ou consulta ambigua retorna DESCONHECIDO, nunca prova ausencia de efeito.
+ * Somente DESCONHECIDO permite valorCentavos/moeda/contaRecebedora ausentes.
+ * null significa nao observado, nunca igualdade com o esperado. IDs parciais
+ * devem vir da resposta do provedor, associados a esta referencia e ambiente.
+ * CAPTURADO exige todos os fatos financeiros, ID da captura e instante UTC.
  */
 export const normalizarResultadoPagamento = r => {
+    if (!r || Object.getPrototypeOf(r) !== Object.prototype
+        || ['estado', 'referencia', 'ordemId', 'capturaId', 'valorCentavos', 'moeda', 'contaRecebedora', 'ambiente', 'capturadoEm']
+            .some(k => { const d = Object.getOwnPropertyDescriptor(r, k); return d && !Object.hasOwn(d, 'value'); })) {
+        throw erroPagamento('ERRO_INTERNO');
+    }
+    // Somente DESCONHECIDO admite fatos ainda nao observados (null).
+    // Referencia e ambiente identificam a chamada confiavel, nao validam dinheiro.
+    const parcial = r?.estado === 'DESCONHECIDO';
+    const ausente = v => v === null || v === undefined;
     const estados = ['AGUARDANDO_APROVACAO', 'APROVADO', 'CAPTURADO', 'RECUSADO', 'PENDENTE', 'CANCELADO', 'EXPIRADO', 'DESCONHECIDO'];
     if (!r || !estados.includes(r.estado) || !idExterno(r.referencia)
-        || !idExterno(r.contaRecebedora) || !['sandbox', 'live'].includes(r.ambiente)
-        || typeof r.moeda !== 'string' || !/^[A-Z]{3}$/.test(r.moeda)
-        || (r.ordemId !== null && !idExterno(r.ordemId))
-        || (r.capturaId !== null && !idExterno(r.capturaId))
+        || (!(parcial && ausente(r.contaRecebedora)) && !idExterno(r.contaRecebedora)) || !['sandbox', 'live'].includes(r.ambiente)
+        || (!(parcial && ausente(r.moeda)) && (typeof r.moeda !== 'string' || !/^[A-Z]{3}$/.test(r.moeda)))
+        || (!ausente(r.ordemId) && !idExterno(r.ordemId))
+        || (!ausente(r.capturaId) && !idExterno(r.capturaId))
+        || (r.capturaId && !r.ordemId) || (r.capturadoEm && !r.capturaId)
+        || (['RECUSADO', 'CANCELADO', 'EXPIRADO', 'AGUARDANDO_APROVACAO', 'APROVADO'].includes(r.estado) && (r.capturaId || r.capturadoEm))
         || (r.estado !== 'DESCONHECIDO' && !r.ordemId)
         || (r.estado === 'CAPTURADO' && (!r.capturaId || !r.capturadoEm))) throw erroPagamento('ERRO_INTERNO');
-    return { estado: r.estado, referencia: r.referencia, ordemId: r.ordemId, capturaId: r.capturaId,
-        valorCentavos: centavosPagamento(r.valorCentavos), moeda: r.moeda,
-        contaRecebedora: r.contaRecebedora, ambiente: r.ambiente,
-        capturadoEm: r.capturadoEm === null ? null : instantePagamento(r.capturadoEm) };
+    return { estado: r.estado, referencia: r.referencia, ordemId: r.ordemId ?? null, capturaId: r.capturaId ?? null,
+        valorCentavos: parcial && ausente(r.valorCentavos) ? null : centavosPagamento(r.valorCentavos), moeda: r.moeda ?? null,
+        contaRecebedora: r.contaRecebedora ?? null, ambiente: r.ambiente,
+        capturadoEm: ausente(r.capturadoEm) ? null : instantePagamento(r.capturadoEm) };
 };
+
+// Apenas erros criados por esta funcao transportam classificacao confiavel.
+// Nao copiar mensagens, HTTP, headers, causas ou payloads externos.
+// envio descreve a chamada identificada por metodo na evidencia do servico;
+// NAO_ENVIADO em consultar nao descarta efeitos de uma captura anterior.
+// RECUSA_DEFINITIVA exige resultado RECUSADO completo, nao apenas status HTTP.
+// Falhas sem prova conclusiva conservam a reserva, inclusive antes do envio:
+// esta etapa nao introduz reenvio automatico nem libera uma segunda tentativa.
+const falhasAdaptador = new WeakMap();
+export const criarFalhaPagamento = ({ categoria, envio, resultado = null } = {}) => {
+    if (!['OPERACAO', 'AUTENTICACAO', 'VALIDACAO_LOCAL', 'RESPOSTA_INVALIDA', 'INFRAESTRUTURA', 'RECUSA_DEFINITIVA'].includes(categoria)
+        || !['NAO_ENVIADO', 'ENVIADO', 'INDETERMINADO'].includes(envio)
+        || (categoria === 'VALIDACAO_LOCAL' && envio !== 'NAO_ENVIADO')) throw erroPagamento('ERRO_INTERNO');
+    resultado = resultado === null ? null : normalizarResultadoPagamento(resultado);
+    if ((categoria === 'RECUSA_DEFINITIVA' && (envio !== 'ENVIADO' || resultado?.estado !== 'RECUSADO'))
+        || (categoria !== 'RECUSA_DEFINITIVA' && resultado && resultado.estado !== 'DESCONHECIDO')
+        || (envio === 'NAO_ENVIADO' && resultado)) throw erroPagamento('ERRO_INTERNO');
+    const erro = erroPagamento('RESULTADO_DESCONHECIDO');
+    falhasAdaptador.set(erro, Object.freeze({ categoria, envio, resultado: resultado && Object.freeze(resultado) }));
+    return erro;
+};
+export const classificarFalhaPagamento = erro => falhasAdaptador.get(erro) ?? Object.freeze({
+    categoria: 'OPERACAO', envio: 'INDETERMINADO', resultado: null
+});
 export const pagamentoPublico = (p, pedido) => ({
     publicId: p.public_id, pedidoPublicId: pedido.public_id, estado: p.estado, pedidoEstado: pedido.estado,
     moeda: p.moeda, valorCentavos: Number(centavosPagamento(p.valor_centavos)), versao: p.versao,

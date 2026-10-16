@@ -1,7 +1,7 @@
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { criarPersistenciaPagamento, inserirPagamentoRegistro as inserir, atualizarPagamentoRegistro as atualizar } from './lojaPagamentoPersistencia.js';
 import { camposExatos, centavosPagamento, erroPagamento, hashPagamento, idExterno, instantePagamento,
-    normalizarResultadoPagamento, pagamentoPublico, uuidPagamento, validarTransicaoPagamento } from './lojaPagamentoContratos.js';
+    normalizarResultadoPagamento, criarFalhaPagamento, classificarFalhaPagamento, pagamentoPublico, uuidPagamento, validarTransicaoPagamento } from './lojaPagamentoContratos.js';
 
 const PG = 'ist_loja_pagamentos';
 const OP = 'ist_loja_pagamento_operacoes';
@@ -79,7 +79,7 @@ export const criarLojaPagamentoService = ({ db, adaptador, contexto, agora = () 
             return await Promise.race([
                 Promise.resolve().then(() => adaptador[metodo]({ ...args, signal: controller.signal })),
                 new Promise((_, rejeitar) => { timer = setTimeout(() => {
-                    controller.abort(); rejeitar(erroPagamento('RESULTADO_DESCONHECIDO'));
+                    rejeitar(criarFalhaPagamento({ categoria: 'INFRAESTRUTURA', envio: 'INDETERMINADO' })); controller.abort();
                 }, timeoutMs); })
             ]);
         } finally { clearTimeout(timer); }
@@ -97,7 +97,7 @@ export const criarLojaPagamentoService = ({ db, adaptador, contexto, agora = () 
         await evento(ctx, pg, 'INTERNO', 'REVISAO_FINANCEIRA', { motivo, resultado });
         return pagamentoPublico(pg, ctx.pedido);
     };
-    const marcarIncerto = async (job, token) => transacao(interno(job), async ctx => {
+    const marcarIncerto = async (job, token, falha) => transacao(interno(job), async ctx => {
         const pg = achar(ctx, job.pagamentoId);
         const op = ctx.operacoes.find(o => o.id === job.operacaoId);
         // COMMIT pode ter ocorrido: nao regredir resultado ja persistido.
@@ -107,21 +107,24 @@ export const criarLojaPagamentoService = ({ db, adaptador, contexto, agora = () 
         }
         if (!finais.includes(pg.estado)) await mudar(ctx, pg, 'DESCONHECIDO');
         await atualizar(ctx, OP, op, { estado: 'DESCONHECIDA', execucao_token: null, execucao_ate: null,
-            codigo_erro: 'RESULTADO_DESCONHECIDO', proxima_tentativa_em: ctx.instante });
-        await evento(ctx, pg, 'INTERNO', 'RESULTADO_DESCONHECIDO', { acao: op.acao });
+            codigo_erro: falha.categoria, proxima_tentativa_em: ctx.instante, resultado_json: JSON.stringify({ falha }) });
+        await evento(ctx, pg, 'INTERNO', 'RESULTADO_DESCONHECIDO', { acao: op.acao, falha });
         return null;
     });
     const associacaoDivergente = (pg, r) => r.referencia !== pg.public_id || r.ambiente !== pg.ambiente
-        || r.contaRecebedora !== pg.conta_recebedora || (pg.ordem_externa_id && r.ordemId !== pg.ordem_externa_id)
-        || (pg.captura_externa_id && r.capturaId !== pg.captura_externa_id);
-    const divergencia = (pg, r) => associacaoDivergente(pg, r) || r.moeda !== pg.moeda || r.valorCentavos !== pg.valor_centavos;
+        || (r.contaRecebedora !== null && r.contaRecebedora !== pg.conta_recebedora)
+        || (pg.ordem_externa_id && r.ordemId !== null && r.ordemId !== pg.ordem_externa_id)
+        || (pg.captura_externa_id && r.capturaId !== null && r.capturaId !== pg.captura_externa_id);
+    const divergencia = (pg, r) => associacaoDivergente(pg, r)
+        || (r.moeda !== null && r.moeda !== pg.moeda) || (r.valorCentavos !== null && r.valorCentavos !== pg.valor_centavos);
     const pedidoDivergente = (ctx, pg) => pg.valor_centavos !== ctx.pedido.total_centavos
         || pg.moeda !== ctx.pedido.moeda || pg.ambiente !== ctx.pedido.ambiente;
 
-    const aplicar = async (job, token, r, consulta) => transacao(interno(job), async ctx => {
+    const aplicar = async (job, token, r, consulta, falha = null) => transacao(interno(job), async ctx => {
         const { pg, op } = operacaoCtx(ctx, job, token);
         // Evidencia normalizada nunca contem token, cartao ou resposta bruta.
         await evento(ctx, pg, consulta ? 'RECONCILIACAO' : 'API', r.estado, r);
+        if (falha) await evento(ctx, pg, 'INTERNO', 'FALHA_ADAPTADOR', { falha });
         if (r.estado === 'CAPTURADO' && !associacaoDivergente(pg, r) && r.capturadoEm >= pg.criado_em) {
             // Mesmo um valor divergente precisa permanecer como fato observado.
             await atualizar(ctx, PG, pg, { captura_externa_id: r.capturaId, capturado_centavos: r.valorCentavos, capturado_em: r.capturadoEm });
@@ -129,9 +132,15 @@ export const criarLojaPagamentoService = ({ db, adaptador, contexto, agora = () 
         if (pedidoDivergente(ctx, pg)) return revisar(ctx, pg, op, 'PEDIDO_DIVERGENTE', r);
         if (divergencia(pg, r)) return revisar(ctx, pg, op, 'DIVERGENCIA_FINANCEIRA', r);
         if (r.estado === 'DESCONHECIDO') {
+            // IDs vem apenas da resposta normalizada da chamada injetada, vinculada
+            // a referencia/ambiente e aos fatos observados acima. Ausencia nao confirma valores.
+            const ids = { ...(r.ordemId ? { ordem_externa_id: r.ordemId } : {}),
+                ...(r.capturaId ? { captura_externa_id: r.capturaId } : {}) };
+            if (Object.keys(ids).length) await atualizar(ctx, PG, pg, ids);
             if (!finais.includes(pg.estado)) await mudar(ctx, pg, 'DESCONHECIDO');
             await atualizar(ctx, OP, op, { estado: 'DESCONHECIDA', execucao_token: null, execucao_ate: null,
-                codigo_erro: 'RESULTADO_DESCONHECIDO', proxima_tentativa_em: ctx.instante, resultado_json: JSON.stringify(r) });
+                codigo_erro: falha?.categoria ?? 'RESULTADO_DESCONHECIDO', proxima_tentativa_em: ctx.instante,
+                resultado_json: JSON.stringify(falha ? { ...r, falha } : r) });
             return pagamentoPublico(pg, ctx.pedido);
         }
         if (r.estado === 'CAPTURADO') {
@@ -160,7 +169,7 @@ export const criarLojaPagamentoService = ({ db, adaptador, contexto, agora = () 
         }
         const preparada = op.acao === 'CAPTURAR' && !op.envio_iniciado_em && ['APROVADO', 'AGUARDANDO_APROVACAO'].includes(r.estado);
         await atualizar(ctx, OP, op, { estado: preparada ? 'PREPARADA' : ['RECUSADO', 'CANCELADO', 'EXPIRADO'].includes(r.estado) ? 'RECUSADA' : 'SUCESSO',
-            execucao_token: null, execucao_ate: null, resultado_json: JSON.stringify(r), codigo_erro: null,
+            execucao_token: null, execucao_ate: null, resultado_json: JSON.stringify(falha ? { ...r, falha } : r), codigo_erro: falha?.categoria ?? null,
             concluido_em: preparada ? null : ctx.instante });
         return pagamentoPublico(pg, ctx.pedido);
     });
@@ -184,9 +193,17 @@ export const criarLojaPagamentoService = ({ db, adaptador, contexto, agora = () 
         if (etapa.dto) return etapa.dto;
         const { token } = etapa;
         let ultimoResultado = null;
+        let falhaAdaptador = null;
         let aprovacaoPendente = false;
         const obter = async (metodo, args) => {
-            ultimoResultado = normalizarResultadoPagamento(await chamar(metodo, args));
+            let resposta;
+            try { resposta = await chamar(metodo, args); }
+            catch (e) { falhaAdaptador = { ...classificarFalhaPagamento(e), metodo }; throw e; }
+            try { ultimoResultado = normalizarResultadoPagamento(resposta); }
+            catch (e) {
+                falhaAdaptador = { categoria: 'RESPOSTA_INVALIDA', envio: 'INDETERMINADO', resultado: null, metodo };
+                throw e;
+            }
             return ultimoResultado;
         };
         try {
@@ -217,6 +234,13 @@ export const criarLojaPagamentoService = ({ db, adaptador, contexto, agora = () 
             return await aplicar(job, token, await obter('capturar', permitir.args), false);
         } catch (e) {
             if (aprovacaoPendente) throw erroPagamento('APROVACAO_PENDENTE');
+            // Evidencia parcial/recusa comprovada usa as mesmas verificacoes e locks.
+            // Uma falha de consulta nunca prova que a operacao financeira anterior nao ocorreu.
+            if (falhaAdaptador?.resultado) {
+                ultimoResultado = falhaAdaptador.resultado;
+                try { return await aplicar(job, token, ultimoResultado, etapa.consulta, falhaAdaptador); }
+                catch (erroAplicacao) { e = erroAplicacao; }
+            }
             if (e?.colisaoIdentificadorExterno) {
                 try {
                     return await transacao(interno(job), ctx => {
@@ -226,7 +250,7 @@ export const criarLojaPagamentoService = ({ db, adaptador, contexto, agora = () 
                 } catch { /* Se a revisao nao puder persistir, conservar incerteza. */ }
             }
             // Resposta externa/COMMIT perdido nunca provoca outra chamada financeira.
-            try { const conhecido = await marcarIncerto(job, token); if (conhecido) return conhecido; }
+            try { const conhecido = await marcarIncerto(job, token, falhaAdaptador ?? classificarFalhaPagamento(null)); if (conhecido) return conhecido; }
             catch { /* Permanecer indeterminado; nao expor SQL/excecao do adaptador. */ }
             throw erroPagamento('RESULTADO_DESCONHECIDO');
         }
