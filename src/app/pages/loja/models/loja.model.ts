@@ -60,3 +60,34 @@ export interface CarrinhoInconsistencia {
     readonly codigo: 'DISPONIBILIDADE_NAO_CONFIRMADA';
     readonly mensagem: string;
 }
+
+export interface LojaSessao {
+    readonly sessao: { readonly expiraEm: string };
+}
+
+export interface LojaSolicitacaoPedido {
+    readonly produtoIds: readonly number[];
+    readonly compradorEmail: string;
+}
+
+export interface LojaPedidoItem {
+    readonly produtoId: number;
+    readonly sku: string;
+    readonly titulo: string;
+    readonly tipo: string;
+    readonly quantidade: 1;
+    readonly precoUnitarioCentavos: number;
+    readonly subtotalCentavos: number;
+}
+
+export interface LojaPedido {
+    readonly publicId: string;
+    readonly estado: 'CRIADO' | 'AGUARDANDO_PAGAMENTO' | 'PAGO' | 'CANCELADO' | 'EXPIRADO'
+        | 'PARCIALMENTE_REEMBOLSADO' | 'REEMBOLSADO' | 'ESTORNADO' | 'REVISAO';
+    readonly versao: number;
+    readonly moeda: 'BRL';
+    readonly totalCentavos: number;
+    readonly criadoEm: string;
+    readonly expiraEm: string;
+    readonly itens: readonly LojaPedidoItem[];
+}
