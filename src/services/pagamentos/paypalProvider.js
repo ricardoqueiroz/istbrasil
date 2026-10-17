@@ -44,26 +44,54 @@ const diagnosticoCaptura = d => {
     const orderId = d.supplementary_data?.related_ids?.order_id;
     const idRelacionado = lerOpcional(orderId, identificador);
     if (idRelacionado) ordensRelacionadas.add(idRelacionado);
-    let associacaoInvalida = orderId != null && !idRelacionado;
-    if (d.supplementary_data != null && (!objeto(d.supplementary_data)
-        || (d.supplementary_data.related_ids != null && !objeto(d.supplementary_data.related_ids)))) associacaoInvalida = true;
-    if (d.links != null && !Array.isArray(d.links)) associacaoInvalida = true;
+    const motivos = new Set();
+    if (orderId != null && !idRelacionado) motivos.add('ORDEM_RELACIONADA_ID_INVALIDO');
+    if (d.supplementary_data != null) {
+        if (!objeto(d.supplementary_data)) motivos.add('SUPPLEMENTARY_DATA_INVALIDO');
+        else if (d.supplementary_data.related_ids != null && !objeto(d.supplementary_data.related_ids)) motivos.add('RELATED_IDS_INVALIDO');
+    }
+    if (d.links != null && !Array.isArray(d.links)) motivos.add('LINKS_ESTRUTURA_INVALIDA');
     for (const l of Array.isArray(d.links) ? d.links : []) {
         if (l?.rel !== 'up') continue;
+        const rejeitar = codigo => { motivos.add(codigo); };
+        if (l.method !== 'GET') rejeitar('UP_METODO_INVALIDO');
+        if (typeof l.href !== 'string') { rejeitar('UP_HREF_TIPO_INVALIDO'); continue; }
+        if (l.href.length > 2048) rejeitar('UP_URL_LIMITE_EXCEDIDO');
+        if (/\s/.test(l.href)) rejeitar('UP_URL_ESPACOS');
+        let valido = l.method === 'GET' && l.href.length <= 2048 && !/\s/.test(l.href);
         try {
-            if (l.method !== 'GET' || typeof l.href !== 'string' || l.href.length > 2048 || /\s/.test(l.href)) throw new Error();
             const u = new URL(l.href);
             const ordem = /^\/v2\/checkout\/orders\/([A-Z0-9]{1,36})$/.exec(u.pathname);
             const autorizacao = /^\/v2\/payments\/authorizations\/([A-Z0-9]{1,36})$/.test(u.pathname);
-            if (u.origin !== HOST || u.username || u.password || u.search || u.hash || (!ordem && !autorizacao)
-                || l.href !== `${HOST}${u.pathname}`) throw new Error();
+            const verificar = (condicao, codigo) => { if (condicao) { rejeitar(codigo); valido = false; } };
+            verificar(u.origin !== HOST, 'UP_ORIGEM_NAO_PERMITIDA');
+            verificar(Boolean(u.username || u.password), 'UP_CREDENCIAIS_PROIBIDAS');
+            verificar(Boolean(u.search), 'UP_QUERY_PROIBIDA');
+            verificar(Boolean(u.hash), 'UP_FRAGMENTO_PROIBIDO');
+            if (!ordem && !autorizacao) {
+                verificar(true, /^\/v2\/(checkout\/orders|payments\/authorizations)\//.test(u.pathname)
+                    ? 'UP_RECURSO_ID_INVALIDO' : 'UP_CAMINHO_NAO_RECONHECIDO');
+            }
+            verificar(l.href !== `${HOST}${u.pathname}`, 'UP_URL_NAO_CANONICA');
             // up pode identificar a autorizacao pai; seu ID nao e um Order ID.
             // Validar esse relacionamento nao demonstra nem contradiz a ordem.
-            if (ordem) ordensRelacionadas.add(ordem[1]);
-        } catch { associacaoInvalida = true; }
+            if (valido && ordem) ordensRelacionadas.add(ordem[1]);
+        } catch { rejeitar('UP_URL_INVALIDA'); }
     }
+    // Lista fechada de codigos tecnicos: nunca refletir texto arbitrario da API.
+    const razoes = ['BUYER_COMPLAINT', 'CHARGEBACK', 'ECHECK', 'INTERNATIONAL_WITHDRAWAL',
+        'OTHER', 'PENDING_REVIEW', 'RECEIVING_PREFERENCE_MANDATES_MANUAL_ACTION',
+        'REFUNDED', 'TRANSACTION_APPROVED_AWAITING_FUNDING', 'UNILATERAL', 'VERIFICATION_REQUIRED'];
+    const detalhes = d.status_details;
+    const reason = objeto(detalhes) ? detalhes.reason : undefined;
+    const estadoMotivoPendencia = detalhes != null && !objeto(detalhes) ? 'INVALIDO'
+        : reason == null ? 'AUSENTE'
+            : typeof reason !== 'string' || !/^[A-Z][A-Z0-9_]{0,127}$/.test(reason) ? 'INVALIDO'
+                : razoes.includes(reason) ? 'INFORMADO' : 'NAO_RECONHECIDO';
+    const motivoPendencia = estadoMotivoPendencia === 'INFORMADO' ? reason : null;
     return { recursoDisponivel: true, capturaId, statusFinanceiro, moeda, valorCentavos,
-        criadoEm, atualizadoEm, ordensRelacionadas: [...ordensRelacionadas], associacaoInvalida, respostaInvalida };
+        criadoEm, atualizadoEm, ordensRelacionadas: [...ordensRelacionadas], associacaoInvalida: motivos.size > 0,
+        motivosAssociacaoInvalida: [...motivos].sort(), motivoPendencia, estadoMotivoPendencia, respostaInvalida };
 };
 
 // Somente configuracao e contexto confiaveis do backend. Nenhum efeito ao importar.

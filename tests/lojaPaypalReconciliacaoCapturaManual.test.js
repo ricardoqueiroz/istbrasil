@@ -29,6 +29,72 @@ const rodar = async (m, opcoes = {}) => {
     return { codigo, linhas, resultado: JSON.parse(linhas.at(-1)) };
 };
 
+// Os codigos sao diagnosticos; nao alteram a precedencia das classificacoes.
+for (const [codigo, alterar] of [
+    ['SUPPLEMENTARY_DATA_INVALIDO', d => { d.supplementary_data = []; }],
+    ['RELATED_IDS_INVALIDO', d => { d.supplementary_data.related_ids = []; }],
+    ['ORDEM_RELACIONADA_ID_INVALIDO', d => { d.supplementary_data.related_ids.order_id = 'bad-id'; }],
+    ['LINKS_ESTRUTURA_INVALIDA', d => { d.links = {}; }],
+    ['UP_METODO_INVALIDO', (d, l) => { l.method = 'POST'; }],
+    ['UP_HREF_TIPO_INVALIDO', (d, l) => { l.href = {}; }],
+    ['UP_URL_LIMITE_EXCEDIDO', (d, l) => { l.href += 'A'.repeat(2048); }],
+    ['UP_URL_ESPACOS', (d, l) => { l.href += ' '; }],
+    ['UP_URL_INVALIDA', (d, l) => { l.href = 'not-a-url'; }],
+    ['UP_ORIGEM_NAO_PERMITIDA', (d, l) => { l.href = l.href.replace('api-m.sandbox.paypal.com', 'evil.example'); }],
+    ['UP_CREDENCIAIS_PROIBIDAS', (d, l) => { l.href = l.href.replace('https://', 'https://user:fixture-secret@'); }],
+    ['UP_QUERY_PROIBIDA', (d, l) => { l.href += '?fixture-secret=1'; }],
+    ['UP_FRAGMENTO_PROIBIDO', (d, l) => { l.href += '#fixture-secret'; }],
+    ['UP_RECURSO_ID_INVALIDO', (d, l) => { l.href = l.href.replace(ORDEM, 'bad-id'); }],
+    ['UP_CAMINHO_NAO_RECONHECIDO', (d, l) => { l.href = l.href.replace('/checkout/orders/', '/payments/captures/'); }],
+    ['UP_URL_NAO_CANONICA', (d, l) => { l.href = l.href.replace('/v2/', '/extra/../v2/'); }]
+]) test(`motivo estruturado ${codigo}`, async () => {
+    const d = recurso(); const l = { rel: 'up', method: 'GET', href: `https://api-m.sandbox.paypal.com/v2/checkout/orders/${ORDEM}` };
+    d.links = [l]; alterar(d, l);
+    const r = await rodar(montar({ status: 200, data: d }));
+    assert.equal(r.resultado.associacaoOrdem, 'INVALIDA');
+    assert.equal(r.resultado.validacao, 'INCONCLUSIVA');
+    assert.ok(r.resultado.motivosAssociacaoInvalida.includes(codigo));
+    assert.equal(r.linhas.join().includes('fixture-secret'), false);
+    assert.equal(r.linhas.join().includes('https://'), false);
+});
+
+test('multiplos motivos ordenados, sem duplicacao, preservam INVALIDA com ordem correta', async () => {
+    const d = recurso();
+    const l = { rel: 'up', method: 'POST', href: 'https://user:secret@evil.example/v2/checkout/orders/BAD?private=1#private' };
+    d.links = [l, { ...l }];
+    const r = await rodar(montar({ status: 200, data: d }));
+    assert.deepEqual(r.resultado.motivosAssociacaoInvalida, [
+        'UP_CREDENCIAIS_PROIBIDAS', 'UP_FRAGMENTO_PROIBIDO', 'UP_METODO_INVALIDO',
+        'UP_ORIGEM_NAO_PERMITIDA', 'UP_QUERY_PROIBIDA', 'UP_URL_NAO_CANONICA'
+    ]);
+    assert.equal(r.resultado.associacaoOrdem, 'INVALIDA');
+    assert.deepEqual(r.resultado.ordensRelacionadas, [ORDEM]);
+});
+
+for (const [nome, detalhes, estado, motivo] of [
+    ['presente', { reason: 'PENDING_REVIEW' }, 'INFORMADO', 'PENDING_REVIEW'],
+    ['ausente', undefined, 'AUSENTE', null],
+    ['sem reason', {}, 'AUSENTE', null],
+    ['nulo', { reason: null }, 'AUSENTE', null],
+    ['vazio', { reason: '' }, 'INVALIDO', null],
+    ['objeto', { reason: { secret: 'fixture-secret' } }, 'INVALIDO', null],
+    ['estrutura inesperada', [], 'INVALIDO', null],
+    ['texto arbitrario', { reason: 'private@example.invalid fixture-secret' }, 'INVALIDO', null],
+    ['desconhecido', { reason: 'PRIVATE_SECRET' }, 'NAO_RECONHECIDO', null],
+    ['limite', { reason: 'A'.repeat(129) }, 'INVALIDO', null]
+]) test(`motivo de pendencia ${nome} sem alterar classificacao financeira`, async () => {
+    for (const status of ['PENDING', 'COMPLETED']) {
+        const d = recurso(status); d.status_details = detalhes;
+        const r = await rodar(montar({ status: 200, data: d }));
+        assert.equal(r.resultado.estadoMotivoPendencia, estado);
+        assert.equal(r.resultado.motivoPendencia, motivo);
+        assert.equal(r.resultado.statusFinanceiro, status);
+        assert.equal(r.resultado.validacao, 'CONSISTENTE');
+        assert.deepEqual(r.resultado.motivosAssociacaoInvalida, []);
+        for (const segredo of ['fixture-secret', 'private@example.invalid', 'PRIVATE_SECRET']) assert.equal(r.linhas.join().includes(segredo), false);
+    }
+});
+
 for (const status of ['COMPLETED', 'PENDING', 'DECLINED', 'REFUNDED', 'PARTIALLY_REFUNDED', 'FAILED']) {
     test(`consulta diagnostica distingue ${status}, sem inferir estado da ordem`, async () => {
         const m = montar({ status: 200, data: recurso(status) }); const r = await rodar(m);
@@ -93,6 +159,7 @@ test('apenas up para autorizacao nao demonstra identidade da ordem', async () =>
     const d = recurso(); delete d.supplementary_data; d.links = [upAutorizacao()];
     const r = await rodar(montar({ status: 200, data: d }));
     assert.equal(r.resultado.associacaoOrdem, 'NAO_DEMONSTRADA'); assert.deepEqual(r.resultado.ordensRelacionadas, []);
+    assert.deepEqual(r.resultado.motivosAssociacaoInvalida, []);
     assert.equal(r.codigo, 1); assert.equal(r.resultado.limitacaoAssociacao, 'API_NAO_INFORMOU_ORDEM_RELACIONADA');
 });
 test('ordem diferente com autorizacao valida continua DIVERGENTE', async () => {
@@ -110,6 +177,7 @@ test('ordens contraditorias nao sao ignoradas pela presenca de autorizacao valid
     const d = recurso(); d.links = [upOrdem('OTHERORDER'), upAutorizacao(), upOrdem()];
     const r = await rodar(montar({ status: 200, data: d }));
     assert.equal(r.resultado.associacaoOrdem, 'DIVERGENTE'); assert.deepEqual(r.resultado.ordensRelacionadas, [ORDEM, 'OTHERORDER']);
+    assert.deepEqual(r.resultado.motivosAssociacaoInvalida, []);
     assert.equal(r.codigo, 1);
 });
 for (const [caso, alterar] of [

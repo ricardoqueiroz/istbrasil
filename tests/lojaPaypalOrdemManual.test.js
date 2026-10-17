@@ -107,6 +107,7 @@ for (const [status, esperado, codigo] of [['COMPLETED', 'CAPTURADO', 0], ['PENDI
         assert.equal(r.codigo, codigo); assert.equal(m.posts().length, 1);
         assert.equal(r.dados.at(-1).estado, esperado); assert.equal(r.dados.at(-1).capturaId, 'CAPTUREMANUAL123');
         assert.equal(r.dados.at(-1).requestIdCaptura, CHAVE);
+        assert.deepEqual(r.dados.map(linha => linha.requestIdCaptura), [CHAVE, CHAVE, CHAVE]);
         assert.equal(r.dados.at(-1).capturadoEm, status === 'COMPLETED' ? '2026-10-16T12:00:00.000Z' : null);
     });
 }
@@ -138,6 +139,7 @@ for (const code of ['ETIMEDOUT', 'ECONNRESET']) test(`falha ${code} nunca repete
     const r = await rodar(true, m); assert.equal(r.codigo, 1); assert.equal(m.posts().length, 1);
     assert.equal(r.dados.at(-1).envio, 'INDETERMINADO');
     assert.equal(r.linhas.join().includes('fixture-'), false); assert.equal(r.dados.at(-1).requestIdCaptura, CHAVE);
+    assert.ok(r.dados.every(linha => linha.requestIdCaptura === CHAVE));
 });
 test('repeticao explicita conserva chave e consulta impede recaptura de ordem ja concluida', async () => {
     let estado = ordem('APPROVED');

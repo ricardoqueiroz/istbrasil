@@ -52,6 +52,8 @@ export const reconciliarCapturaManual = async ({ argv = [], env = {}, http = axi
             horarioReferenciaUTC: r.statusFinanceiro === 'COMPLETED' ? r.atualizadoEm ?? r.criadoEm : null,
             fonteHorario: r.statusFinanceiro !== 'COMPLETED' ? null : r.atualizadoEm ? 'update_time' : r.criadoEm ? 'create_time' : null,
             ordemEsperadaId: ordemId, ordensRelacionadas: r.ordensRelacionadas, associacaoOrdem,
+            motivosAssociacaoInvalida: r.motivosAssociacaoInvalida,
+            motivoPendencia: r.motivoPendencia, estadoMotivoPendencia: r.estadoMotivoPendencia,
             limitacaoAssociacao: associacaoOrdem === 'NAO_DEMONSTRADA' ? 'API_NAO_INFORMOU_ORDEM_RELACIONADA' : null,
             validacao: divergente ? 'DIVERGENTE' : completo ? 'CONSISTENTE' : 'INCONCLUSIVA' });
         return completo ? 0 : 1;

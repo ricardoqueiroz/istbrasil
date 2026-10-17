@@ -11,7 +11,7 @@ export const capturarOrdemManual = async ({ argv = [], env = {}, http,
         const { provider } = prepararProviderManual({ contexto: c, env, http, captura: true });
         emitir({ etapa: 'configuracao', ordemId: c.ordemId, referencia: c.referencia, requestIdCaptura: c.requestId });
         const antes = await provider.consultar(c);
-        emitir({ etapa: 'consulta', ...resumoManual(antes) });
+        emitir({ etapa: 'consulta', ...resumoManual(antes), requestIdCaptura: c.requestId });
         if (!confereContexto(antes, c) || antes.estado !== 'APROVADO' || antes.capturaId !== null) return 1;
         // Unico ponto financeiro. Adaptador reconsulta aprovacao e nao faz retry.
         const r = await provider.capturar(c);
