@@ -51,9 +51,17 @@ const diagnosticoCaptura = d => {
         else if (d.supplementary_data.related_ids != null && !objeto(d.supplementary_data.related_ids)) motivos.add('RELATED_IDS_INVALIDO');
     }
     if (d.links != null && !Array.isArray(d.links)) motivos.add('LINKS_ESTRUTURA_INVALIDA');
-    for (const l of Array.isArray(d.links) ? d.links : []) {
+    const diagnosticosLinksUp = [];
+    for (const [indice, l] of (Array.isArray(d.links) ? d.links : []).entries()) {
         if (l?.rel !== 'up') continue;
-        const rejeitar = codigo => { motivos.add(codigo); };
+        // Projecao somente diagnostica; nunca utilizada para decidir aceitacao.
+        const diagnostico = { indice,
+            metodo: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'].includes(l.method) ? l.method : 'INVALIDO',
+            protocolo: 'INVALIDO', hostname: null, porta: null, tipoRecurso: 'DESCONHECIDO',
+            possuiCredenciais: false, possuiQuery: false, possuiFragmento: false,
+            origemPermitida: false, representacaoCanonica: false, codigos: [] };
+        diagnosticosLinksUp.push(diagnostico);
+        const rejeitar = codigo => { motivos.add(codigo); diagnostico.codigos.push(codigo); };
         if (l.method !== 'GET') rejeitar('UP_METODO_INVALIDO');
         if (typeof l.href !== 'string') { rejeitar('UP_HREF_TIPO_INVALIDO'); continue; }
         if (l.href.length > 2048) rejeitar('UP_URL_LIMITE_EXCEDIDO');
@@ -63,6 +71,15 @@ const diagnosticoCaptura = d => {
             const u = new URL(l.href);
             const ordem = /^\/v2\/checkout\/orders\/([A-Z0-9]{1,36})$/.exec(u.pathname);
             const autorizacao = /^\/v2\/payments\/authorizations\/([A-Z0-9]{1,36})$/.test(u.pathname);
+            diagnostico.protocolo = ['https:', 'http:'].includes(u.protocol) ? u.protocol : 'DESCONHECIDO';
+            diagnostico.hostname = u.hostname.length <= 253 && /^[a-z0-9.\-\[\]:]+$/.test(u.hostname) ? u.hostname : null;
+            diagnostico.porta = /^\d{1,5}$/.test(u.port) ? u.port : null;
+            diagnostico.tipoRecurso = ordem ? 'ORDEM' : autorizacao ? 'AUTORIZACAO' : 'DESCONHECIDO';
+            diagnostico.possuiCredenciais = Boolean(u.username || u.password);
+            diagnostico.possuiQuery = Boolean(u.search);
+            diagnostico.possuiFragmento = Boolean(u.hash);
+            diagnostico.origemPermitida = u.origin === HOST;
+            diagnostico.representacaoCanonica = l.href === `${HOST}${u.pathname}`;
             const verificar = (condicao, codigo) => { if (condicao) { rejeitar(codigo); valido = false; } };
             verificar(u.origin !== HOST, 'UP_ORIGEM_NAO_PERMITIDA');
             verificar(Boolean(u.username || u.password), 'UP_CREDENCIAIS_PROIBIDAS');
@@ -78,6 +95,7 @@ const diagnosticoCaptura = d => {
             if (valido && ordem) ordensRelacionadas.add(ordem[1]);
         } catch { rejeitar('UP_URL_INVALIDA'); }
     }
+    for (const diagnostico of diagnosticosLinksUp) diagnostico.codigos = [...new Set(diagnostico.codigos)].sort();
     // Lista fechada de codigos tecnicos: nunca refletir texto arbitrario da API.
     const razoes = ['BUYER_COMPLAINT', 'CHARGEBACK', 'ECHECK', 'INTERNATIONAL_WITHDRAWAL',
         'OTHER', 'PENDING_REVIEW', 'RECEIVING_PREFERENCE_MANDATES_MANUAL_ACTION',
@@ -91,7 +109,8 @@ const diagnosticoCaptura = d => {
     const motivoPendencia = estadoMotivoPendencia === 'INFORMADO' ? reason : null;
     return { recursoDisponivel: true, capturaId, statusFinanceiro, moeda, valorCentavos,
         criadoEm, atualizadoEm, ordensRelacionadas: [...ordensRelacionadas], associacaoInvalida: motivos.size > 0,
-        motivosAssociacaoInvalida: [...motivos].sort(), motivoPendencia, estadoMotivoPendencia, respostaInvalida };
+        motivosAssociacaoInvalida: [...motivos].sort(), diagnosticosLinksUp,
+        motivoPendencia, estadoMotivoPendencia, respostaInvalida };
 };
 
 // Somente configuracao e contexto confiaveis do backend. Nenhum efeito ao importar.

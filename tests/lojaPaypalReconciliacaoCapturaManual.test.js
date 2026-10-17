@@ -30,6 +30,77 @@ const rodar = async (m, opcoes = {}) => {
 };
 
 // Os codigos sao diagnosticos; nao alteram a precedencia das classificacoes.
+for (const [nome, origem, permitida, canonica, porta] of [
+    ['Sandbox', 'https://api-m.sandbox.paypal.com', true, true, null],
+    ['alternativa', 'https://api.sandbox.paypal.com', false, false, null],
+    ['Live', 'https://api-m.paypal.com', false, false, null],
+    ['externa', 'https://evil.example', false, false, null],
+    ['porta padrao explicita', 'https://api-m.sandbox.paypal.com:443', true, false, null],
+    ['porta alternativa', 'https://api-m.sandbox.paypal.com:8443', false, false, '8443']
+]) test(`diagnostico da origem ${nome} sem alterar aceitacao`, async () => {
+    const d = recurso(); d.links = [{ rel: 'up', method: 'GET', href: `${origem}/v2/checkout/orders/${ORDEM}` }];
+    const m = montar({ status: 200, data: d }); const r = await rodar(m);
+    const [diag] = r.resultado.diagnosticosLinksUp;
+    assert.deepEqual(diag, { indice: 0, metodo: 'GET', protocolo: 'https:', hostname: new URL(origem).hostname,
+        porta, tipoRecurso: 'ORDEM', possuiCredenciais: false, possuiQuery: false, possuiFragmento: false,
+        origemPermitida: permitida, representacaoCanonica: canonica,
+        codigos: [...(!permitida ? ['UP_ORIGEM_NAO_PERMITIDA'] : []), ...(!canonica ? ['UP_URL_NAO_CANONICA'] : [])] });
+    assert.equal(r.resultado.associacaoOrdem, canonica ? 'CONFIRMADA' : 'INVALIDA');
+    assert.equal(r.resultado.validacao, canonica ? 'CONSISTENTE' : 'INCONCLUSIVA');
+    assert.equal(m.chamadas.length, 2);
+});
+
+test('diagnosticos incluem apenas up, preservam indices e omitem IDs e conteudos secretos', async () => {
+    const d = recurso('PENDING');
+    d.links = [{ rel: 'self', href: 'fixture-secret' },
+        { rel: 'up', method: 'GET', href: 'https://user:fixture-secret@api-m.sandbox.paypal.com/v2/payments/authorizations/AUTHSECRET123?token=fixture-token#private@example.invalid' },
+        { rel: 'up', method: 'GET', href: `https://api-m.sandbox.paypal.com/v2/checkout/orders/${ORDEM}` },
+        { rel: 'refund', method: 'POST', href: 'fixture-secret' }];
+    const m = montar({ status: 200, data: d }); const r = await rodar(m);
+    const [a, b] = r.resultado.diagnosticosLinksUp;
+    assert.deepEqual(r.resultado.diagnosticosLinksUp.map(v => v.indice), [1, 2]);
+    assert.equal(a.tipoRecurso, 'AUTORIZACAO');
+    assert.equal(a.possuiCredenciais, true); assert.equal(a.possuiQuery, true); assert.equal(a.possuiFragmento, true);
+    assert.equal(a.origemPermitida, true); assert.equal(a.representacaoCanonica, false);
+    assert.deepEqual(a.codigos, ['UP_CREDENCIAIS_PROIBIDAS', 'UP_FRAGMENTO_PROIBIDO', 'UP_QUERY_PROIBIDA', 'UP_URL_NAO_CANONICA']);
+    assert.deepEqual(b.codigos, []); assert.equal(b.representacaoCanonica, true);
+    const json = JSON.stringify(r.resultado.diagnosticosLinksUp);
+    for (const secreto of [ORDEM, ID, 'AUTHSECRET123', 'fixture-secret', 'fixture-token', 'private@example.invalid', '/v2/', 'https://']) {
+        assert.equal(json.includes(secreto), false);
+    }
+    assert.deepEqual(r.resultado.ordensRelacionadas, [ORDEM]);
+    assert.equal(r.resultado.statusFinanceiro, 'PENDING'); assert.equal(r.resultado.associacaoOrdem, 'INVALIDA');
+    assert.equal(m.chamadas.length, 2);
+});
+
+for (const href of ['not-a-url', {}, null]) test(`URL inesperada ${typeof href} recebe diagnostico generico`, async () => {
+    const d = recurso(); d.links = [{ rel: 'up', method: 'fixture-secret', href }];
+    const r = await rodar(montar({ status: 200, data: d })); const [diag] = r.resultado.diagnosticosLinksUp;
+    assert.equal(diag.metodo, 'INVALIDO'); assert.equal(diag.protocolo, 'INVALIDO');
+    assert.equal(diag.hostname, null); assert.equal(diag.porta, null); assert.equal(diag.tipoRecurso, 'DESCONHECIDO');
+    assert.equal(diag.origemPermitida, false); assert.equal(diag.representacaoCanonica, false);
+    assert.equal(r.resultado.associacaoOrdem, 'INVALIDA');
+    assert.equal(JSON.stringify(diag).includes('fixture-secret'), false);
+});
+
+test('hostname excessivo e protocolo inesperado nao sao refletidos arbitrariamente', async () => {
+    const d = recurso(); d.links = [{ rel: 'up', method: 'GET', href: `https://${'a'.repeat(254)}.example/v2/checkout/orders/${ORDEM}` },
+        { rel: 'up', method: 'GET', href: `customsecret://evil.example/v2/checkout/orders/${ORDEM}` }];
+    const r = await rodar(montar({ status: 200, data: d }));
+    assert.equal(r.resultado.diagnosticosLinksUp[0].hostname, null);
+    assert.equal(r.resultado.diagnosticosLinksUp[1].protocolo, 'DESCONHECIDO');
+    assert.equal(JSON.stringify(r.resultado.diagnosticosLinksUp).includes('customsecret'), false);
+    assert.equal(r.resultado.associacaoOrdem, 'INVALIDA');
+});
+
+test('ausencia de links produz colecao vazia sem mudar a associacao', async () => {
+    for (const links of [undefined, [], [{ rel: 'self', href: 'fixture-secret' }]]) {
+        const d = recurso(); d.links = links;
+        const r = await rodar(montar({ status: 200, data: d }));
+        assert.deepEqual(r.resultado.diagnosticosLinksUp, []); assert.equal(r.resultado.associacaoOrdem, 'CONFIRMADA');
+    }
+});
+
 for (const [codigo, alterar] of [
     ['SUPPLEMENTARY_DATA_INVALIDO', d => { d.supplementary_data = []; }],
     ['RELATED_IDS_INVALIDO', d => { d.supplementary_data.related_ids = []; }],
