@@ -416,6 +416,79 @@ test('nucleo transacional em MariaDB descartavel e adaptador exclusivo de testes
         sim.concluirPendente(pg.publicId); assert.equal((await reconciliar(service, compra, pg)).estado, 'CAPTURADO');
         assert.equal(sim.chamadas.capturar, 1);
     });
+    await t.test('MariaDB: falha GET na reconciliacao preserva PENDENTE e Capture ID sem nova operacao', async () => {
+        const compra = await novaCompra(); const { sim, service } = montar();
+        const pg = await criar(service, compra); sim.aprovado(pg.publicId); sim.modos.captura = 'pendente';
+        assert.equal((await capturar(service, compra, pg)).estado, 'PENDENTE');
+        const antes = await ler(pg);
+        assert.equal(antes.p.estado, 'PENDENTE');
+        assert.ok(antes.p.ordem_externa_id); assert.ok(antes.p.captura_externa_id);
+        assert.equal(String(antes.p.valor_centavos), '19000'); assert.equal(antes.p.moeda, 'BRL');
+        const chamadasAntes = { ...sim.chamadas }; let consultas = 0;
+        const s = criarServico({ db: pool, contexto, adaptador: { ...sim.adaptador, async consultar(args) {
+            consultas++;
+            assert.equal(args.ordemId, antes.p.ordem_externa_id);
+            assert.equal(args.capturaId, antes.p.captura_externa_id);
+            throw new Error('falha GET simulada');
+        } } });
+        await assert.rejects(reconciliar(s, compra, pg), codigo('RESULTADO_DESCONHECIDO'));
+        const depois = await ler(pg);
+        assert.equal(consultas, 1);
+        assert.equal(depois.p.estado, 'PENDENTE'); assert.equal(depois.p.reserva_ativa, 1);
+        assert.equal(depois.p.ordem_externa_id, antes.p.ordem_externa_id);
+        assert.equal(depois.p.captura_externa_id, antes.p.captura_externa_id);
+        assert.equal(String(depois.p.valor_centavos), String(antes.p.valor_centavos));
+        assert.equal(depois.p.moeda, antes.p.moeda);
+        assert.equal(String(depois.p.capturado_centavos), '0'); assert.equal(depois.p.capturado_em, null);
+        assert.equal(depois.pedido.estado, antes.pedido.estado); assert.notEqual(depois.pedido.estado, 'PAGO');
+        assert.equal(depois.pedido.pagamento_confirmado_em, null);
+        assert.deepEqual(sim.chamadas, chamadasAntes); assert.equal(sim.efeitosCaptura, 0);
+        assert.deepEqual(depois.operacoes.map(o => [o.id, o.acao, o.chave_idempotencia, o.request_id_provedor]),
+            antes.operacoes.map(o => [o.id, o.acao, o.chave_idempotencia, o.request_id_provedor]));
+        const op = depois.operacoes.find(o => o.acao === 'CAPTURAR');
+        assert.equal(op.estado, 'DESCONHECIDA'); assert.equal(op.execucao_token, null); assert.equal(op.execucao_ate, null);
+        assert.equal(op.tentativas, antes.operacoes.find(o => o.id === op.id).tentativas + 1);
+        assert.deepEqual(depois.eventos.slice(0, antes.eventos.length), antes.eventos);
+        assert.equal(depois.eventos.length, antes.eventos.length + 1);
+        const evento = depois.eventos.at(-1);
+        assert.equal(evento.origem, 'RECONCILIACAO'); assert.equal(evento.tipo, 'RESULTADO_DESCONHECIDO');
+        assert.deepEqual(evento.conteudo_hash, hashPagamento(JSON.parse(evento.evidencia_json)));
+        assert.doesNotMatch(evento.evidencia_json, /falha GET simulada/);
+    });
+    await t.test('MariaDB: envelope contraditorio bloqueia captura favoravel e revisao repetida e idempotente', async () => {
+        const compra = await novaCompra(); const { sim, service } = montar(); const pg = await criar(service, compra);
+        const antes = await ler(pg); let consultas = 0;
+        const observacao = { evidencia: 'CONTRADITORIA', associacaoOrdem: 'DIVERGENTE', validacao: 'DIVERGENTE',
+            statusOrdem: 'COMPLETED', statusCaptura: 'COMPLETED', motivoPendencia: null };
+        const adaptador = { ...sim.adaptador, async reconciliar(args) {
+            consultas++;
+            assert.equal(args.ordemId, antes.p.ordem_externa_id);
+            const ordem = await sim.adaptador.consultar(args);
+            return normalizarReconciliacaoPagamento({ resultado: { ...ordem, estado: 'CAPTURADO',
+                capturaId: `captura-contraditoria-${pg.publicId}`, capturadoEm: new Date().toISOString() }, observacao });
+        } };
+        const s = criarLojaPagamentoService({ db: pool, contexto, adaptador });
+        const resultado = await reconciliar(s, compra, pg); const depois = await ler(pg);
+        assert.equal(resultado.estado, 'REVISAO'); assert.equal(resultado.pedidoEstado, 'REVISAO');
+        assert.equal(depois.p.motivo_revisao, 'EVIDENCIA_RECONCILIACAO_DIVERGENTE');
+        assert.equal(depois.pedido.motivo_revisao, depois.p.motivo_revisao);
+        assert.equal(depois.p.reserva_ativa, 1); assert.equal(String(depois.p.capturado_centavos), '0');
+        assert.equal(depois.p.capturado_em, null); assert.equal(depois.p.captura_externa_id, null);
+        assert.equal(depois.p.ordem_externa_id, antes.p.ordem_externa_id);
+        assert.equal(depois.pedido.pagamento_confirmado_em, null);
+        assert.equal(sim.chamadas.capturar, 0); assert.equal(sim.efeitosCaptura, 0);
+        assert.deepEqual(depois.operacoes.map(o => o.id), antes.operacoes.map(o => o.id));
+        assert.equal(depois.operacoes[0].estado, 'REVISAO'); assert.equal(depois.operacoes[0].execucao_token, null);
+        assert.equal(depois.operacoes[0].execucao_ate, null);
+        assert.deepEqual(JSON.parse(depois.operacoes[0].resultado_json).observacao, observacao);
+        assert.deepEqual(depois.eventos.slice(0, antes.eventos.length), antes.eventos);
+        const revisao = depois.eventos.find(e => e.tipo === 'REVISAO_FINANCEIRA');
+        assert.ok(revisao); assert.equal(JSON.parse(revisao.evidencia_json).motivo, depois.p.motivo_revisao);
+        assert.deepEqual(revisao.conteudo_hash, hashPagamento(JSON.parse(revisao.evidencia_json)));
+        assert.deepEqual(await reconciliar(s, compra, pg), resultado);
+        assert.deepEqual(await ler(pg), depois);
+        assert.equal(consultas, 1); assert.equal(sim.chamadas.capturar, 0); assert.equal(sim.chamadas.criar, 1);
+    });
     await t.test('recusa definitiva libera reserva, conserva evidencia e permite nova tentativa', async () => {
         const compra = await novaCompra(); const { sim, service } = montar(); const pg = await criar(service, compra); sim.aprovado(pg.publicId); sim.modos.captura = 'recusada';
         assert.equal((await capturar(service, compra, pg)).estado, 'RECUSADO');
@@ -531,9 +604,29 @@ test('nucleo transacional em MariaDB descartavel e adaptador exclusivo de testes
         });
     }
     for (const estado of ['CANCELADO', 'EXPIRADO']) await t.test(`encerramento externo definitivo ${estado} libera somente a tentativa`, async () => {
-        const compra = await novaCompra(); const { sim, service } = montar(); const pg = await criar(service, compra);
+        const compra = await novaCompra(); const sim = criarPagamentoSimulado();
+        // Este cenario declara encerramento definitivo da ordem, nao ausencia de captura como prova.
+        // O helper generico conserva INCONCLUSIVA quando nao ha Capture ID.
+        const observacao = { evidencia: 'PRESENTE', associacaoOrdem: 'CONFIRMADA', validacao: 'CONSISTENTE',
+            statusOrdem: 'VOIDED', statusCaptura: null, motivoPendencia: null };
+        const adaptador = { ...sim.adaptador, async reconciliar(args) {
+            const resultado = await sim.adaptador.consultar(args);
+            assert.equal(resultado.estado, estado);
+            assert.equal(resultado.referencia, args.referencia);
+            assert.equal(resultado.ordemId, args.ordemId);
+            assert.equal(resultado.capturaId, null);
+            assert.equal(resultado.capturadoEm, null);
+            return normalizarReconciliacaoPagamento({ resultado, observacao });
+        } };
+        const service = criarLojaPagamentoService({ db: pool, contexto, adaptador });
+        const pg = await criar(service, compra);
         sim.encerrar(pg.publicId, estado); assert.equal((await reconciliar(service, compra, pg)).estado, estado);
         const dados = await ler(pg); assert.equal(dados.p.reserva_ativa, null); assert.notEqual(dados.pedido.estado, 'PAGO');
+        assert.equal(dados.pedido.pagamento_confirmado_em, null);
+        assert.equal(String(dados.p.capturado_centavos), '0');
+        assert.equal(dados.p.captura_externa_id, null);
+        assert.equal(sim.chamadas.capturar, 0);
+        assert.deepEqual(JSON.parse(dados.operacoes[0].resultado_json).observacao, observacao);
     });
     await t.test('alteracao inesperada do total do pedido impede captura e vai para revisao', async () => {
         const compra = await novaCompra(); const { sim, service } = montar(); const pg = await criar(service, compra); sim.aprovado(pg.publicId);

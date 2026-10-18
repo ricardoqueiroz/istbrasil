@@ -2,23 +2,34 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { mkdtemp, readFile, realpath, rm } from 'node:fs/promises';
-import { basename, dirname, join, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
-import { randomBytes, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import net from 'node:net';
 import mysql from 'mysql2/promise';
 
 // Instancia propria: nao importa dotenv, pool da aplicacao nem credenciais reais.
 export const criarBancoPagamentoIsolado = async t => {
     const bin = process.env.IST_LOJA_PAGAMENTOS_MARIADB_BIN;
-    assert.ok(bin);
+    assert.ok(bin && isAbsolute(bin), 'Diretorio absoluto MariaDB obrigatorio.');
+    const basedir = dirname(await realpath(bin));
+    const versaoHeader = await readFile(join(basedir, 'include/mysql/server/mysql_version.h'), 'utf8');
+    assert.match(versaoHeader, /^#define MYSQL_SERVER_VERSION\s+"13\.0\.2-MariaDB"/m,
+        'Bootstrap desta fixture limitado ao MariaDB 13.0.2.');
+    const scripts = await Promise.all(['mariadb_system_tables.sql', 'mariadb_system_tables_data.sql']
+        .map(nome => readFile(join(basedir, 'share', nome), 'utf8')));
+    // Nunca herdar DB_*, PayPal, MYSQL_DEBUG ou segredos do processo de testes.
+    const ambienteFilho = {};
+    for (const nome of ['SystemRoot', 'WINDIR', 'TEMP', 'TMP']) {
+        if (process.env[nome]) ambienteFilho[nome] = process.env[nome];
+    }
+    const senha = randomBytes(32).toString('hex');
+    const primeiroHash = createHash('sha1').update(senha).digest();
+    const verificador = '*' + createHash('sha1').update(primeiroHash).digest('hex').toUpperCase();
+    primeiroHash.fill(0);
     const temp = await realpath(tmpdir());
     const datadir = await mkdtemp(join(temp, 'ist-loja-67-4-'));
     let processo, admin, pool, verificado = false;
-    const listener = net.createServer(); listener.listen(0, '127.0.0.1'); await once(listener, 'listening');
-    const port = listener.address().port;
-    await new Promise((r, j) => listener.close(e => e ? j(e) : r()));
-    assert.ok(port > 1024 && ![3306, 3307].includes(port));
     t.after(async () => {
         if (pool) await pool.end();
         if (admin) {
@@ -36,24 +47,55 @@ export const criarBancoPagamentoIsolado = async t => {
         await rm(alvo, { recursive: true });
         t.diagnostic('Processo 67.4 encerrado e datadir descartavel removido.');
     });
-    const instalador = spawn(join(bin, 'mariadb-install-db.exe'), [`--datadir=${datadir}`, `--port=${port}`, '--silent'],
-        { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
-    let log = ''; instalador.stdout.on('data', b => { log += b; }); instalador.stderr.on('data', b => { log += b; });
-    assert.equal((await once(instalador, 'exit'))[0], 0, log);
+    const listener = net.createServer(); listener.listen(0, '127.0.0.1');
+    let port;
+    try { await once(listener, 'listening'); port = listener.address().port; }
+    finally { if (listener.listening) await new Promise((r, j) => listener.close(e => e ? j(e) : r())); }
+    assert.ok(port > 1024 && ![3306, 3307].includes(port));
+    // Bootstrap oficial sem instalador: sem servico, my.ini, alteracao de ACL ou limpeza implicita.
+    // --console e saidas descartadas impedem repasse de SQL/verificadores em erros.
+    const opcoesComuns = ['--no-defaults', `--basedir=${basedir}`, `--datadir=${datadir}`,
+        `--tmpdir=${datadir}`, '--console', '--skip-stack-trace', '--general-log=0', '--slow-query-log=0', '--skip-log-bin'];
+    let sqlBootstrap = 'CREATE DATABASE mysql;\nUSE mysql;\n' + scripts.join('\n') + '\n'
+        + `UPDATE mysql.global_priv SET Priv=JSON_SET(JSON_REMOVE(Priv,'$.auth_or'),`
+        + `'$.plugin','mysql_native_password','$.authentication_string','${verificador}',`
+        + "'$.password_last_changed',UNIX_TIMESTAMP()) WHERE User='root';\n"
+        + "DELETE FROM mysql.global_priv WHERE User='';\n"
+        + "IF NOT EXISTS (SELECT 1 FROM mysql.global_priv WHERE User='root' AND Host='127.0.0.1') "
+        + 'OR EXISTS (SELECT 1 FROM mysql.global_priv WHERE User=\'root\' AND ('
+        + `COALESCE(JSON_VALUE(Priv,'$.authentication_string'),'') <> '${verificador}' `
+        + "OR COALESCE(JSON_VALUE(Priv,'$.plugin'),'') <> 'mysql_native_password' "
+        + "OR JSON_CONTAINS_PATH(Priv,'one','$.auth_or'))) "
+        + "THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='BOOTSTRAP_AUTH_INVALIDA'; END IF;\n-- end.";
+    try {
+        processo = spawn(join(bin, 'mariadbd.exe'), [...opcoesComuns, '--bootstrap', '--skip-networking',
+            '--named-pipe=OFF'], { windowsHide: true, env: ambienteFilho, stdio: ['pipe', 'ignore', 'ignore'] });
+        const fim = once(processo, 'exit');
+        const envio = new Promise((r, j) => {
+            processo.stdin.once('error', j);
+            processo.stdin.end(sqlBootstrap, 'utf8', r);
+        });
+        const [[codigo, sinal]] = await Promise.all([fim, envio]);
+        if (codigo !== 0 || sinal) throw new Error('bootstrap');
+    } catch {
+        throw new Error('Bootstrap MariaDB recusado; TCP e SQL financeiro nao iniciados.');
+    } finally { sqlBootstrap = null; }
     processo = spawn(join(bin, 'mariadbd.exe'), ['--no-defaults', `--datadir=${datadir}`, `--port=${port}`,
-        '--bind-address=127.0.0.1', '--skip-name-resolve', '--console'], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
-    processo.stdout.on('data', b => { log += b; }); processo.stderr.on('data', b => { log += b; });
-    const config = { host: '127.0.0.1', port, user: 'root', password: '', connectTimeout: 1000,
+        `--basedir=${basedir}`, '--bind-address=127.0.0.1', '--skip-name-resolve', '--named-pipe=OFF',
+        '--console', '--skip-stack-trace', '--general-log=0', '--slow-query-log=0', '--skip-log-bin'],
+    { windowsHide: true, env: ambienteFilho, stdio: 'ignore' });
+    await once(processo, 'spawn');
+    const config = { host: '127.0.0.1', port, user: 'root', password: senha, connectTimeout: 1000,
         supportBigNumbers: true, bigNumberStrings: true, dateStrings: true };
     for (let i = 0; i < 100; i++) {
-        assert.equal(processo.exitCode, null, log);
+        assert.equal(processo.exitCode, null, 'MariaDB de teste encerrou durante a inicializacao.');
         try { admin = await mysql.createConnection(config); break; }
         catch { await new Promise(r => setTimeout(r, 100)); }
     }
-    assert.ok(admin, log);
+    assert.ok(admin, 'Conexao autenticada com MariaDB de teste indisponivel.');
     const [[identidade]] = await admin.query('SELECT @@datadir AS datadir, @@port AS porta, VERSION() AS versao');
     assert.equal((await realpath(identidade.datadir)).toLowerCase(), datadir.toLowerCase());
-    assert.equal(Number(identidade.porta), port); assert.match(identidade.versao, /MariaDB/); verificado = true;
+    assert.equal(Number(identidade.porta), port); assert.match(identidade.versao, /^13\.0\.2-MariaDB/); verificado = true;
     t.diagnostic(`MariaDB isolado: ${identidade.versao}; 127.0.0.1:${port}; TEMP confirmado.`);
     // Prefixo ja permitido pela migration 67.3 imutavel; instancia/datadir sao 67.4.
     const banco = `ist_loja_67_3_${randomBytes(6).toString('hex')}`;
