@@ -315,6 +315,134 @@ test('nucleo transacional em MariaDB descartavel e adaptador exclusivo de testes
             commit: () => c.commit(), rollback: () => c.rollback(), release: () => c.release(), destroy: () => c.destroy() });
     } });
 
+    const prepararRecuperacao = async () => {
+        let instante = Date.now(); let responder; let consultas = 0;
+        const agora = () => new Date(instante);
+        const contextoAuto = { ...contexto, contaRecebedora: `auto-${randomUUID()}` };
+        const sim = criarPagamentoSimulado({ agora });
+        const adaptador = { ...sim.adaptador, async reconciliar(args) {
+            consultas++;
+            const resultado = await sim.adaptador.consultar(args);
+            return responder ? responder(args, resultado) : envelopeTeste(resultado);
+        } };
+        const novo = (opcoes = {}) => criarLojaPagamentoService({ db: pool, contexto: contextoAuto, adaptador, agora, ...opcoes });
+        const service = novo(), compra = await novaCompra(), pg = await criar(service, compra);
+        sim.aprovado(pg.publicId); sim.modos.captura = 'pendente';
+        await capturar(service, compra, pg);
+        return { service, novo, sim, compra, pg, contextoAuto, get consultas() { return consultas; },
+            avancar(ms = 61000) { instante += ms; }, responder(fn) { responder = fn; },
+            async recuperar(s = service) { return s.recuperarPendencias(); } };
+    };
+    for (const estadoSessao of ['expirada', 'revogada']) await t.test(`recuperacao interna com sessao ${estadoSessao} confirma sem recaptura`, async () => {
+        const m = await prepararRecuperacao();
+        if (estadoSessao === 'revogada') await admin.query('UPDATE ist_loja_sessoes SET revogada_em=criada_em WHERE id=?', [m.compra.sessao.id]);
+        else await admin.query('UPDATE ist_loja_sessoes SET expira_em=DATE_ADD(criada_em,INTERVAL 1 SECOND) WHERE id=?', [m.compra.sessao.id]);
+        m.sim.concluirPendente(m.pg.publicId); m.avancar();
+        const r = await m.recuperar(); assert.equal(r.length, 1); assert.equal(r[0].resultado.estado, 'CAPTURADO');
+        const dados = await ler(m.pg); assert.equal(dados.pedido.estado, 'PAGO');
+        assert.equal(m.sim.chamadas.capturar, 1); assert.equal(m.consultas, 1);
+        assert.deepEqual(await m.recuperar(), []); assert.equal(m.consultas, 1);
+        assert.equal(dados.eventos.filter(e => e.tipo === 'RECUPERACAO_AUTOMATICA').length, 1);
+    });
+    await t.test('recuperacao falha GET preserva pendencia, IDs e backoff persistido', async () => {
+        const m = await prepararRecuperacao(); const antes = await ler(m.pg);
+        m.responder(() => { throw new Error('segredo nao persistir'); }); m.avancar();
+        const r = await m.recuperar(); assert.equal(r[0].erro, 'RESULTADO_DESCONHECIDO');
+        const depois = await ler(m.pg); assert.equal(depois.p.estado, 'PENDENTE');
+        assert.equal(depois.p.captura_externa_id, antes.p.captura_externa_id); assert.equal(depois.p.ordem_externa_id, antes.p.ordem_externa_id);
+        assert.equal(depois.pedido.pagamento_confirmado_em, null); assert.equal(depois.p.reserva_ativa, 1);
+        assert.deepEqual(depois.operacoes.map(o => o.id), antes.operacoes.map(o => o.id));
+        const op = depois.operacoes.find(o => o.acao === 'CAPTURAR');
+        assert.equal(op.estado, 'DESCONHECIDA'); assert.ok(op.proxima_tentativa_em > op.atualizado_em);
+        assert.deepEqual(await m.recuperar(), []); assert.equal(m.consultas, 1);
+        assert.equal(m.sim.chamadas.capturar, 1); assert.doesNotMatch(JSON.stringify(depois), /segredo nao persistir/);
+    });
+    await t.test('recuperacao contraditoria entra em revisao sem registrar dinheiro', async () => {
+        const m = await prepararRecuperacao();
+        m.responder((a, r) => normalizarReconciliacaoPagamento({ resultado: { ...r, estado: 'CAPTURADO', capturadoEm: new Date().toISOString() },
+            observacao: { evidencia: 'CONTRADITORIA', associacaoOrdem: 'DIVERGENTE', validacao: 'DIVERGENTE',
+                statusOrdem: 'COMPLETED', statusCaptura: 'COMPLETED', motivoPendencia: null } }));
+        m.avancar(); assert.equal((await m.recuperar())[0].resultado.estado, 'REVISAO');
+        const d = await ler(m.pg); assert.equal(String(d.p.capturado_centavos), '0'); assert.equal(d.pedido.pagamento_confirmado_em, null);
+        assert.deepEqual(await m.recuperar(), []); assert.equal(m.consultas, 1);
+    });
+    await t.test('recuperacao de captura tardia conserva revisao e evidencia', async () => {
+        const m = await prepararRecuperacao(); m.sim.concluirPendente(m.pg.publicId); m.avancar(1900000);
+        assert.equal((await m.recuperar())[0].resultado.estado, 'REVISAO');
+        const d = await ler(m.pg); assert.equal(String(d.p.capturado_centavos), '19000');
+        assert.equal(d.p.motivo_revisao, 'CAPTURA_TARDIA_OU_INESPERADA'); assert.equal(d.pedido.pagamento_confirmado_em, null);
+    });
+    await t.test('recuperacao concorrente reserva uma vez e nao mantem locks durante consulta', async () => {
+        const m = await prepararRecuperacao(); const entrou = adiar(), liberar = adiar();
+        m.responder(async (a, r) => { entrou.resolver(); await liberar.promessa; return envelopeTeste(r); }); m.avancar();
+        const primeira = m.recuperar(); await entrou.promessa;
+        try { assert.deepEqual(await m.recuperar(m.novo()), []); }
+        finally { liberar.resolver(); }
+        await primeira; assert.equal(m.consultas, 1); assert.equal(m.sim.chamadas.capturar, 1);
+    });
+    await t.test('recuperacao com token vencido nao sobrescreve trabalhador posterior', async () => {
+        const m = await prepararRecuperacao(); const entrou = adiar(), liberar = adiar(); let n = 0;
+        m.responder(async (a, r) => { if (++n === 1) { entrou.resolver(); await liberar.promessa; } return envelopeTeste(r); });
+        m.avancar(); const antiga = m.recuperar(); await entrou.promessa; m.avancar();
+        m.sim.concluirPendente(m.pg.publicId);
+        try { assert.equal((await m.recuperar(m.novo()))[0].resultado.estado, 'CAPTURADO'); }
+        finally { liberar.resolver(); }
+        const antes = await ler(m.pg); await antiga; assert.deepEqual(await ler(m.pg), antes);
+        assert.equal(m.sim.chamadas.capturar, 1);
+    });
+    await t.test('recuperacao limita dez reservas automaticas e intervalo de um minuto ate uma hora', async () => {
+        const m = await prepararRecuperacao(); assert.deepEqual(await m.recuperar(), []);
+        for (let i = 0; i < 10; i++) {
+            m.avancar(i === 0 ? 61000 : Math.min(3600000, 60000 * 2 ** (i - 1)) + 1000);
+            assert.equal((await m.recuperar())[0].resultado.estado, 'PENDENTE');
+            assert.deepEqual(await m.recuperar(), []);
+        }
+        m.avancar(3601000);
+        assert.equal((await m.recuperar())[0].resultado.intervencao, 'RECUPERACAO_LIMITE');
+        assert.deepEqual(await m.recuperar(), []); assert.equal(m.consultas, 10);
+        const d = await ler(m.pg); assert.equal(d.p.estado, 'PENDENTE'); assert.equal(d.p.reserva_ativa, 1);
+        assert.equal(d.eventos.filter(e => e.tipo === 'RECUPERACAO_AUTOMATICA').length, 10);
+        assert.equal(d.eventos.filter(e => e.tipo === 'RECUPERACAO_INTERVENCAO').length, 1);
+        const op = d.operacoes.find(o => o.acao === 'CAPTURAR'); assert.equal(op.tentativas, 11);
+        assert.equal(m.sim.chamadas.capturar, 1);
+        await assert.rejects(m.service.recuperarPendencias({ limite: 11 }), codigo('SOLICITACAO_INVALIDA'));
+    });
+    for (const persistiu of [true, false]) await t.test(`recuperacao retoma COMMIT incerto persistiu=${persistiu}`, async () => {
+        const m = await prepararRecuperacao(); let falhou = false;
+        const db = adaptarPool(c => { let pago = false; return { ...c,
+            async query(sql, params) { if (sql.startsWith('UPDATE ist_loja_pedidos') && params[0] === 'PAGO') pago = true; return c.query(sql, params); },
+            async commit() { if (pago && !falhou) { falhou = true; if (persistiu) await c.commit(); throw new Error('commit perdido'); } return c.commit(); }
+        }; });
+        m.sim.concluirPendente(m.pg.publicId); m.avancar(); await m.recuperar(m.novo({ db }));
+        if (!persistiu) { assert.equal((await ler(m.pg)).p.estado, 'PENDENTE'); m.avancar(); await m.recuperar(m.novo()); }
+        assert.equal((await ler(m.pg)).pedido.estado, 'PAGO'); assert.equal(m.sim.chamadas.capturar, 1);
+    });
+    await t.test('recuperacao sem ordem sinaliza intervencao e nao recria ordem', async () => {
+        const m = await prepararRecuperacao();
+        await admin.query('UPDATE ist_loja_pagamentos SET ordem_externa_id=NULL,captura_externa_id=NULL WHERE public_id=?', [m.pg.publicId]);
+        m.avancar(); assert.equal((await m.recuperar())[0].resultado.intervencao, 'RECUPERACAO_SEM_ORDEM');
+        assert.deepEqual(await m.recuperar(), []); assert.equal(m.consultas, 0); assert.equal(m.sim.chamadas.criar, 1);
+    });
+    await t.test('recuperacao isola provedor ambiente e recebedor', async () => {
+        const m = await prepararRecuperacao(); m.avancar();
+        for (const extra of [{ provedor: 'outro' }, { ambiente: 'live' }, { contaRecebedora: 'outro' }]) {
+            const outro = m.novo({ contexto: { ...m.contextoAuto, ...extra }, adaptador: {
+                criar() { assert.fail(); }, consultar() { assert.fail(); }, capturar() { assert.fail(); }, reconciliar() { assert.fail(); }
+            } });
+            assert.deepEqual(await outro.recuperarPendencias(), []);
+        }
+        assert.equal(m.consultas, 0);
+    });
+    await t.test('recuperacao interrompe lote apos falha de autenticacao', async () => {
+        const m = await prepararRecuperacao();
+        m.responder(() => { throw criarFalhaPagamento({ categoria: 'AUTENTICACAO', envio: 'NAO_ENVIADO' }); });
+        // Segunda pendencia no mesmo contexto, para comprovar interrupcao antes do proximo GET.
+        const compra = await novaCompra(), pg = await criar(m.service, compra); m.sim.aprovado(pg.publicId);
+        await capturar(m.service, compra, pg); m.avancar();
+        const r = await m.recuperar(); assert.equal(r.length, 1); assert.equal(r[0].erro, 'RESULTADO_DESCONHECIDO');
+        assert.equal(m.consultas, 1); assert.equal((await ler(pg)).p.estado, 'PENDENTE');
+    });
+
     await t.test('cria tentativa e operacao antes da chamada, usando somente total persistido', async () => {
         const compra = await novaCompra();
         const { sim, service } = montar({ aoChamar: async (metodo, args) => {

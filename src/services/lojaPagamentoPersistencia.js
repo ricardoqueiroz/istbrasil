@@ -77,7 +77,36 @@ export const criarPersistenciaPagamento = ({ db, agora }) => {
             } finally { if (c) c.release(); }
         }
     };
-    return { transacao };
+    const candidatosRecuperacao = async (contexto, limite) => {
+        let c;
+        try {
+            c = await db.getConnection();
+            const [linhas] = await c.query(`SELECT p.id AS pagamentoId, p.pedido_id AS pedidoId,
+                d.sessao_id AS sessaoId, o.id AS operacaoId
+                FROM ist_loja_pagamentos p JOIN ist_loja_pedidos d ON d.id=p.pedido_id
+                JOIN ist_loja_pagamento_operacoes o ON o.pagamento_id=p.id AND o.pedido_id=d.id
+                WHERE p.provedor=? AND p.ambiente=? AND p.conta_recebedora=? AND p.reserva_ativa=1
+                AND p.estado IN ('CRIANDO','CAPTURANDO','DESCONHECIDO','PENDENTE')
+                AND (o.acao='CAPTURAR' OR NOT EXISTS (SELECT 1 FROM ist_loja_pagamento_operacoes x
+                    WHERE x.pagamento_id=p.id AND x.acao='CAPTURAR'))
+                AND (o.codigo_erro IS NULL OR o.codigo_erro NOT IN ('RECUPERACAO_LIMITE','RECUPERACAO_SEM_ORDEM'))
+                AND (o.estado='DESCONHECIDA' OR (o.estado='EM_EXECUCAO' AND o.execucao_ate<=?)
+                    OR (p.estado='PENDENTE' AND o.estado='SUCESSO'))
+                AND GREATEST(COALESCE(o.proxima_tentativa_em,o.atualizado_em),DATE_ADD(o.atualizado_em,INTERVAL 1 MINUTE))<=?
+                ORDER BY COALESCE(o.proxima_tentativa_em,DATE_ADD(o.atualizado_em,INTERVAL 1 MINUTE)),o.id LIMIT ?`,
+            [contexto.provedor, contexto.ambiente, contexto.contaRecebedora,
+                sqlUtcPagamento(agora().toISOString()), sqlUtcPagamento(agora().toISOString()), limite]);
+            return linhas;
+        } catch { throw erroPagamento('ERRO_INTERNO'); }
+        finally { if (c) c.release(); }
+    };
+    const contarRecuperacoes = async (ctx, pg, op) => {
+        const [[r]] = await ctx.c.query(`SELECT COUNT(*) AS total FROM ist_loja_pagamento_eventos
+            WHERE pagamento_id=? AND origem='INTERNO' AND tipo='RECUPERACAO_AUTOMATICA'
+            AND JSON_UNQUOTE(JSON_EXTRACT(evidencia_json,'$.operacaoId'))=?`, [pg.id, String(op.id)]);
+        return Number(r.total);
+    };
+    return { transacao, candidatosRecuperacao, contarRecuperacoes };
 };
 
 const camposPermitidos = {

@@ -107,7 +107,8 @@ export const criarLojaPagamentoService = ({ db, adaptador, contexto, agora = () 
         }
         if (!finais.includes(pg.estado) && !(reconciliacaoExplicita && pg.estado === 'PENDENTE')) await mudar(ctx, pg, 'DESCONHECIDO');
         await atualizar(ctx, OP, op, { estado: 'DESCONHECIDA', execucao_token: null, execucao_ate: null,
-            codigo_erro: falha.categoria, proxima_tentativa_em: ctx.instante, resultado_json: JSON.stringify({ falha }) });
+            codigo_erro: falha.categoria, proxima_tentativa_em: job.recuperacao ? op.proxima_tentativa_em : ctx.instante,
+            resultado_json: JSON.stringify({ falha }) });
         await evento(ctx, pg, reconciliacaoExplicita ? 'RECONCILIACAO' : 'INTERNO', 'RESULTADO_DESCONHECIDO', { acao: op.acao, falha });
         return null;
     });
@@ -157,7 +158,8 @@ export const criarLojaPagamentoService = ({ db, adaptador, contexto, agora = () 
             if (Object.keys(ids).length) await atualizar(ctx, PG, pg, ids);
             if (!finais.includes(pg.estado) && !(observacao && pg.estado === 'PENDENTE')) await mudar(ctx, pg, 'DESCONHECIDO');
             await atualizar(ctx, OP, op, { estado: 'DESCONHECIDA', execucao_token: null, execucao_ate: null,
-                codigo_erro: falha?.categoria ?? 'RESULTADO_DESCONHECIDO', proxima_tentativa_em: ctx.instante,
+                codigo_erro: falha?.categoria ?? 'RESULTADO_DESCONHECIDO',
+                proxima_tentativa_em: job.recuperacao ? op.proxima_tentativa_em : ctx.instante,
                 resultado_json: JSON.stringify(falha ? { ...evidencia, falha } : evidencia) });
             return pagamentoPublico(pg, ctx.pedido);
         }
@@ -202,6 +204,28 @@ export const criarLojaPagamentoService = ({ db, adaptador, contexto, agora = () 
     const executar = async (job, reconciliar = false) => {
         const etapa = await transacao(job.referencia, async ctx => {
             const { pg, op } = operacaoCtx(ctx, job);
+            let agendamento = {};
+            if (job.recuperacao) {
+                const preferida = ctx.operacoes.find(o => o.pagamento_id === pg.id && o.acao === 'CAPTURAR')
+                    ?? ctx.operacoes.find(o => o.pagamento_id === pg.id && o.acao === 'CRIAR');
+                const prazo = new Date(Math.max(Date.parse(op.proxima_tentativa_em ?? op.atualizado_em),
+                    Date.parse(op.atualizado_em) + 60000)).toISOString();
+                const elegivel = op.estado === 'DESCONHECIDA' || (op.estado === 'EM_EXECUCAO' && op.execucao_ate <= ctx.instante)
+                    || (pg.estado === 'PENDENTE' && op.estado === 'SUCESSO');
+                if (preferida?.id !== op.id || fechado(pg) || !['CRIANDO', 'CAPTURANDO', 'DESCONHECIDO', 'PENDENTE'].includes(pg.estado)
+                    || !elegivel || prazo > ctx.instante
+                    || ['RECUPERACAO_LIMITE', 'RECUPERACAO_SEM_ORDEM'].includes(op.codigo_erro)) return { ignorada: true };
+                const usadas = await persistencia.contarRecuperacoes(ctx, pg, op);
+                if (!pg.ordem_externa_id || usadas >= 10 || op.tentativas >= 65535) {
+                    const motivo = !pg.ordem_externa_id ? 'RECUPERACAO_SEM_ORDEM' : 'RECUPERACAO_LIMITE';
+                    await atualizar(ctx, OP, op, { codigo_erro: motivo });
+                    await evento(ctx, pg, 'INTERNO', 'RECUPERACAO_INTERVENCAO', { operacaoId: op.id, motivo });
+                    return { intervencao: motivo };
+                }
+                agendamento = { proxima_tentativa_em: new Date(Date.parse(ctx.instante)
+                    + Math.min(3600000, 60000 * 2 ** usadas)).toISOString() };
+                await evento(ctx, pg, 'INTERNO', 'RECUPERACAO_AUTOMATICA', { operacaoId: op.id, numero: usadas + 1 });
+            }
             if (pedidoDivergente(ctx, pg)) return { dto: await revisar(ctx, pg, op, 'PEDIDO_DIVERGENTE') };
             if (finais.includes(pg.estado) || (!reconciliar && ['SUCESSO', 'RECUSADA', 'REVISAO'].includes(op.estado))) {
                 return { dto: pagamentoPublico(pg, ctx.pedido) };
@@ -212,10 +236,12 @@ export const criarLojaPagamentoService = ({ db, adaptador, contexto, agora = () 
             const token = randomBytes(16);
             await atualizar(ctx, OP, op, { estado: 'EM_EXECUCAO', execucao_token: token,
                 execucao_ate: new Date(Date.parse(ctx.instante) + execucaoMs).toISOString(), tentativas: op.tentativas + 1,
+                ...agendamento,
                 ...(!consulta && op.acao === 'CRIAR' ? { envio_iniciado_em: ctx.instante } : {}) });
             return { token, consulta, acao: op.acao, args: { ...argsAdaptador(ctx, pg, op),
                 ...(reconciliar ? { provedor: pg.provedor } : {}) } };
         });
+        if (etapa.ignorada || etapa.intervencao) return etapa;
         if (etapa.dto) return etapa.dto;
         const { token } = etapa;
         let ultimoResultado = null;
@@ -295,7 +321,9 @@ export const criarLojaPagamentoService = ({ db, adaptador, contexto, agora = () 
             // Resposta externa/COMMIT perdido nunca provoca outra chamada financeira.
             try { const conhecido = await marcarIncerto(job, token, falhaAdaptador ?? classificarFalhaPagamento(null), reconciliar); if (conhecido) return conhecido; }
             catch { /* Permanecer indeterminado; nao expor SQL/excecao do adaptador. */ }
-            throw erroPagamento('RESULTADO_DESCONHECIDO');
+            const erro = erroPagamento('RESULTADO_DESCONHECIDO');
+            if (job.recuperacao && falhaAdaptador?.categoria === 'AUTENTICACAO') erro.interromperRecuperacao = true;
+            throw erro;
         }
     };
 
@@ -346,5 +374,23 @@ export const criarLojaPagamentoService = ({ db, adaptador, contexto, agora = () 
         });
         return executar(job, true);
     };
-    return Object.freeze({ criarTentativa, capturar, reconciliar });
+    // Entrada interna, sem HTTP, timer, pool padrao ou sessao fornecida pelo comprador.
+    const recuperarPendencias = async ({ limite = 10 } = {}) => {
+        if (!Number.isInteger(limite) || limite < 1 || limite > 10) falhar('SOLICITACAO_INVALIDA');
+        if (typeof adaptador.reconciliar !== 'function') falhar('CONFIGURACAO_INVALIDA');
+        const candidatos = await persistencia.candidatosRecuperacao(contexto, limite);
+        const resultados = [];
+        for (const c of candidatos) {
+            try {
+                const resultado = await executar({ referencia: { sessaoId: c.sessaoId, pedidoId: c.pedidoId, verificarSessao: false },
+                    pagamentoId: c.pagamentoId, operacaoId: c.operacaoId, recuperacao: true }, true);
+                resultados.push({ pagamentoId: c.pagamentoId, resultado });
+            } catch (e) {
+                resultados.push({ pagamentoId: c.pagamentoId, erro: e.codigo ?? 'ERRO_INTERNO' });
+                if (e.interromperRecuperacao || !['RESULTADO_DESCONHECIDO', 'OPERACAO_EM_ANDAMENTO'].includes(e.codigo)) break;
+            }
+        }
+        return resultados;
+    };
+    return Object.freeze({ criarTentativa, capturar, reconciliar, recuperarPendencias });
 };
