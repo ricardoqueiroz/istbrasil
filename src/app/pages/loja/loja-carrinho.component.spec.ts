@@ -78,7 +78,10 @@ describe('LojaCarrinhoComponent', () => {
         expect(carrinho.vazio()).toBeTrue();
         expect(fixture.nativeElement.querySelector('a[download], iframe')).toBeNull();
         expect(fixture.nativeElement.querySelector('form')).toBeNull();
-        expect(texto()).not.toMatch(/PayPal|Mercado Pago|Pagar agora/);
+        expect(texto()).toContain('Preparar pagamento');
+        expect(texto()).not.toMatch(/Mercado Pago|Pagar agora/);
+        http.expectNone('/api/loja/checkout/iniciar');
+        http.expectNone('/api/loja/checkout/capturar');
     });
     it('bloqueia duplo clique e edicoes enquanto processa', async () => {
         carregar(); const c = fixture.componentInstance; c.email.setValue('comprador@example.com');

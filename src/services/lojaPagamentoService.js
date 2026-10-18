@@ -1,4 +1,5 @@
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+import { pedidoPublico } from './lojaPedidoContratos.js';
 import { criarPersistenciaPagamento, inserirPagamentoRegistro as inserir, atualizarPagamentoRegistro as atualizar } from './lojaPagamentoPersistencia.js';
 import { camposExatos, centavosPagamento, erroPagamento, hashPagamento, idExterno, instantePagamento,
     normalizarResultadoPagamento, normalizarReconciliacaoPagamento, criarFalhaPagamento, classificarFalhaPagamento, pagamentoPublico, uuidPagamento, validarTransicaoPagamento } from './lojaPagamentoContratos.js';
@@ -459,5 +460,19 @@ export const criarLojaPagamentoService = ({ db, adaptador, contexto, agora = () 
         }
         return resultados;
     };
-    return Object.freeze({ criarTentativa, capturar, reconciliar, recuperarPendencias, reconciliarWebhook });
+    const consultarCheckout = async (sessao, entrada) => {
+        entrada = camposExatos(entrada, ['pedidoPublicId']);
+        return transacao(referencia(sessao, entrada), async ctx => {
+            if (ctx.pedido.ambiente !== contexto.ambiente) falhar('PEDIDO_NAO_ENCONTRADO');
+            const [itens] = await ctx.c.query(`SELECT produto_id,posicao,sku_snapshot,titulo_snapshot,tipo_snapshot,quantidade,
+                CAST(preco_unitario_centavos AS CHAR) AS preco_unitario_centavos,
+                CAST(subtotal_centavos AS CHAR) AS subtotal_centavos FROM ist_loja_pedido_itens WHERE pedido_id=? ORDER BY posicao`, [ctx.pedido.id]);
+            const pedido = pedidoPublico(ctx.pedido, itens);
+            if (itens.reduce((total, item) => total + BigInt(item.subtotal_centavos), 0n) !== BigInt(ctx.pedido.total_centavos)) falhar('ERRO_INTERNO');
+            const pg = [...ctx.pagamentos].reverse().find(p => p.provedor === contexto.provedor
+                && p.ambiente === contexto.ambiente && p.conta_recebedora === contexto.contaRecebedora);
+            return { pedido, pagamento: pg ? pagamentoPublico(pg, ctx.pedido) : null, ordemId: pg?.ordem_externa_id ?? null };
+        });
+    };
+    return Object.freeze({ criarTentativa, capturar, reconciliar, recuperarPendencias, reconciliarWebhook, consultarCheckout });
 };

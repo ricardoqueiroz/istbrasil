@@ -7,15 +7,18 @@ import { SkeletonModule } from 'primeng/skeleton';
 import { MessageModule } from 'primeng/message';
 import { CarrinhoService } from '../../services/carrinho.service';
 import { LojaPedidoService } from '../../services/loja-pedido.service';
+import { LojaCheckoutComponent } from './loja-checkout.component';
+import { LojaCheckoutService } from '../../services/loja-checkout.service';
 
 @Component({
     selector: 'app-loja-carrinho', standalone: true,
-    imports: [RouterLink, ReactiveFormsModule, ButtonModule, InputTextModule, SkeletonModule, MessageModule],
+    imports: [RouterLink, ReactiveFormsModule, ButtonModule, InputTextModule, SkeletonModule, MessageModule, LojaCheckoutComponent],
     templateUrl: './loja-carrinho.component.html', styleUrl: './loja-carrinho.component.scss'
 })
 export class LojaCarrinhoComponent {
     readonly carrinho = inject(CarrinhoService);
     readonly pedidos = inject(LojaPedidoService);
+    readonly checkout = inject(LojaCheckoutService);
     readonly email = new FormControl(this.pedidos.pendente()?.entrada.compradorEmail ?? '', {
         nonNullable: true, validators: [Validators.required, Validators.email, Validators.maxLength(254)]
     });

@@ -32,6 +32,7 @@ import juradoRoutes from './src/routes/jurado.routes.js';
 import { pool } from './src/config/db.js';
 import { iniciarRecuperacaoLoja, comporFinanceiroLoja } from './src/services/lojaPagamentoAgendador.js';
 import { criarLojaPaypalWebhookRouter } from './src/routes/lojaPaypalWebhook.routes.js';
+import { criarLojaCheckoutRouter } from './src/routes/lojaCheckout.routes.js';
 
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
@@ -52,6 +53,7 @@ app.use(cors());
 app.use(cookieParser());
 let financeiroLoja;
 const obterFinanceiroLoja = () => financeiroLoja ??= comporFinanceiroLoja({ db: pool, env: process.env });
+app.use('/api/loja/checkout', criarLojaCheckoutRouter({ obterFinanceiro: obterFinanceiroLoja }));
 app.use('/api/loja/pagamentos/paypal/webhook', criarLojaPaypalWebhookRouter({
     obterFinanceiro: obterFinanceiroLoja, obterWebhookId: () => process.env.IST_LOJA_PAYPAL_WEBHOOK_ID
 }));

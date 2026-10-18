@@ -2,14 +2,14 @@
     <header class="cabecalho"><div><p class="sobretitulo">Loja Virtual IST</p><h1 id="carrinho-titulo">Seu carrinho</h1><p>{{ carrinho.quantidadeTitulos() }} título(s) digital(is)</p></div><a routerLink="/loja" (click)="pedidos.continuarComprando()">Voltar ao catálogo</a></header>
     @if (pedidos.confirmado(); as pedido) {
         <section class="confirmacao" aria-labelledby="pedido-titulo" role="status">
-            <h2 id="pedido-titulo">Pedido criado — pagamento ainda não realizado.</h2>
+            <h2 id="pedido-titulo">{{ checkout.estado()?.pedido?.publicId === pedido.publicId && checkout.estado()?.pagamento ? (checkout.confirmado() ? 'Pedido — pagamento confirmado.' : 'Pedido criado — pagamento em acompanhamento.') : 'Pedido criado — pagamento ainda não realizado.' }}</h2>
             <p>Identificador do pedido: <strong data-testid="pedido-id">{{ pedido.publicId }}</strong></p>
-            <p>Situação: {{ pedido.estado === 'CRIADO' || pedido.estado === 'AGUARDANDO_PAGAMENTO' ? 'Aguardando pagamento' : pedido.estado }}</p>
+            <p>Situação: {{ checkout.confirmado() && checkout.estado()?.pedido?.publicId === pedido.publicId ? 'PAGO' : pedido.estado === 'CRIADO' || pedido.estado === 'AGUARDANDO_PAGAMENTO' ? 'Aguardando pagamento' : pedido.estado }}</p>
             <ul class="pedido-itens">@for (item of pedido.itens; track item.produtoId) {
                 <li><span>{{ item.titulo }} · Quantidade: {{ item.quantidade }}</span><strong>{{ preco(item.subtotalCentavos) }}</strong></li>
             }</ul>
             <p>Total definitivo: <strong class="preco" data-testid="pedido-total">{{ preco(pedido.totalCentavos) }}</strong></p>
-            @if (pedidos.precoAlterado()) { <p-message severity="warn">O preço mudou desde a cotação. O total definitivo do pedido é o informado acima. Nenhum pagamento foi realizado.</p-message> }
+            @if (pedidos.precoAlterado()) { <p-message severity="warn">O preço mudou desde a cotação. O total definitivo do pedido é o informado acima.</p-message> }
             <p>A criação do pedido não confirma pagamento nem libera downloads.</p>
             <a pButton routerLink="/loja" (click)="pedidos.continuarComprando()">Continuar comprando</a>
         </section>
@@ -57,4 +57,5 @@
         </form>
     }
     }
+    <app-loja-checkout [pedidoId]="pedidos.confirmado()?.publicId ?? null" />
 </main>
