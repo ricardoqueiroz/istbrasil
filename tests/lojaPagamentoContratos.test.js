@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { camposExatos, centavosPagamento, erroPagamentoPublico, hashPagamento, normalizarResultadoPagamento,
-    criarFalhaPagamento, classificarFalhaPagamento, TRANSICOES_PAGAMENTO, validarTransicaoPagamento } from '../src/services/lojaPagamentoContratos.js';
+    criarFalhaPagamento, classificarFalhaPagamento, TRANSICOES_PAGAMENTO, validarTransicaoPagamento,
+    normalizarReconciliacaoPagamento, pagamentoPublico } from '../src/services/lojaPagamentoContratos.js';
 import { criarLojaPagamentoService } from '../src/services/lojaPagamentoService.js';
 
 test('contratos rejeitam autoridade financeira e getters no payload', () => {
@@ -38,6 +39,135 @@ test('erros externos nao sao serializados e nao ha adapter/pool padrao', () => {
 });
 
 const parcial = () => ({ estado: 'DESCONHECIDO', referencia: randomUUID(), ambiente: 'sandbox', ordemId: 'ordem-parcial' });
+const envelopeReconciliacao = () => ({ resultado: parcial(), observacao: {
+    evidencia: 'PRESENTE', associacaoOrdem: 'CONFIRMADA', validacao: 'CONSISTENTE',
+    statusOrdem: 'COMPLETED', statusCaptura: 'COMPLETED', motivoPendencia: null
+} });
+
+test('envelope interno reutiliza normalizador financeiro sem converter CONSISTENTE em quitacao', () => {
+    const e = envelopeReconciliacao(); const r = normalizarReconciliacaoPagamento(e);
+    assert.deepEqual(r.resultado, normalizarResultadoPagamento(e.resultado));
+    assert.equal(r.resultado.estado, 'DESCONHECIDO');
+    for (const campo of ['valorCentavos', 'moeda', 'contaRecebedora']) assert.equal(r.resultado[campo], null);
+    assert.deepEqual(r.observacao, e.observacao);
+});
+
+test('evidencia ausente e explicita e nao preenche fatos financeiros', () => {
+    const e = envelopeReconciliacao(); e.observacao = { evidencia: 'AUSENTE', associacaoOrdem: 'NAO_DEMONSTRADA',
+        validacao: 'INCONCLUSIVA', statusOrdem: null, statusCaptura: null, motivoPendencia: null };
+    const r = normalizarReconciliacaoPagamento(e); assert.equal(r.observacao.evidencia, 'AUSENTE');
+    assert.equal(r.resultado.contaRecebedora, null);
+    assert.throws(() => normalizarReconciliacaoPagamento({ ...e, observacao: { ...e.observacao, validacao: 'CONSISTENTE' } }));
+});
+
+test('evidencia contraditoria e preservada sem reescrever resultado financeiro', () => {
+    const e = envelopeReconciliacao(); Object.assign(e.observacao, {
+        evidencia: 'CONTRADITORIA', associacaoOrdem: 'DIVERGENTE', validacao: 'DIVERGENTE' });
+    assert.deepEqual(normalizarReconciliacaoPagamento(e).resultado, normalizarResultadoPagamento(e.resultado));
+    assert.equal(normalizarReconciliacaoPagamento(e).observacao.associacaoOrdem, 'DIVERGENTE');
+    e.observacao.associacaoOrdem = 'INVALIDA'; e.observacao.validacao = 'INCONCLUSIVA';
+    assert.equal(normalizarReconciliacaoPagamento(e).observacao.validacao, 'INCONCLUSIVA');
+    e.observacao.validacao = 'CONSISTENTE'; assert.throws(() => normalizarReconciliacaoPagamento(e));
+});
+
+test('CAPTURADO e COMPLETED permanecem fatos internos sem autorizacao comercial', () => {
+    const e = envelopeReconciliacao(); Object.assign(e.resultado, { estado: 'CAPTURADO', capturaId: 'captura',
+        valorCentavos: '100', moeda: 'BRL', contaRecebedora: 'recebedor', capturadoEm: '2026-10-18T12:00:00.000Z' });
+    const r = normalizarReconciliacaoPagamento(e);
+    assert.equal(r.resultado.estado, 'CAPTURADO');
+    assert.deepEqual(Object.keys(r).sort(), ['observacao', 'resultado']);
+    assert.equal(r.pedidoEstado, undefined); assert.equal(r.downloadAutorizado, undefined);
+});
+
+test('PENDENTE e PENDING_REVIEW nao sao promovidos para CAPTURADO', () => {
+    const e = envelopeReconciliacao(); Object.assign(e.resultado, {
+        estado: 'PENDENTE', capturaId: 'captura', valorCentavos: '100', moeda: 'BRL', contaRecebedora: 'recebedor' });
+    Object.assign(e.observacao, { statusCaptura: 'PENDING', motivoPendencia: 'PENDING_REVIEW' });
+    assert.equal(normalizarReconciliacaoPagamento(e).resultado.estado, 'PENDENTE');
+    assert.equal(normalizarReconciliacaoPagamento(e).observacao.motivoPendencia, 'PENDING_REVIEW');
+});
+
+test('envelope rejeita tipos inesperados e campos obrigatorios ausentes', () => {
+    for (const valor of [null, undefined, [], 'texto', 1, true, Object.create(null)]) {
+        assert.throws(() => normalizarReconciliacaoPagamento(valor), { codigo: 'ERRO_INTERNO' });
+        assert.throws(() => normalizarReconciliacaoPagamento({ ...envelopeReconciliacao(), observacao: valor }));
+        assert.throws(() => normalizarReconciliacaoPagamento({ ...envelopeReconciliacao(), resultado: valor }));
+    }
+    for (const campo of ['resultado', 'observacao']) {
+        const e = envelopeReconciliacao(); delete e[campo]; assert.throws(() => normalizarReconciliacaoPagamento(e));
+    }
+    for (const campo of Object.keys(envelopeReconciliacao().observacao)) {
+        const e = envelopeReconciliacao(); delete e.observacao[campo]; assert.throws(() => normalizarReconciliacaoPagamento(e));
+    }
+    for (const campo of ['estado', 'referencia', 'ambiente']) {
+        const e = envelopeReconciliacao(); delete e.resultado[campo]; assert.throws(() => normalizarReconciliacaoPagamento(e));
+    }
+});
+
+test('observacao rejeita valores fora das listas fechadas e tipos inesperados', () => {
+    for (const campo of Object.keys(envelopeReconciliacao().observacao)) {
+        for (const valor of ['INVENTADO', '', 1, false, [], {}, undefined]) {
+            const e = envelopeReconciliacao(); e.observacao[campo] = valor;
+            assert.throws(() => normalizarReconciliacaoPagamento(e), { codigo: 'ERRO_INTERNO' });
+        }
+    }
+});
+
+test('observacao excessiva e rejeitada sem reproduzir conteudo em erro', () => {
+    const e = envelopeReconciliacao(); e.observacao.motivoPendencia = 'segredo'.repeat(1000);
+    assert.throws(() => normalizarReconciliacaoPagamento(e), erro => erro.codigo === 'ERRO_INTERNO' && !erro.message.includes('segredo'));
+});
+
+test('envelope conserva rejeicoes financeiras de montante, moeda, estado e instante', () => {
+    for (const campos of [{ valorCentavos: '1.50' }, { moeda: 'brl' }, { ambiente: 'producao' },
+        { estado: 'COMPLETED' }, { estado: 'CAPTURADO' }, { capturaId: 'captura', ordemId: null },
+        { capturadoEm: '2026-10-18 12:00:00' }]) {
+        const e = envelopeReconciliacao(); Object.assign(e.resultado, campos);
+        assert.throws(() => normalizarReconciliacaoPagamento(e), { codigo: 'ERRO_INTERNO' });
+    }
+});
+
+test('campos sensiveis ou inesperados sao rejeitados em todos os niveis', () => {
+    for (const campo of ['access_token', 'client_secret', 'Authorization', 'url', 'respostaBruta', 'toJSON']) {
+        for (const nivel of ['envelope', 'resultado', 'observacao']) {
+            const e = envelopeReconciliacao(); (nivel === 'envelope' ? e : e[nivel])[campo] = 'segredo';
+            assert.throws(() => normalizarReconciliacaoPagamento(e), { codigo: 'ERRO_INTERNO' });
+        }
+    }
+});
+
+test('getters, setters, simbolos e campos nao enumeraveis nao sao aceitos nem executados', () => {
+    for (const nivel of ['envelope', 'resultado', 'observacao']) {
+        const campo = { envelope: 'observacao', resultado: 'estado', observacao: 'evidencia' }[nivel];
+        for (const descriptor of [{ get() { assert.fail('getter executado'); }, enumerable: true },
+            { set() { assert.fail('setter executado'); }, enumerable: true }, { value: 'segredo', enumerable: false }]) {
+            const e = envelopeReconciliacao(); Object.defineProperty(nivel === 'envelope' ? e : e[nivel], campo, descriptor);
+            assert.throws(() => normalizarReconciliacaoPagamento(e), { codigo: 'ERRO_INTERNO' });
+        }
+        const e = envelopeReconciliacao(); (nivel === 'envelope' ? e : e[nivel])[Symbol('segredo')] = 'segredo';
+        assert.throws(() => normalizarReconciliacaoPagamento(e));
+    }
+});
+
+test('entradas congeladas nao sao modificadas e saidas nao compartilham objetos', () => {
+    const e = envelopeReconciliacao(); Object.freeze(e.resultado); Object.freeze(e.observacao); Object.freeze(e);
+    const antes = JSON.stringify(e); const r = normalizarReconciliacaoPagamento(e);
+    r.observacao.validacao = 'INCONCLUSIVA'; r.resultado.moeda = 'USD';
+    assert.equal(JSON.stringify(e), antes); assert.notEqual(r.observacao, e.observacao); assert.notEqual(r.resultado, e.resultado);
+});
+
+test('diagnosticos nao entram no DTO publico e contratos financeiros anteriores preservados', () => {
+    const pg = { public_id: 'pagamento', estado: 'PENDENTE', moeda: 'BRL', valor_centavos: '100', versao: 1,
+        criado_em: '2026-10-18T12:00:00.000Z', expira_em: '2026-10-18T12:30:00.000Z' };
+    const pedido = { public_id: 'pedido', estado: 'AGUARDANDO_PAGAMENTO', pagamento_confirmado_em: null };
+    const esperado = pagamentoPublico(pg, pedido);
+    assert.deepEqual(pagamentoPublico({ ...pg, ...normalizarReconciliacaoPagamento(envelopeReconciliacao()) }, pedido), esperado);
+    const e = envelopeReconciliacao(); e.resultado.access_token = 'segredo';
+    assert.equal(normalizarResultadoPagamento(e.resultado).access_token, undefined);
+    assert.throws(() => normalizarReconciliacaoPagamento(e));
+    assert.equal(JSON.stringify(esperado).includes('observacao'), false);
+});
+
 test('RECUSADO admite recurso identificado ou sem ID, sem instante de captura', () => {
     const r = { ...parcial(), estado: 'RECUSADO', valorCentavos: '19000', moeda: 'BRL', contaRecebedora: 'conta' };
     assert.equal(normalizarResultadoPagamento(r).capturaId, null);

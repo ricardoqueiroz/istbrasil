@@ -112,6 +112,55 @@ export const normalizarResultadoPagamento = r => {
         capturadoEm: ausente(r.capturadoEm) ? null : instantePagamento(r.capturadoEm) };
 };
 
+/** Extensao interna para o futuro adaptador.reconciliar(contextoPersistido).
+ * Valida forma e vocabulario, nao a veracidade nem a quitacao comercial.
+ * Observacao nunca promove/rebaixa resultado.estado; o servico compara os fatos
+ * com o pedido persistido antes de aplicar qualquer decisao financeira.
+ */
+export const normalizarReconciliacaoPagamento = entrada => {
+    const rejeitar = () => { throw erroPagamento('ERRO_INTERNO'); };
+    const registro = (valor, permitidos, obrigatorios = permitidos) => {
+        if (!valor || Object.getPrototypeOf(valor) !== Object.prototype) rejeitar();
+        const chaves = Reflect.ownKeys(valor);
+        if (chaves.some(k => !permitidos.includes(k)) || obrigatorios.some(k => !Object.hasOwn(valor, k))) rejeitar();
+        const copia = {};
+        for (const k of chaves) {
+            const d = Object.getOwnPropertyDescriptor(valor, k);
+            if (!d?.enumerable || !Object.hasOwn(d, 'value')) rejeitar();
+            copia[k] = d.value;
+        }
+        return copia;
+    };
+    const envelope = registro(entrada, ['resultado', 'observacao']);
+    const resultado = normalizarResultadoPagamento(registro(envelope.resultado,
+        ['estado', 'referencia', 'ordemId', 'capturaId', 'valorCentavos', 'moeda', 'contaRecebedora', 'ambiente', 'capturadoEm'],
+        ['estado', 'referencia', 'ambiente']));
+    const observacao = registro(envelope.observacao,
+        ['evidencia', 'associacaoOrdem', 'validacao', 'statusOrdem', 'statusCaptura', 'motivoPendencia']);
+    // Somente escalares: serializacao nao executa toJSON/getters externos.
+    if (Object.values(observacao).some(v => v !== null && typeof v !== 'string')
+        || Buffer.byteLength(JSON.stringify(observacao), 'utf8') > 1024) rejeitar();
+    const listas = {
+        evidencia: ['PRESENTE', 'AUSENTE', 'CONTRADITORIA'],
+        associacaoOrdem: ['CONFIRMADA', 'NAO_DEMONSTRADA', 'DIVERGENTE', 'INVALIDA'],
+        validacao: ['CONSISTENTE', 'INCONCLUSIVA', 'DIVERGENTE'],
+        statusOrdem: [null, 'CREATED', 'SAVED', 'PAYER_ACTION_REQUIRED', 'APPROVED', 'COMPLETED', 'VOIDED', 'DESCONHECIDO'],
+        statusCaptura: [null, 'COMPLETED', 'PENDING', 'DECLINED', 'REFUNDED', 'PARTIALLY_REFUNDED', 'FAILED', 'DESCONHECIDO'],
+        motivoPendencia: [null, 'BUYER_COMPLAINT', 'CHARGEBACK', 'ECHECK', 'INTERNATIONAL_WITHDRAWAL', 'OTHER',
+            'PENDING_REVIEW', 'RECEIVING_PREFERENCE_MANDATES_MANUAL_ACTION', 'REFUNDED',
+            'TRANSACTION_APPROVED_AWAITING_FUNDING', 'UNILATERAL', 'VERIFICATION_REQUIRED']
+    };
+    for (const k of Object.keys(listas)) if (!listas[k].includes(observacao[k])) rejeitar();
+    if ((observacao.evidencia === 'AUSENTE' && (observacao.validacao !== 'INCONCLUSIVA'
+        || observacao.associacaoOrdem !== 'NAO_DEMONSTRADA' || observacao.statusOrdem !== null
+        || observacao.statusCaptura !== null || observacao.motivoPendencia !== null))
+        || (observacao.evidencia === 'CONTRADITORIA' && observacao.validacao === 'CONSISTENTE')
+        || (observacao.evidencia === 'PRESENTE' && (observacao.validacao === 'DIVERGENTE'
+            || ['INVALIDA', 'DIVERGENTE'].includes(observacao.associacaoOrdem)))
+        || (observacao.validacao === 'CONSISTENTE' && observacao.associacaoOrdem !== 'CONFIRMADA')) rejeitar();
+    return { resultado, observacao };
+};
+
 // Apenas erros criados por esta funcao transportam classificacao confiavel.
 // Nao copiar mensagens, HTTP, headers, causas ou payloads externos.
 // envio descreve a chamada identificada por metodo na evidencia do servico;
