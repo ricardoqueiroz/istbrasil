@@ -29,6 +29,8 @@ import projetosRoutes from './src/routes/projetos.routes.js';
 import projetosDocumentosRoutes from './src/routes/projetosDocumentos.routes.js';
 import adminRoutes from './src/routes/admin.routes.js';
 import juradoRoutes from './src/routes/jurado.routes.js';
+import { pool } from './src/config/db.js';
+import { iniciarRecuperacaoLoja } from './src/services/lojaPagamentoAgendador.js';
 
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
@@ -135,8 +137,22 @@ app.get('/', (req, res) => {
 
 // --- Inicialização do Servidor (APENAS UMA VEZ) ---
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
+let recuperacaoLoja;
+const servidor = app.listen(PORT, () => {
+    if (!encerrando) recuperacaoLoja = iniciarRecuperacaoLoja({ db: pool });
     console.log(`Server running on port ${PORT}`);
     // PAYPAL TEMPORARIAMENTE DESABILITADO.
     // console.log(`Ambiente PayPal: ${paypalEnvironment === Environment.Production ? 'PRODUÇÃO (Dinheiro Real)' : 'SANDBOX (Teste)'}`);
 });
+
+let encerrando = false;
+const encerrar = () => {
+    if (encerrando) return;
+    encerrando = true;
+    const recuperacaoEncerrada = recuperacaoLoja?.parar() ?? Promise.resolve();
+    servidor.close(() => {
+        recuperacaoEncerrada.then(() => process.exit(0), () => process.exit(1));
+    });
+};
+process.once('SIGINT', encerrar);
+process.once('SIGTERM', encerrar);
