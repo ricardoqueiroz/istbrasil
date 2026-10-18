@@ -30,7 +30,8 @@ import projetosDocumentosRoutes from './src/routes/projetosDocumentos.routes.js'
 import adminRoutes from './src/routes/admin.routes.js';
 import juradoRoutes from './src/routes/jurado.routes.js';
 import { pool } from './src/config/db.js';
-import { iniciarRecuperacaoLoja } from './src/services/lojaPagamentoAgendador.js';
+import { iniciarRecuperacaoLoja, comporFinanceiroLoja } from './src/services/lojaPagamentoAgendador.js';
+import { criarLojaPaypalWebhookRouter } from './src/routes/lojaPaypalWebhook.routes.js';
 
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
@@ -49,6 +50,11 @@ app.set('trust proxy', 'loopback');
 // Configurações
 app.use(cors());
 app.use(cookieParser());
+let financeiroLoja;
+const obterFinanceiroLoja = () => financeiroLoja ??= comporFinanceiroLoja({ db: pool, env: process.env });
+app.use('/api/loja/pagamentos/paypal/webhook', criarLojaPaypalWebhookRouter({
+    obterFinanceiro: obterFinanceiroLoja, obterWebhookId: () => process.env.IST_LOJA_PAYPAL_WEBHOOK_ID
+}));
 // Parser e limite da Loja antes dos parsers globais, inclusive para JSON invalido.
 app.use('/api/loja', lojaRoutes);
 app.use('/api/loja', tratarErroLoja);
@@ -139,7 +145,7 @@ app.get('/', (req, res) => {
 const PORT = process.env.PORT || 3000;
 let recuperacaoLoja;
 const servidor = app.listen(PORT, () => {
-    if (!encerrando) recuperacaoLoja = iniciarRecuperacaoLoja({ db: pool });
+    if (!encerrando) recuperacaoLoja = iniciarRecuperacaoLoja({ db: pool, obterFinanceiro: obterFinanceiroLoja });
     console.log(`Server running on port ${PORT}`);
     // PAYPAL TEMPORARIAMENTE DESABILITADO.
     // console.log(`Ambiente PayPal: ${paypalEnvironment === Environment.Production ? 'PRODUÇÃO (Dinheiro Real)' : 'SANDBOX (Teste)'}`);

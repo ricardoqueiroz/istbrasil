@@ -72,6 +72,16 @@ export const criarLojaPagamentoService = ({ db, adaptador, contexto, agora = () 
         return { pg, op };
     };
     const interno = job => ({ ...job.referencia, verificarSessao: false });
+    const finalizarWebhook = async (ctx, job, token, concluido) => {
+        if (!job.webhook) return;
+        const e = await persistencia.eventoWebhook(ctx, contexto, job.webhook.eventoId);
+        if (!e || e.estado !== 'PROCESSANDO' || !Buffer.isBuffer(e.execucao_token) || !e.execucao_token.equals(token)) {
+            falhar('OPERACAO_EM_ANDAMENTO');
+        }
+        await persistencia.atualizarWebhook(ctx, e, { estado: concluido ? 'PROCESSADO' : 'RECEBIDO',
+            execucao_token: null, execucao_ate: null, codigo_erro: concluido ? null : 'RESULTADO_DESCONHECIDO',
+            processado_em: concluido ? ctx.instante : null });
+    };
     const chamar = async (metodo, args) => {
         const controller = new AbortController();
         let timer;
@@ -110,6 +120,7 @@ export const criarLojaPagamentoService = ({ db, adaptador, contexto, agora = () 
             codigo_erro: falha.categoria, proxima_tentativa_em: job.recuperacao ? op.proxima_tentativa_em : ctx.instante,
             resultado_json: JSON.stringify({ falha }) });
         await evento(ctx, pg, reconciliacaoExplicita ? 'RECONCILIACAO' : 'INTERNO', 'RESULTADO_DESCONHECIDO', { acao: op.acao, falha });
+        await finalizarWebhook(ctx, job, token, false);
         return null;
     });
     const associacaoDivergente = (pg, r) => r.referencia !== pg.public_id || r.ambiente !== pg.ambiente
@@ -122,6 +133,7 @@ export const criarLojaPagamentoService = ({ db, adaptador, contexto, agora = () 
         || pg.moeda !== ctx.pedido.moeda || pg.ambiente !== ctx.pedido.ambiente;
 
     const aplicar = async (job, token, r, consulta, falha = null, observacao = null) => transacao(interno(job), async ctx => {
+        const processar = async () => {
         const { pg, op } = operacaoCtx(ctx, job, token);
         const evidencia = observacao ? normalizarReconciliacaoPagamento({ resultado: r, observacao }) : r;
         // Evidencia normalizada nunca contem token, cartao ou resposta bruta.
@@ -199,11 +211,41 @@ export const criarLojaPagamentoService = ({ db, adaptador, contexto, agora = () 
             execucao_token: null, execucao_ate: null, resultado_json: JSON.stringify(falha ? { ...evidencia, falha } : evidencia), codigo_erro: falha?.categoria ?? null,
             concluido_em: preparada ? null : ctx.instante });
         return pagamentoPublico(pg, ctx.pedido);
+        };
+        const dto = await processar();
+        const op = ctx.operacoes.find(o => o.id === job.operacaoId);
+        await finalizarWebhook(ctx, job, token, ['SUCESSO', 'RECUSADA', 'REVISAO'].includes(op.estado));
+        return dto;
     });
 
     const executar = async (job, reconciliar = false) => {
         const etapa = await transacao(job.referencia, async ctx => {
             const { pg, op } = operacaoCtx(ctx, job);
+            let eventoRecebido;
+            if (job.webhook) {
+                const w = job.webhook;
+                if ((w.ordemId && pg.ordem_externa_id && w.ordemId !== pg.ordem_externa_id)
+                    || (w.capturaId && pg.captura_externa_id && w.capturaId !== pg.captura_externa_id)) falhar('RESULTADO_DESCONHECIDO');
+                eventoRecebido = await persistencia.eventoWebhook(ctx, contexto, w.eventoId);
+                if (eventoRecebido && (eventoRecebido.pagamento_id !== pg.id || !eventoRecebido.conteudo_hash.equals(w.hash))) {
+                    falhar('RESULTADO_DESCONHECIDO');
+                }
+                if (eventoRecebido?.estado === 'PROCESSADO') return { dto: pagamentoPublico(pg, ctx.pedido) };
+                if (eventoRecebido?.estado === 'PROCESSANDO' && eventoRecebido.execucao_ate > ctx.instante) falhar('OPERACAO_EM_ANDAMENTO');
+                if (!eventoRecebido) {
+                    await inserir(ctx, 'ist_loja_pagamento_eventos', { pagamento_id: pg.id, provedor: pg.provedor,
+                        ambiente: pg.ambiente, conta_recebedora: pg.conta_recebedora, origem: 'WEBHOOK', evento_id: w.eventoId,
+                        tipo: w.tipo, recurso_externo_id: w.capturaId ?? w.ordemId, conteudo_hash: w.hash,
+                        evidencia_json: JSON.stringify({ eventoId: w.eventoId, tipo: w.tipo, ordemId: w.ordemId, capturaId: w.capturaId }),
+                        estado: 'RECEBIDO', recebido_em: ctx.instante, autenticado_em: ctx.instante, atualizado_em: ctx.instante });
+                    eventoRecebido = await persistencia.eventoWebhook(ctx, contexto, w.eventoId);
+                }
+                if (finais.includes(pg.estado)) {
+                    await persistencia.atualizarWebhook(ctx, eventoRecebido,
+                        { estado: 'PROCESSADO', execucao_token: null, execucao_ate: null, processado_em: ctx.instante });
+                    return { dto: pagamentoPublico(pg, ctx.pedido) };
+                }
+            }
             let agendamento = {};
             if (job.recuperacao) {
                 const preferida = ctx.operacoes.find(o => o.pagamento_id === pg.id && o.acao === 'CAPTURAR')
@@ -234,6 +276,12 @@ export const criarLojaPagamentoService = ({ db, adaptador, contexto, agora = () 
             const consulta = reconciliar || ['DESCONHECIDA', 'EM_EXECUCAO'].includes(op.estado);
             if (!consulta) conferirPedido(ctx);
             const token = randomBytes(16);
+            if (eventoRecebido) {
+                if (eventoRecebido.tentativas >= 65535) falhar('RESULTADO_DESCONHECIDO');
+                await persistencia.atualizarWebhook(ctx, eventoRecebido, { estado: 'PROCESSANDO',
+                    tentativas: eventoRecebido.tentativas + 1, execucao_token: token,
+                    execucao_ate: new Date(Date.parse(ctx.instante) + execucaoMs).toISOString() });
+            }
             await atualizar(ctx, OP, op, { estado: 'EM_EXECUCAO', execucao_token: token,
                 execucao_ate: new Date(Date.parse(ctx.instante) + execucaoMs).toISOString(), tentativas: op.tentativas + 1,
                 ...agendamento,
@@ -374,6 +422,25 @@ export const criarLojaPagamentoService = ({ db, adaptador, contexto, agora = () 
         });
         return executar(job, true);
     };
+    // Chamador interno deve verificar assinatura antes de fornecer esta projecao.
+    const reconciliarWebhook = async w => {
+        if (!w || !idExterno(w.eventoId) || !['PAYMENT.CAPTURE.COMPLETED', 'PAYMENT.CAPTURE.PENDING', 'PAYMENT.CAPTURE.DENIED'].includes(w.tipo)
+            || !Buffer.isBuffer(w.hash) || w.hash.length !== 32 || (!w.ordemId && !w.capturaId)
+            || (w.ordemId !== null && !idExterno(w.ordemId)) || (w.capturaId !== null && !idExterno(w.capturaId))) falhar('SOLICITACAO_INVALIDA');
+        if (typeof adaptador.reconciliar !== 'function') falhar('CONFIGURACAO_INVALIDA');
+        const alvo = await persistencia.localizarWebhook(contexto, w);
+        const ref = { sessaoId: alvo.sessaoId, pedidoId: alvo.pedidoId, verificarSessao: false };
+        const job = await transacao(ref, async ctx => {
+            const pg = achar(ctx, alvo.pagamentoId); conferirContexto(pg);
+            const op = ctx.operacoes.find(o => o.pagamento_id === pg.id && o.acao === 'CAPTURAR')
+                ?? ctx.operacoes.find(o => o.pagamento_id === pg.id && o.acao === 'CRIAR');
+            if (!op) falhar('ERRO_INTERNO');
+            return { ...trabalho(ctx, pg, op), referencia: ref, webhook: { ...w } };
+        });
+        await executar(job, true);
+        const concluido = await transacao(ref, async ctx => (await persistencia.eventoWebhook(ctx, contexto, w.eventoId))?.estado === 'PROCESSADO');
+        if (!concluido) falhar('RESULTADO_DESCONHECIDO');
+    };
     // Entrada interna, sem HTTP, timer, pool padrao ou sessao fornecida pelo comprador.
     const recuperarPendencias = async ({ limite = 10 } = {}) => {
         if (!Number.isInteger(limite) || limite < 1 || limite > 10) falhar('SOLICITACAO_INVALIDA');
@@ -392,5 +459,5 @@ export const criarLojaPagamentoService = ({ db, adaptador, contexto, agora = () 
         }
         return resultados;
     };
-    return Object.freeze({ criarTentativa, capturar, reconciliar, recuperarPendencias });
+    return Object.freeze({ criarTentativa, capturar, reconciliar, recuperarPendencias, reconciliarWebhook });
 };

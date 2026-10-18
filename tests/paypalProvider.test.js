@@ -56,7 +56,7 @@ test('OAuth usa Client Credentials, token em memoria e margem de renovacao', asy
     assert.equal(m.chamadas[1].headers.Authorization, 'Bearer fixture-access-token');
     instante = 3570000; await m.provider.consultar(a);
     assert.equal(m.chamadas.filter(c => c.url.endsWith('/token')).length, 2);
-    assert.deepEqual(Object.keys(m.provider).sort(), ['capturar', 'consultar', 'consultarCaptura', 'criar', 'reconciliar']);
+    assert.deepEqual(Object.keys(m.provider).sort(), ['capturar', 'consultar', 'consultarCaptura', 'criar', 'reconciliar', 'verificarWebhook']);
 });
 test('OAuth concorrente compartilha uma unica requisicao e recupera apos falha', async () => {
     const a = args(); let liberar; const bloqueio = new Promise(r => { liberar = r; }); let n = 0;

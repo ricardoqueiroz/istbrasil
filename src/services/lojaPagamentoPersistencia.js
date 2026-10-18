@@ -106,7 +106,43 @@ export const criarPersistenciaPagamento = ({ db, agora }) => {
             AND JSON_UNQUOTE(JSON_EXTRACT(evidencia_json,'$.operacaoId'))=?`, [pg.id, String(op.id)]);
         return Number(r.total);
     };
-    return { transacao, candidatosRecuperacao, contarRecuperacoes };
+    const localizarWebhook = async (contexto, { ordemId, capturaId }) => {
+        let c;
+        try {
+            c = await db.getConnection();
+            const [r] = await c.query(`SELECT p.id AS pagamentoId,p.pedido_id AS pedidoId,d.sessao_id AS sessaoId,
+                p.ordem_externa_id,p.captura_externa_id FROM ist_loja_pagamentos p
+                JOIN ist_loja_pedidos d ON d.id=p.pedido_id
+                WHERE p.provedor=? AND p.ambiente=? AND p.conta_recebedora=?
+                AND ((? IS NOT NULL AND p.ordem_externa_id=?) OR (? IS NOT NULL AND p.captura_externa_id=?)) LIMIT 2`,
+            [contexto.provedor, contexto.ambiente, contexto.contaRecebedora, ordemId, ordemId, capturaId, capturaId]);
+            if (r.length !== 1 || (ordemId && r[0].ordem_externa_id && ordemId !== r[0].ordem_externa_id)
+                || (capturaId && r[0].captura_externa_id && capturaId !== r[0].captura_externa_id)) throw new Error();
+            return r[0];
+        } catch { throw erroPagamento('RESULTADO_DESCONHECIDO'); }
+        finally { if (c) c.release(); }
+    };
+    const eventoWebhook = async (ctx, contexto, eventoId) => {
+        const [[e]] = await ctx.c.query(`SELECT *, ${datas(['execucao_ate'])} FROM ist_loja_pagamento_eventos
+            WHERE provedor=? AND ambiente=? AND conta_recebedora=? AND origem='WEBHOOK' AND evento_id=? FOR UPDATE`,
+        [contexto.provedor, contexto.ambiente, contexto.contaRecebedora, eventoId]);
+        return hidratar(e);
+    };
+    const atualizarWebhook = async (ctx, e, campos) => {
+        const nomes = Object.keys(campos);
+        if (nomes.some(k => !['estado', 'tentativas', 'execucao_token', 'execucao_ate', 'codigo_erro', 'processado_em'].includes(k))) {
+            throw erroPagamento('ERRO_INTERNO');
+        }
+        const valores = nomes.map(k => campos[k] !== null && (k.endsWith('_em') || k === 'execucao_ate')
+            ? sqlUtcPagamento(campos[k]) : campos[k]);
+        // Eventos nao possuem coluna versao: row lock e token condicionam a atualizacao.
+        const [r] = await ctx.c.query(`UPDATE ist_loja_pagamento_eventos SET ${nomes.map(k => `${k}=?`).join(',')},atualizado_em=?
+            WHERE id=? AND estado=? AND execucao_token <=> ?`,
+        [...valores, sqlUtcPagamento(ctx.instante), e.id, e.estado, e.execucao_token]);
+        if (r.affectedRows !== 1 || r.warningStatus) throw erroPagamento('ERRO_INTERNO');
+        Object.assign(e, campos);
+    };
+    return { transacao, candidatosRecuperacao, contarRecuperacoes, localizarWebhook, eventoWebhook, atualizarWebhook };
 };
 
 const camposPermitidos = {

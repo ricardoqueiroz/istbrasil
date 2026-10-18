@@ -443,6 +443,79 @@ test('nucleo transacional em MariaDB descartavel e adaptador exclusivo de testes
         assert.equal(m.consultas, 1); assert.equal((await ler(pg)).p.estado, 'PENDENTE');
     });
 
+    const webhook = async (m, tipo = 'PAYMENT.CAPTURE.PENDING') => {
+        const d = await ler(m.pg);
+        const w = { eventoId: `WH-${randomUUID()}`, tipo, ordemId: d.p.ordem_externa_id, capturaId: d.p.captura_externa_id };
+        return { ...w, hash: hashPagamento(w) };
+    };
+    for (const tipo of ['PENDING', 'DENIED']) await t.test(`webhook ${tipo} usa reconciliacao persistida e deduplica com sessao revogada`, async () => {
+        const m = await prepararRecuperacao(); const w = await webhook(m, `PAYMENT.CAPTURE.${tipo}`);
+        await admin.query('UPDATE ist_loja_sessoes SET revogada_em=criada_em WHERE id=?', [m.compra.sessao.id]);
+        await m.service.reconciliarWebhook(w); const antes = await ler(m.pg);
+        assert.equal(antes.p.estado, 'PENDENTE'); assert.equal(antes.pedido.pagamento_confirmado_em, null);
+        const eventos = antes.eventos.filter(e => e.origem === 'WEBHOOK');
+        assert.equal(eventos.length, 1); assert.equal(eventos[0].estado, 'PROCESSADO'); assert.equal(eventos[0].tentativas, 1);
+        assert.equal(eventos[0].execucao_token, null);
+        await m.service.reconciliarWebhook(w); assert.deepEqual(await ler(m.pg), antes);
+        assert.equal(m.consultas, 1); assert.equal(m.sim.chamadas.capturar, 1);
+    });
+    await t.test('webhook COMPLETED confirma com sessao expirada e evento antigo nao regride pagamento', async () => {
+        const m = await prepararRecuperacao(); const w = await webhook(m, 'PAYMENT.CAPTURE.COMPLETED');
+        await admin.query('UPDATE ist_loja_sessoes SET expira_em=DATE_ADD(criada_em,INTERVAL 1 SECOND) WHERE id=?', [m.compra.sessao.id]);
+        m.avancar(); m.sim.concluirPendente(m.pg.publicId);
+        await m.service.reconciliarWebhook(w); const antes = await ler(m.pg);
+        assert.equal(antes.p.estado, 'CAPTURADO'); assert.equal(antes.pedido.estado, 'PAGO');
+        assert.equal(antes.eventos.find(e => e.evento_id === w.eventoId).estado, 'PROCESSADO');
+        await m.service.reconciliarWebhook(await webhook(m)); const depois = await ler(m.pg);
+        assert.deepEqual(depois.p, antes.p); assert.deepEqual(depois.pedido, antes.pedido);
+        assert.equal(m.consultas, 1); assert.equal(m.sim.chamadas.capturar, 1);
+    });
+    await t.test('webhook GET temporariamente indisponivel retoma mesmo evento sem duplicar operacao', async () => {
+        const m = await prepararRecuperacao(); const w = await webhook(m);
+        m.responder(() => { throw new Error('fixture-private'); });
+        await assert.rejects(m.service.reconciliarWebhook(w), codigo('RESULTADO_DESCONHECIDO'));
+        const antes = await ler(m.pg); assert.equal(antes.p.estado, 'PENDENTE');
+        assert.equal(antes.eventos.find(e => e.evento_id === w.eventoId).estado, 'RECEBIDO');
+        m.responder(null); await m.service.reconciliarWebhook(w); const depois = await ler(m.pg);
+        const e = depois.eventos.filter(e => e.evento_id === w.eventoId);
+        assert.equal(e.length, 1); assert.equal(e[0].estado, 'PROCESSADO'); assert.equal(e[0].tentativas, 2);
+        assert.deepEqual(depois.operacoes.map(o => o.id), antes.operacoes.map(o => o.id));
+        assert.equal(m.sim.chamadas.capturar, 1);
+    });
+    await t.test('webhook desconhecido ou IDs contraditorios nao modifica pagamento', async () => {
+        const m = await prepararRecuperacao(); const w = await webhook(m); const antes = await ler(m.pg);
+        for (const extra of [{ ordemId: 'ORDEM-INEXISTENTE', capturaId: 'CAPTURA-INEXISTENTE' }, { capturaId: 'CAPTURA-DIVERGENTE' }]) {
+            await assert.rejects(m.service.reconciliarWebhook({ ...w, ...extra }), codigo('RESULTADO_DESCONHECIDO'));
+        }
+        assert.deepEqual(await ler(m.pg), antes); assert.equal(m.consultas, 0);
+    });
+    await t.test('webhook concorrente com agendador e duplicata usa mesmo controle de execucao', async () => {
+        const m = await prepararRecuperacao(); const w = await webhook(m); const entrou = adiar(), liberar = adiar();
+        m.responder(async (a, r) => { entrou.resolver(); await liberar.promessa; return envelopeTeste(r); }); m.avancar();
+        const primeiro = m.service.reconciliarWebhook(w); await entrou.promessa;
+        try {
+            await assert.rejects(m.service.reconciliarWebhook(w), codigo('OPERACAO_EM_ANDAMENTO'));
+            assert.deepEqual(await m.recuperar(m.novo()), []);
+        } finally { liberar.resolver(); }
+        await primeiro; assert.equal(m.consultas, 1); assert.equal(m.sim.chamadas.capturar, 1);
+        const e = (await ler(m.pg)).eventos.filter(e => e.origem === 'WEBHOOK'); assert.equal(e.length, 1);
+    });
+    await t.test('webhook finalizacao e quitacao revertem juntas em falha SQL e reentrega recupera', async () => {
+        const m = await prepararRecuperacao(); const w = await webhook(m, 'PAYMENT.CAPTURE.COMPLETED'); let falhou = false;
+        const db = adaptarPool(c => ({ ...c, async query(sql, params) {
+            if (!falhou && sql.startsWith('UPDATE ist_loja_pagamento_eventos') && params[0] === 'PROCESSADO') {
+                falhou = true; throw new Error('falha SQL simulada');
+            }
+            return c.query(sql, params);
+        } }));
+        m.sim.concluirPendente(m.pg.publicId);
+        await assert.rejects(m.novo({ db }).reconciliarWebhook(w), codigo('RESULTADO_DESCONHECIDO'));
+        const antes = await ler(m.pg); assert.equal(antes.p.estado, 'PENDENTE'); assert.equal(antes.pedido.pagamento_confirmado_em, null);
+        assert.equal(antes.eventos.find(e => e.evento_id === w.eventoId).estado, 'RECEBIDO');
+        await m.service.reconciliarWebhook(w); assert.equal((await ler(m.pg)).pedido.estado, 'PAGO');
+        assert.equal(m.sim.chamadas.capturar, 1);
+    });
+
     await t.test('cria tentativa e operacao antes da chamada, usando somente total persistido', async () => {
         const compra = await novaCompra();
         const { sim, service } = montar({ aoChamar: async (metodo, args) => {

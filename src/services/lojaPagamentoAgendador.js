@@ -2,24 +2,25 @@ import { criarLojaPagamentoService } from './lojaPagamentoService.js';
 import { criarPaypalProvider } from './pagamentos/paypalProvider.js';
 import { carregarConfiguracaoLojaPedido } from '../config/lojaPedido.js';
 
+export const comporFinanceiroLoja = ({ db, env, criarServico = criarLojaPagamentoService, criarAdaptador = criarPaypalProvider }) => {
+    const ambiente = env.IST_LOJA_PAYPAL_ENV, contaRecebedora = env.IST_LOJA_PAYPAL_CONTA_RECEBEDORA;
+    if (ambiente !== 'sandbox' || carregarConfiguracaoLojaPedido(env).ambiente !== ambiente
+        || !/^[2-9A-HJ-NP-Z]{13}$/.test(contaRecebedora ?? '') || !db?.getConnection) throw new Error('CONFIGURACAO_INVALIDA');
+    const adaptador = criarAdaptador({ env: { IST_LOJA_PAYPAL_ENV: ambiente,
+        IST_LOJA_PAYPAL_CLIENT_ID: env.IST_LOJA_PAYPAL_CLIENT_ID, IST_LOJA_PAYPAL_CLIENT_SECRET: env.IST_LOJA_PAYPAL_CLIENT_SECRET } });
+    return { adaptador, service: criarServico({ db, adaptador, contexto: { provedor: 'paypal', ambiente, contaRecebedora } }) };
+};
+
 // Sem pool proprio, timers ou acesso externo durante importacao.
 export const iniciarRecuperacaoLoja = ({ db, env = process.env,
     criarServico = criarLojaPagamentoService, criarAdaptador = criarPaypalProvider,
-    agendar = setInterval, cancelar = clearInterval, registrar = mensagem => console.warn(mensagem) } = {}) => {
+    obterFinanceiro, agendar = setInterval, cancelar = clearInterval, registrar = mensagem => console.warn(mensagem) } = {}) => {
     const log = mensagem => { try { registrar(mensagem); } catch { /* Logging nao derruba a API. */ } };
     const inativo = () => ({ ativo: false, parar: async () => {} });
     if (env.IST_LOJA_RECUPERACAO_ATIVA !== 'true' || env.NODE_ENV === 'test') return inativo();
     let timer, encerrado = false, emCurso = null;
     try {
-        const ambiente = env.IST_LOJA_PAYPAL_ENV;
-        const contaRecebedora = env.IST_LOJA_PAYPAL_CONTA_RECEBEDORA;
-        // O adaptador existente e Sandbox-only. Nunca converter Live para Sandbox.
-        if (ambiente !== 'sandbox' || carregarConfiguracaoLojaPedido(env).ambiente !== ambiente
-            || !/^[2-9A-HJ-NP-Z]{13}$/.test(contaRecebedora ?? '') || !db?.getConnection) throw new Error();
-        const adaptador = criarAdaptador({ env: { IST_LOJA_PAYPAL_ENV: ambiente,
-            IST_LOJA_PAYPAL_CLIENT_ID: env.IST_LOJA_PAYPAL_CLIENT_ID,
-            IST_LOJA_PAYPAL_CLIENT_SECRET: env.IST_LOJA_PAYPAL_CLIENT_SECRET } });
-        const service = criarServico({ db, adaptador, contexto: { provedor: 'paypal', ambiente, contaRecebedora } });
+        const { service } = obterFinanceiro ? obterFinanceiro() : comporFinanceiroLoja({ db, env, criarServico, criarAdaptador });
         if (typeof service?.recuperarPendencias !== 'function') throw new Error();
         const ciclo = () => {
             if (encerrado || emCurso) return;

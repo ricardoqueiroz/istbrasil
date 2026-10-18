@@ -387,6 +387,43 @@ export const criarPaypalProvider = ({ env = process.env, http = axios.create(), 
         return concluir();
     };
     return Object.freeze({
+        async verificarWebhook({ corpo, cabecalhos, webhookId } = {}) {
+            const limitado = (v, max) => typeof v === 'string' && v.length > 0 && v.length <= max && !/[\r\n]/.test(v);
+            if (!limitado(webhookId, 128) || !/^[A-Za-z0-9-]+$/.test(webhookId)
+                || typeof corpo !== 'string' || Buffer.byteLength(corpo, 'utf8') > 65536
+                || !cabecalhos || !['paypal-transmission-id', 'paypal-transmission-time', 'paypal-transmission-sig',
+                    'paypal-auth-algo', 'paypal-cert-url'].every(k => limitado(cabecalhos[k], k === 'paypal-transmission-sig' ? 16384 : 2048))) {
+                falhar('VALIDACAO_LOCAL', 'NAO_ENVIADO');
+            }
+            try {
+                if (!objeto(JSON.parse(corpo)) || cabecalhos['paypal-auth-algo'] !== 'SHA256withRSA'
+                    || !Number.isFinite(Date.parse(cabecalhos['paypal-transmission-time']))) throw new Error();
+                const cert = new URL(cabecalhos['paypal-cert-url']);
+                if (cert.protocol !== 'https:' || !['api.sandbox.paypal.com', 'api-m.sandbox.paypal.com'].includes(cert.hostname)
+                    || cert.username || cert.password || cert.port || cert.search || cert.hash
+                    || !/^\/v1\/notifications\/certs\/[A-Za-z0-9-]+$/.test(cert.pathname)
+                    || cert.href !== cabecalhos['paypal-cert-url']) throw new Error();
+            } catch { falhar('VALIDACAO_LOCAL', 'NAO_ENVIADO'); }
+            const acesso = await obterToken();
+            const dados = { transmission_id: cabecalhos['paypal-transmission-id'], transmission_time: cabecalhos['paypal-transmission-time'],
+                transmission_sig: cabecalhos['paypal-transmission-sig'], auth_algo: cabecalhos['paypal-auth-algo'],
+                cert_url: cabecalhos['paypal-cert-url'], webhook_id: webhookId };
+            let resposta;
+            try {
+                // Inserir o JSON original, sem reserializar o evento ou seguir cert_url.
+                resposta = await requisitar({ method: 'POST', url: '/v1/notifications/verify-webhook-signature',
+                    headers: { Authorization: `Bearer ${acesso}`, 'Content-Type': 'application/json', Accept: 'application/json' },
+                    data: JSON.stringify(dados).slice(0, -1) + ',"webhook_event":' + corpo + '}' });
+            } catch { falhar('INFRAESTRUTURA', 'INDETERMINADO'); }
+            if (resposta?.status === 401 || resposta?.data?.name === 'AUTHENTICATION_FAILURE') {
+                if (token === acesso) { token = null; validoAte = 0; }
+                falhar('AUTENTICACAO', 'ENVIADO');
+            }
+            if (resposta?.status !== 200 || !['SUCCESS', 'FAILURE'].includes(resposta?.data?.verification_status)) {
+                falhar('INFRAESTRUTURA', 'INDETERMINADO');
+            }
+            return resposta.data.verification_status === 'SUCCESS';
+        },
         reconciliar,
         // Leitura auxiliar: sem normalizar para CAPTURADO/PAGO, sem consultar banco
         // e sem criar operacao financeira. OAuth compartilha cache e single-flight.
