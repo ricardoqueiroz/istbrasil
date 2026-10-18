@@ -1,7 +1,7 @@
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { criarPersistenciaPagamento, inserirPagamentoRegistro as inserir, atualizarPagamentoRegistro as atualizar } from './lojaPagamentoPersistencia.js';
 import { camposExatos, centavosPagamento, erroPagamento, hashPagamento, idExterno, instantePagamento,
-    normalizarResultadoPagamento, criarFalhaPagamento, classificarFalhaPagamento, pagamentoPublico, uuidPagamento, validarTransicaoPagamento } from './lojaPagamentoContratos.js';
+    normalizarResultadoPagamento, normalizarReconciliacaoPagamento, criarFalhaPagamento, classificarFalhaPagamento, pagamentoPublico, uuidPagamento, validarTransicaoPagamento } from './lojaPagamentoContratos.js';
 
 const PG = 'ist_loja_pagamentos';
 const OP = 'ist_loja_pagamento_operacoes';
@@ -97,7 +97,7 @@ export const criarLojaPagamentoService = ({ db, adaptador, contexto, agora = () 
         await evento(ctx, pg, 'INTERNO', 'REVISAO_FINANCEIRA', { motivo, resultado });
         return pagamentoPublico(pg, ctx.pedido);
     };
-    const marcarIncerto = async (job, token, falha) => transacao(interno(job), async ctx => {
+    const marcarIncerto = async (job, token, falha, reconciliacaoExplicita = false) => transacao(interno(job), async ctx => {
         const pg = achar(ctx, job.pagamentoId);
         const op = ctx.operacoes.find(o => o.id === job.operacaoId);
         // COMMIT pode ter ocorrido: nao regredir resultado ja persistido.
@@ -105,10 +105,10 @@ export const criarLojaPagamentoService = ({ db, adaptador, contexto, agora = () 
             if (op && ['SUCESSO', 'RECUSADA', 'REVISAO'].includes(op.estado)) return pagamentoPublico(pg, ctx.pedido);
             falhar('RESULTADO_DESCONHECIDO');
         }
-        if (!finais.includes(pg.estado)) await mudar(ctx, pg, 'DESCONHECIDO');
+        if (!finais.includes(pg.estado) && !(reconciliacaoExplicita && pg.estado === 'PENDENTE')) await mudar(ctx, pg, 'DESCONHECIDO');
         await atualizar(ctx, OP, op, { estado: 'DESCONHECIDA', execucao_token: null, execucao_ate: null,
             codigo_erro: falha.categoria, proxima_tentativa_em: ctx.instante, resultado_json: JSON.stringify({ falha }) });
-        await evento(ctx, pg, 'INTERNO', 'RESULTADO_DESCONHECIDO', { acao: op.acao, falha });
+        await evento(ctx, pg, reconciliacaoExplicita ? 'RECONCILIACAO' : 'INTERNO', 'RESULTADO_DESCONHECIDO', { acao: op.acao, falha });
         return null;
     });
     const associacaoDivergente = (pg, r) => r.referencia !== pg.public_id || r.ambiente !== pg.ambiente
@@ -120,11 +120,29 @@ export const criarLojaPagamentoService = ({ db, adaptador, contexto, agora = () 
     const pedidoDivergente = (ctx, pg) => pg.valor_centavos !== ctx.pedido.total_centavos
         || pg.moeda !== ctx.pedido.moeda || pg.ambiente !== ctx.pedido.ambiente;
 
-    const aplicar = async (job, token, r, consulta, falha = null) => transacao(interno(job), async ctx => {
+    const aplicar = async (job, token, r, consulta, falha = null, observacao = null) => transacao(interno(job), async ctx => {
         const { pg, op } = operacaoCtx(ctx, job, token);
+        const evidencia = observacao ? normalizarReconciliacaoPagamento({ resultado: r, observacao }) : r;
         // Evidencia normalizada nunca contem token, cartao ou resposta bruta.
-        await evento(ctx, pg, consulta ? 'RECONCILIACAO' : 'API', r.estado, r);
+        await evento(ctx, pg, consulta ? 'RECONCILIACAO' : 'API', r.estado, evidencia);
         if (falha) await evento(ctx, pg, 'INTERNO', 'FALHA_ADAPTADOR', { falha });
+        if (observacao) {
+            // Antes de gravar dinheiro observado, revalidar diagnostico E fatos.
+            if (pedidoDivergente(ctx, pg)) return revisar(ctx, pg, op, 'PEDIDO_DIVERGENTE', evidencia);
+            if (divergencia(pg, r)) return revisar(ctx, pg, op, 'DIVERGENCIA_FINANCEIRA', evidencia);
+            if (observacao.evidencia === 'CONTRADITORIA' || observacao.validacao === 'DIVERGENTE'
+                || ['INVALIDA', 'DIVERGENTE'].includes(observacao.associacaoOrdem)) {
+                return revisar(ctx, pg, op, 'EVIDENCIA_RECONCILIACAO_DIVERGENTE', evidencia);
+            }
+            const coerente = observacao.evidencia === 'PRESENTE' && observacao.associacaoOrdem === 'CONFIRMADA'
+                && observacao.validacao === 'CONSISTENTE';
+            if ((r.estado === 'CAPTURADO' && !(coerente && observacao.statusCaptura === 'COMPLETED'))
+                || (r.estado === 'PENDENTE' && !(coerente && observacao.statusCaptura === 'PENDING'))
+                || (['RECUSADO', 'CANCELADO', 'EXPIRADO'].includes(r.estado) && !coerente)
+                || (pg.estado === 'PENDENTE' && ['APROVADO', 'AGUARDANDO_APROVACAO'].includes(r.estado))) {
+                r = { ...r, estado: 'DESCONHECIDO', capturadoEm: null };
+            }
+        }
         if (r.estado === 'CAPTURADO' && !associacaoDivergente(pg, r) && r.capturadoEm >= pg.criado_em) {
             // Mesmo um valor divergente precisa permanecer como fato observado.
             await atualizar(ctx, PG, pg, { captura_externa_id: r.capturaId, capturado_centavos: r.valorCentavos, capturado_em: r.capturadoEm });
@@ -134,13 +152,13 @@ export const criarLojaPagamentoService = ({ db, adaptador, contexto, agora = () 
         if (r.estado === 'DESCONHECIDO') {
             // IDs vem apenas da resposta normalizada da chamada injetada, vinculada
             // a referencia/ambiente e aos fatos observados acima. Ausencia nao confirma valores.
-            const ids = { ...(r.ordemId ? { ordem_externa_id: r.ordemId } : {}),
+            const ids = observacao?.evidencia === 'AUSENTE' ? {} : { ...(r.ordemId ? { ordem_externa_id: r.ordemId } : {}),
                 ...(r.capturaId ? { captura_externa_id: r.capturaId } : {}) };
             if (Object.keys(ids).length) await atualizar(ctx, PG, pg, ids);
-            if (!finais.includes(pg.estado)) await mudar(ctx, pg, 'DESCONHECIDO');
+            if (!finais.includes(pg.estado) && !(observacao && pg.estado === 'PENDENTE')) await mudar(ctx, pg, 'DESCONHECIDO');
             await atualizar(ctx, OP, op, { estado: 'DESCONHECIDA', execucao_token: null, execucao_ate: null,
                 codigo_erro: falha?.categoria ?? 'RESULTADO_DESCONHECIDO', proxima_tentativa_em: ctx.instante,
-                resultado_json: JSON.stringify(falha ? { ...r, falha } : r) });
+                resultado_json: JSON.stringify(falha ? { ...evidencia, falha } : evidencia) });
             return pagamentoPublico(pg, ctx.pedido);
         }
         if (r.estado === 'CAPTURADO') {
@@ -148,7 +166,7 @@ export const criarLojaPagamentoService = ({ db, adaptador, contexto, agora = () 
             if (fechado(pg) || op.acao !== 'CAPTURAR' || !op.envio_iniciado_em || outros
                 || !['CRIADO', 'AGUARDANDO_PAGAMENTO'].includes(ctx.pedido.estado)
                 || ctx.pedido.expira_em <= ctx.instante || r.capturadoEm < pg.criado_em || r.capturadoEm > ctx.instante) {
-                return revisar(ctx, pg, op, 'CAPTURA_TARDIA_OU_INESPERADA', r);
+                return revisar(ctx, pg, op, 'CAPTURA_TARDIA_OU_INESPERADA', evidencia);
             }
             await mudar(ctx, pg, 'CAPTURADO', { ordem_externa_id: r.ordemId, captura_externa_id: r.capturaId,
                 capturado_centavos: r.valorCentavos, capturado_em: r.capturadoEm, reserva_ativa: null, encerrado_em: ctx.instante });
@@ -157,7 +175,7 @@ export const criarLojaPagamentoService = ({ db, adaptador, contexto, agora = () 
             // Somente o adaptador pode declarar desfecho definitivo sem efeito pendente.
             if (r.estado === 'RECUSADO' && (BigInt(pg.capturado_centavos) !== 0n || pg.capturado_em
                 || (r.capturaId && (op.acao !== 'CAPTURAR' || !op.envio_iniciado_em)))) {
-                return revisar(ctx, pg, op, 'RECUSA_CONTRADITORIA', r);
+                return revisar(ctx, pg, op, 'RECUSA_CONTRADITORIA', evidencia);
             }
             await mudar(ctx, pg, r.estado, { ordem_externa_id: r.ordemId,
                 ...(r.estado === 'RECUSADO' && r.capturaId ? { captura_externa_id: r.capturaId } : {}),
@@ -166,16 +184,17 @@ export const criarLojaPagamentoService = ({ db, adaptador, contexto, agora = () 
             // Uma consulta ainda aprovada nao prova que a captura anterior falhou.
             await mudar(ctx, pg, 'DESCONHECIDO');
             await atualizar(ctx, OP, op, { estado: 'DESCONHECIDA', execucao_token: null, execucao_ate: null,
-                codigo_erro: 'RESULTADO_DESCONHECIDO', resultado_json: JSON.stringify(r) });
+                codigo_erro: 'RESULTADO_DESCONHECIDO', resultado_json: JSON.stringify(evidencia) });
             return pagamentoPublico(pg, ctx.pedido);
         } else {
-            if (fechado(pg)) return revisar(ctx, pg, op, 'RESPOSTA_APOS_ENCERRAMENTO', r);
-            if (r.estado === 'PENDENTE' && (op.acao !== 'CAPTURAR' || !op.envio_iniciado_em)) return revisar(ctx, pg, op, 'CAPTURA_INESPERADA', r);
-            await mudar(ctx, pg, r.estado, { ordem_externa_id: r.ordemId });
+            if (fechado(pg)) return revisar(ctx, pg, op, 'RESPOSTA_APOS_ENCERRAMENTO', evidencia);
+            if (r.estado === 'PENDENTE' && (op.acao !== 'CAPTURAR' || !op.envio_iniciado_em)) return revisar(ctx, pg, op, 'CAPTURA_INESPERADA', evidencia);
+            await mudar(ctx, pg, r.estado, { ordem_externa_id: r.ordemId,
+                ...(r.estado === 'PENDENTE' && r.capturaId ? { captura_externa_id: r.capturaId } : {}) });
         }
         const preparada = op.acao === 'CAPTURAR' && !op.envio_iniciado_em && ['APROVADO', 'AGUARDANDO_APROVACAO'].includes(r.estado);
         await atualizar(ctx, OP, op, { estado: preparada ? 'PREPARADA' : ['RECUSADO', 'CANCELADO', 'EXPIRADO'].includes(r.estado) ? 'RECUSADA' : 'SUCESSO',
-            execucao_token: null, execucao_ate: null, resultado_json: JSON.stringify(falha ? { ...r, falha } : r), codigo_erro: falha?.categoria ?? null,
+            execucao_token: null, execucao_ate: null, resultado_json: JSON.stringify(falha ? { ...evidencia, falha } : evidencia), codigo_erro: falha?.categoria ?? null,
             concluido_em: preparada ? null : ctx.instante });
         return pagamentoPublico(pg, ctx.pedido);
     });
@@ -194,18 +213,25 @@ export const criarLojaPagamentoService = ({ db, adaptador, contexto, agora = () 
             await atualizar(ctx, OP, op, { estado: 'EM_EXECUCAO', execucao_token: token,
                 execucao_ate: new Date(Date.parse(ctx.instante) + execucaoMs).toISOString(), tentativas: op.tentativas + 1,
                 ...(!consulta && op.acao === 'CRIAR' ? { envio_iniciado_em: ctx.instante } : {}) });
-            return { token, consulta, acao: op.acao, args: argsAdaptador(ctx, pg, op) };
+            return { token, consulta, acao: op.acao, args: { ...argsAdaptador(ctx, pg, op),
+                ...(reconciliar ? { provedor: pg.provedor } : {}) } };
         });
         if (etapa.dto) return etapa.dto;
         const { token } = etapa;
         let ultimoResultado = null;
+        let ultimaObservacao = null;
         let falhaAdaptador = null;
         let aprovacaoPendente = false;
         const obter = async (metodo, args) => {
             let resposta;
             try { resposta = await chamar(metodo, args); }
             catch (e) { falhaAdaptador = { ...classificarFalhaPagamento(e), metodo }; throw e; }
-            try { ultimoResultado = normalizarResultadoPagamento(resposta); }
+            try {
+                if (metodo === 'reconciliar') {
+                    const envelope = normalizarReconciliacaoPagamento(resposta);
+                    ultimoResultado = envelope.resultado; ultimaObservacao = envelope.observacao;
+                } else ultimoResultado = normalizarResultadoPagamento(resposta);
+            }
             catch (e) {
                 falhaAdaptador = { categoria: 'RESPOSTA_INVALIDA', envio: 'INDETERMINADO', resultado: null, metodo };
                 throw e;
@@ -213,6 +239,10 @@ export const criarLojaPagamentoService = ({ db, adaptador, contexto, agora = () 
             return ultimoResultado;
         };
         try {
+            if (reconciliar) {
+                const resultado = await obter('reconciliar', etapa.args);
+                return await aplicar(job, token, resultado, true, null, ultimaObservacao);
+            }
             if (etapa.consulta) return await aplicar(job, token, await obter('consultar', etapa.args), true);
             if (etapa.acao === 'CRIAR') return await aplicar(job, token, await obter('criar', etapa.args), false);
             const aprovado = await obter('consultar', etapa.args);
@@ -244,19 +274,26 @@ export const criarLojaPagamentoService = ({ db, adaptador, contexto, agora = () 
             // Uma falha de consulta nunca prova que a operacao financeira anterior nao ocorreu.
             if (falhaAdaptador?.resultado) {
                 ultimoResultado = falhaAdaptador.resultado;
-                try { return await aplicar(job, token, ultimoResultado, etapa.consulta, falhaAdaptador); }
+                if (reconciliar) {
+                    // Erro com fatos parciais nao substitui o envelope exigido.
+                    ultimoResultado = { ...ultimoResultado, estado: 'DESCONHECIDO', capturadoEm: null };
+                    ultimaObservacao = { evidencia: 'PRESENTE', associacaoOrdem: 'NAO_DEMONSTRADA',
+                        validacao: 'INCONCLUSIVA', statusOrdem: null, statusCaptura: null, motivoPendencia: null };
+                }
+                try { return await aplicar(job, token, ultimoResultado, etapa.consulta, falhaAdaptador, ultimaObservacao); }
                 catch (erroAplicacao) { e = erroAplicacao; }
             }
             if (e?.colisaoIdentificadorExterno) {
                 try {
                     return await transacao(interno(job), ctx => {
                         const { pg, op } = operacaoCtx(ctx, job, token);
-                        return revisar(ctx, pg, op, 'IDENTIFICADOR_EXTERNO_DUPLICADO', ultimoResultado);
+                        return revisar(ctx, pg, op, 'IDENTIFICADOR_EXTERNO_DUPLICADO', ultimaObservacao
+                            ? { resultado: ultimoResultado, observacao: ultimaObservacao } : ultimoResultado);
                     });
                 } catch { /* Se a revisao nao puder persistir, conservar incerteza. */ }
             }
             // Resposta externa/COMMIT perdido nunca provoca outra chamada financeira.
-            try { const conhecido = await marcarIncerto(job, token, falhaAdaptador ?? classificarFalhaPagamento(null)); if (conhecido) return conhecido; }
+            try { const conhecido = await marcarIncerto(job, token, falhaAdaptador ?? classificarFalhaPagamento(null), reconciliar); if (conhecido) return conhecido; }
             catch { /* Permanecer indeterminado; nao expor SQL/excecao do adaptador. */ }
             throw erroPagamento('RESULTADO_DESCONHECIDO');
         }
@@ -299,6 +336,7 @@ export const criarLojaPagamentoService = ({ db, adaptador, contexto, agora = () 
     };
     const reconciliar = async (sessao, entrada) => {
         entrada = camposExatos(entrada, ['pagamentoPublicId']);
+        if (typeof adaptador.reconciliar !== 'function') falhar('CONFIGURACAO_INVALIDA');
         const job = await transacao(referencia(sessao, entrada), async ctx => {
             const pg = achar(ctx, entrada.pagamentoPublicId); conferirContexto(pg);
             const operacoes = ctx.operacoes.filter(o => o.pagamento_id === pg.id);

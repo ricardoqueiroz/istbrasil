@@ -2,13 +2,287 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { criarLojaPagamentoService } from '../src/services/lojaPagamentoService.js';
-import { criarFalhaPagamento } from '../src/services/lojaPagamentoContratos.js';
+import { criarFalhaPagamento, normalizarResultadoPagamento, normalizarReconciliacaoPagamento, hashPagamento } from '../src/services/lojaPagamentoContratos.js';
 import { criarPagamentoSimulado } from './fixtures/lojaPagamentoSimulado.js';
 import { criarBancoPagamentoIsolado } from './fixtures/lojaPagamentoBancoIsolado.js';
 
 const contexto = { provedor: 'simulado', ambiente: 'sandbox', contaRecebedora: 'recebedor-fixture' };
 const codigo = codigo => ({ codigo });
 const adiar = () => { let resolver; const promessa = new Promise(r => { resolver = r; }); return { promessa, resolver }; };
+// Adaptacao somente local: nenhum fallback e adicionado ao servico de producao.
+const envelopeTeste = resultado => normalizarReconciliacaoPagamento({ resultado: normalizarResultadoPagamento(resultado), observacao: {
+    evidencia: 'PRESENTE', associacaoOrdem: resultado.capturaId ? 'CONFIRMADA' : 'NAO_DEMONSTRADA',
+    validacao: resultado.capturaId && resultado.estado !== 'DESCONHECIDO' ? 'CONSISTENTE' : 'INCONCLUSIVA',
+    statusOrdem: resultado.estado === 'APROVADO' ? 'APPROVED' : resultado.capturaId ? 'COMPLETED' : 'CREATED',
+    statusCaptura: resultado.estado === 'CAPTURADO' ? 'COMPLETED' : resultado.estado === 'PENDENTE' ? 'PENDING' : null,
+    motivoPendencia: resultado.estado === 'PENDENTE' ? 'PENDING_REVIEW' : null
+} });
+const comReconciliacaoTeste = adaptador => ({ ...adaptador,
+    async reconciliar(args) { return envelopeTeste(await adaptador.consultar(args)); } });
+
+// Double em memoria da conexao mysql2. Nao interpreta SQL em um servidor,
+// nao simula locks InnoDB e nao comprova concorrencia real/compatibilidade SQL.
+const montarSemBanco = (opcoes = {}) => {
+    let instante = Date.parse('2026-10-18T12:00:00.000Z');
+    const inicio = '2026-10-18T11:59:00.000Z', fim = '2026-10-18T12:20:00.000Z';
+    const pgPublicId = randomUUID(), pedidoPublicId = randomUUID();
+    const clonar = v => Buffer.isBuffer(v) ? Buffer.from(v) : Array.isArray(v) ? v.map(clonar)
+        : v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, clonar(x)])) : v;
+    const data = (k, v) => typeof v === 'string' && (k.endsWith('_em') || k === 'execucao_ate')
+        && /^\d{4}-\d{2}-\d{2} /.test(v) ? `${v.replace(' ', 'T')}Z` : v;
+    let estado = {
+        ist_loja_sessoes: [{ id: 1, criada_em: inicio, expira_em: '2026-10-19T11:59:00.000Z', revogada_em: null },
+            { id: 2, criada_em: inicio, expira_em: '2026-10-19T11:59:00.000Z', revogada_em: null }],
+        ist_loja_pedidos: [{ id: 1, public_id: pedidoPublicId, sessao_id: 1, estado: 'AGUARDANDO_PAGAMENTO',
+            ambiente: 'sandbox', moeda: 'BRL', total_centavos: '19000', versao: 1,
+            criado_em: inicio, atualizado_em: inicio, expira_em: fim, pagamento_confirmado_em: null }],
+        ist_loja_pagamentos: [{ id: 1, public_id: pgPublicId, pedido_id: 1, ...contexto,
+            conta_recebedora: contexto.contaRecebedora, estado: 'PENDENTE', reserva_ativa: 1,
+            valor_centavos: '19000', capturado_centavos: '0', moeda: 'BRL', versao: 1,
+            ordem_externa_id: 'ORDEMTESTE', captura_externa_id: null, capturado_em: null,
+            criado_em: inicio, atualizado_em: inicio, expira_em: fim, encerrado_em: null }],
+        ist_loja_pagamento_operacoes: [{ id: 1, pagamento_id: 1, pedido_id: 1, acao: 'CAPTURAR',
+            chave_idempotencia: randomUUID(), request_id_provedor: randomUUID(), solicitacao_hash: Buffer.alloc(32),
+            estado: 'SUCESSO', tentativas: 1, versao: 1, execucao_token: null, execucao_ate: null,
+            criado_em: inicio, atualizado_em: inicio, envio_iniciado_em: inicio, concluido_em: inicio }],
+        ist_loja_pagamento_eventos: []
+    };
+    let abertas = 0, conexoes = 0, descartadas = 0, falhou = false;
+    const consultas = [];
+    const db = { async getConnection() {
+        conexoes++; let copia = null;
+        const encerrar = () => { if (copia) { copia = null; abertas--; } };
+        return {
+            async beginTransaction() { assert.equal(copia, null); copia = clonar(estado); abertas++; },
+            async commit() {
+                if (opcoes.commitIncerto !== undefined && !falhou && copia.ist_loja_pedidos[0].estado === 'PAGO'
+                    && estado.ist_loja_pedidos[0].estado !== 'PAGO') {
+                    falhou = true; if (opcoes.commitIncerto) estado = copia; encerrar(); throw new Error('fixture-commit-perdido');
+                }
+                estado = copia; encerrar();
+            },
+            async rollback() { encerrar(); },
+            destroy() { descartadas++; encerrar(); },
+            release() { assert.equal(copia, null, 'nao devolver transacao aberta'); },
+            async query(sql, params = []) {
+                consultas.push(sql);
+                if (sql.startsWith('SET TRANSACTION')) return [[]];
+                assert.ok(copia);
+                if (sql.startsWith('SELECT pedido_id')) return [copia.ist_loja_pagamentos.filter(p => p.public_id === params[0]).map(p => ({ pedido_id: p.pedido_id }))];
+                if (sql.includes('FROM ist_loja_sessoes')) return [clonar(copia.ist_loja_sessoes.filter(s => s.id === params[0]))];
+                if (sql.includes('FROM ist_loja_pedidos')) return [clonar(copia.ist_loja_pedidos.filter(p =>
+                    (p.id === params[0] || p.public_id === params[0]) && p.sessao_id === params[1]))];
+                if (sql.startsWith('SELECT')) {
+                    const tabela = sql.includes('FROM ist_loja_pagamento_operacoes') ? 'ist_loja_pagamento_operacoes' : 'ist_loja_pagamentos';
+                    return [clonar(copia[tabela].filter(p => p.pedido_id === params[0]))];
+                }
+                if (sql.startsWith('UPDATE')) {
+                    const tabela = /^UPDATE ([a-z_]+)/.exec(sql)[1];
+                    const nomes = [...sql.split('WHERE')[0].matchAll(/([a-z_]+)=\?/g)].map(m => m[1]);
+                    const campos = Object.fromEntries(nomes.map((k, i) => [k, data(k, params[i])]));
+                    if (opcoes.colisao && tabela === 'ist_loja_pagamentos' && campos.captura_externa_id) {
+                        throw Object.assign(new Error('fixture-duplicado'), { code: 'ER_DUP_ENTRY', sqlMessage: 'uq_lpg_captura_externa' });
+                    }
+                    if (opcoes.falhaPago && !falhou && tabela === 'ist_loja_pedidos' && campos.estado === 'PAGO') {
+                        falhou = true; throw new Error('fixture-SQL-segredo');
+                    }
+                    const linha = copia[tabela].find(p => p.id === params.at(-2) && p.versao === params.at(-1));
+                    if (!linha) return [{ affectedRows: 0 }];
+                    Object.assign(linha, campos, { versao: linha.versao + 1 });
+                    return [{ affectedRows: 1, warningStatus: 0 }];
+                }
+                const m = /^INSERT INTO ([a-z_]+) \(([^)]+)\)/.exec(sql); assert.ok(m, 'comando inesperado no double');
+                const linha = { id: copia[m[1]].length + 1, versao: 1, tentativas: 0,
+                    ...Object.fromEntries(m[2].split(',').map((k, i) => [k, data(k, params[i])])) };
+                copia[m[1]].push(linha); return [{ insertId: linha.id, warningStatus: 0 }];
+            }
+        };
+    } };
+    const resultado = (extras = {}) => ({ estado: 'CAPTURADO', referencia: pgPublicId, ambiente: 'sandbox',
+        ordemId: 'ORDEMTESTE', capturaId: 'CAPTURATESTE', valorCentavos: '19000', moeda: 'BRL',
+        contaRecebedora: contexto.contaRecebedora, capturadoEm: '2026-10-18T12:00:00.000Z', ...extras });
+    const chamadas = { reconciliar: [], consultar: 0, capturar: 0, criar: 0 };
+    const adaptador = {
+        async criar() { chamadas.criar++; assert.fail('criacao externa proibida'); },
+        async consultar() { chamadas.consultar++; assert.equal(abertas, 0); return resultado({ estado: 'APROVADO', capturaId: null, capturadoEm: null }); },
+        async capturar() { chamadas.capturar++; assert.equal(abertas, 0); return resultado(); },
+        async reconciliar(args) {
+            assert.equal(abertas, 0); chamadas.reconciliar.push(args);
+            return opcoes.responder ? opcoes.responder(args, resultado) : envelopeTeste(resultado());
+        }
+    };
+    if (opcoes.semCapacidade) delete adaptador.reconciliar;
+    const service = criarLojaPagamentoService({ db, adaptador, contexto, agora: () => new Date(instante), timeoutMs: 30, execucaoMs: 1000 });
+    return { service, resultado, chamadas, consultas, adaptador, db, pgPublicId, pedidoPublicId,
+        reconciliar: (sessao = { id: 1 }, entrada = { pagamentoPublicId: pgPublicId }) => service.reconciliar(sessao, entrada),
+        get estado() { return estado; }, get abertas() { return abertas; }, get conexoes() { return conexoes; }, get descartadas() { return descartadas; },
+        avancar(ms) { instante += ms; },
+        pg: () => estado.ist_loja_pagamentos[0], op: () => estado.ist_loja_pagamento_operacoes[0], pedido: () => estado.ist_loja_pedidos[0]
+    };
+};
+
+test('simulado B2 reconciliacao sem banco', async t => {
+    await t.test('capacidade ausente falha antes de reservar ou abrir conexao', async () => {
+        const m = montarSemBanco({ semCapacidade: true });
+        await assert.rejects(m.reconciliar(), codigo('CONFIGURACAO_INVALIDA'));
+        assert.equal(m.conexoes, 0); assert.equal(m.op().estado, 'SUCESSO');
+    });
+    await t.test('usa contexto persistido, confirma atomicamente no double e nao duplica quitacao', async () => {
+        const m = montarSemBanco(); const r = await m.reconciliar();
+        assert.equal(r.estado, 'CAPTURADO'); assert.equal(r.pedidoEstado, 'PAGO');
+        const a = m.chamadas.reconciliar[0];
+        assert.equal(a.referencia, m.pgPublicId); assert.equal(a.ordemId, 'ORDEMTESTE'); assert.equal(a.capturaId, null);
+        assert.equal(a.valorCentavos, '19000'); assert.equal(a.moeda, 'BRL'); assert.equal(a.provedor, contexto.provedor);
+        assert.equal(a.ambiente, 'sandbox'); assert.equal(a.contaRecebedora, contexto.contaRecebedora);
+        assert.equal(m.pg().reserva_ativa, null); assert.equal(m.op().execucao_token, null); assert.equal(m.abertas, 0);
+        assert.equal(m.chamadas.consultar, 0); assert.equal(m.chamadas.capturar, 0); assert.equal(m.chamadas.criar, 0);
+        const e = m.estado.ist_loja_pagamento_eventos.find(x => x.origem === 'RECONCILIACAO');
+        const evidencia = JSON.parse(e.evidencia_json);
+        assert.equal(evidencia.observacao.statusCaptura, 'COMPLETED'); assert.deepEqual(e.conteudo_hash, hashPagamento(evidencia));
+        assert.deepEqual(JSON.parse(m.op().resultado_json), evidencia);
+        const antes = JSON.stringify(m.estado); assert.deepEqual(await m.reconciliar(), r);
+        assert.equal(JSON.stringify(m.estado), antes); assert.equal(m.chamadas.reconciliar.length, 1);
+        for (const campo of ['resultado', 'observacao', 'ordemId', 'capturaId', 'contaRecebedora']) assert.equal(Object.hasOwn(r, campo), false);
+    });
+    await t.test('rejeita autoridade financeira do chamador e pagamento de outra sessao', async () => {
+        const m = montarSemBanco();
+        await assert.rejects(m.reconciliar({ id: 1 }, { pagamentoPublicId: m.pgPublicId, valorCentavos: '1' }), codigo('SOLICITACAO_INVALIDA'));
+        await assert.rejects(m.reconciliar({ id: 2 }), codigo('PEDIDO_NAO_ENCONTRADO'));
+        assert.equal(m.chamadas.reconciliar.length, 0); assert.equal(m.op().tentativas, 1);
+    });
+    await t.test('PENDENTE guarda Capture ID e motivo; null posterior nao apaga ID', async () => {
+        let id = 'CAPTURATESTE';
+        const m = montarSemBanco({ responder: (a, resultado) => {
+            const e = envelopeTeste(resultado({ estado: 'PENDENTE', capturaId: id, capturadoEm: null }));
+            e.observacao.associacaoOrdem = 'CONFIRMADA'; e.observacao.validacao = 'CONSISTENTE'; return e;
+        } });
+        assert.equal((await m.reconciliar()).estado, 'PENDENTE'); assert.equal(m.pg().captura_externa_id, id);
+        assert.equal(m.pg().reserva_ativa, 1); assert.equal(m.pedido().pagamento_confirmado_em, null);
+        assert.equal(JSON.parse(m.op().resultado_json).observacao.motivoPendencia, 'PENDING_REVIEW');
+        id = null; assert.equal((await m.reconciliar()).estado, 'PENDENTE'); assert.equal(m.pg().captura_externa_id, 'CAPTURATESTE');
+        assert.equal(m.pg().capturado_centavos, '0');
+    });
+    for (const modo of ['inconclusiva', 'ausente', 'contraditoria', 'consistenteDesconhecido', 'statusIncompativel']) {
+        await t.test(`barreira: ${modo} nunca reconhece dinheiro ou quita pedido`, async () => {
+            const m = montarSemBanco({ responder: (a, resultado) => {
+                const e = envelopeTeste(resultado());
+                if (modo === 'inconclusiva') e.observacao.validacao = 'INCONCLUSIVA';
+                if (modo === 'ausente') e.observacao = { evidencia: 'AUSENTE', associacaoOrdem: 'NAO_DEMONSTRADA',
+                    validacao: 'INCONCLUSIVA', statusOrdem: null, statusCaptura: null, motivoPendencia: null };
+                if (modo === 'contraditoria') Object.assign(e.observacao, { evidencia: 'CONTRADITORIA', associacaoOrdem: 'DIVERGENTE', validacao: 'DIVERGENTE' });
+                if (modo === 'consistenteDesconhecido') e.resultado = normalizarResultadoPagamento(resultado({ estado: 'DESCONHECIDO', capturadoEm: null }));
+                if (modo === 'statusIncompativel') e.observacao.statusCaptura = 'PENDING';
+                return e;
+            } });
+            const r = await m.reconciliar();
+            assert.equal(r.estado, modo === 'contraditoria' ? 'REVISAO' : 'PENDENTE');
+            assert.equal(m.pg().capturado_centavos, '0'); assert.equal(m.pg().capturado_em, null);
+            assert.equal(m.pedido().pagamento_confirmado_em, null); assert.equal(m.pg().reserva_ativa, 1);
+            assert.equal(m.op().execucao_token, null);
+            if (modo === 'ausente') assert.equal(m.pg().captura_externa_id, null);
+        });
+    }
+    for (const [campo, valor] of [['valorCentavos', '19001'], ['moeda', 'USD'], ['contaRecebedora', 'outro'],
+        ['ordemId', 'OUTRAORDEM'], ['referencia', 'OUTRAREFERENCIA'], ['capturaId', 'OUTRACAPTURA']]) {
+        await t.test(`divergencia ${campo} nao sobrescreve IDs nem reconhece dinheiro`, async () => {
+            const m = montarSemBanco({ responder: (a, resultado) => envelopeTeste(resultado({ [campo]: valor })) });
+            m.pg().captura_externa_id = 'CAPTURATESTE';
+            assert.equal((await m.reconciliar()).estado, 'REVISAO');
+            assert.equal(m.pg().captura_externa_id, 'CAPTURATESTE'); assert.equal(m.pg().ordem_externa_id, 'ORDEMTESTE');
+            assert.equal(m.pg().capturado_centavos, '0'); assert.equal(m.pedido().pagamento_confirmado_em, null);
+        });
+    }
+    for (const tipo of ['rede', 'timeout', '404', 'envelopeInvalido', 'parcial']) {
+        await t.test(`falha GET ${tipo} conserva pendencia e sanitiza evidencia`, async () => {
+            const m = montarSemBanco({ responder: async (a, resultado) => {
+                if (tipo === 'rede') throw new Error('fixture-segredo private@example.invalid');
+                if (tipo === 'timeout') return new Promise(() => {});
+                if (tipo === 'envelopeInvalido') return { ...envelopeTeste(resultado()), segredo: 'fixture-segredo' };
+                if (tipo === 'parcial') throw criarFalhaPagamento({ categoria: 'INFRAESTRUTURA', envio: 'ENVIADO',
+                    resultado: { estado: 'DESCONHECIDO', referencia: a.referencia, ambiente: a.ambiente, ordemId: a.ordemId } });
+                return { resultado: { estado: 'DESCONHECIDO', referencia: a.referencia, ambiente: a.ambiente },
+                    observacao: { evidencia: 'AUSENTE', associacaoOrdem: 'NAO_DEMONSTRADA', validacao: 'INCONCLUSIVA',
+                        statusOrdem: null, statusCaptura: null, motivoPendencia: null } };
+            } });
+            if (['rede', 'timeout', 'envelopeInvalido'].includes(tipo)) await assert.rejects(m.reconciliar(), codigo('RESULTADO_DESCONHECIDO'));
+            else assert.equal((await m.reconciliar()).estado, 'PENDENTE');
+            assert.equal(m.pg().estado, 'PENDENTE'); assert.equal(m.pg().reserva_ativa, 1);
+            assert.equal(m.op().estado, 'DESCONHECIDA'); assert.equal(m.op().execucao_token, null); assert.equal(m.abertas, 0);
+            assert.ok(m.estado.ist_loja_pagamento_eventos.some(e => e.origem === 'RECONCILIACAO'));
+            for (const secreto of ['fixture-segredo', 'private@example.invalid']) assert.equal(JSON.stringify(m.estado).includes(secreto), false);
+        });
+    }
+    await t.test('captura tardia mantem REVISAO e fato observado, sem quitar', async () => {
+        const m = montarSemBanco(); m.avancar(25 * 60 * 1000);
+        assert.equal((await m.reconciliar()).estado, 'REVISAO'); assert.equal(m.pg().capturado_centavos, '19000');
+        assert.equal(m.pg().motivo_revisao, 'CAPTURA_TARDIA_OU_INESPERADA'); assert.equal(m.pedido().pagamento_confirmado_em, null);
+    });
+    await t.test('PENDENTE previamente identificado pode ser confirmado pela mesma captura', async () => {
+        const m = montarSemBanco(); m.pg().captura_externa_id = 'CAPTURATESTE';
+        assert.equal((await m.reconciliar()).estado, 'CAPTURADO'); assert.equal(m.pg().captura_externa_id, 'CAPTURATESTE');
+    });
+    await t.test('provedor ou total persistido incompatíveis impedem consulta externa', async () => {
+        const m = montarSemBanco(); m.pg().provedor = 'outro';
+        await assert.rejects(m.reconciliar(), codigo('PEDIDO_NAO_ENCONTRADO')); assert.equal(m.chamadas.reconciliar.length, 0);
+        const n = montarSemBanco(); n.pedido().total_centavos = '19001';
+        assert.equal((await n.reconciliar()).estado, 'REVISAO'); assert.equal(n.chamadas.reconciliar.length, 0);
+    });
+    await t.test('colisao UNIQUE simulada provoca revisao sem liberar reserva', async () => {
+        const m = montarSemBanco({ colisao: true });
+        assert.equal((await m.reconciliar()).estado, 'REVISAO');
+        assert.equal(m.pg().motivo_revisao, 'IDENTIFICADOR_EXTERNO_DUPLICADO'); assert.equal(m.pg().reserva_ativa, 1);
+        assert.equal(m.pg().captura_externa_id, null); assert.equal(m.pg().capturado_centavos, '0');
+    });
+    await t.test('falha SQL simulada reverte aplicacao e permite nova consulta sem captura', async () => {
+        const m = montarSemBanco({ falhaPago: true });
+        await assert.rejects(m.reconciliar(), codigo('RESULTADO_DESCONHECIDO'));
+        assert.equal(m.pg().estado, 'PENDENTE'); assert.equal(m.pg().capturado_centavos, '0');
+        assert.equal(m.pedido().pagamento_confirmado_em, null);
+        assert.equal((await m.reconciliar()).estado, 'CAPTURADO'); assert.equal(m.chamadas.capturar, 0);
+    });
+    for (const persistiu of [true, false]) await t.test(`COMMIT incerto simulado persistiu=${persistiu}`, async () => {
+        const m = montarSemBanco({ commitIncerto: persistiu });
+        if (persistiu) assert.equal((await m.reconciliar()).estado, 'CAPTURADO');
+        else {
+            await assert.rejects(m.reconciliar(), codigo('RESULTADO_DESCONHECIDO')); assert.equal(m.pg().estado, 'PENDENTE');
+        }
+        assert.equal((await m.reconciliar()).estado, 'CAPTURADO'); assert.ok(m.descartadas >= 1); assert.equal(m.abertas, 0);
+        assert.equal(m.chamadas.capturar, 0);
+    });
+    await t.test('execucao concorrente valida e rejeitada; nenhum POST de reconciliacao', async () => {
+        const entrou = adiar(), liberar = adiar();
+        const m = montarSemBanco({ responder: async (a, resultado) => { entrou.resolver(); await liberar.promessa; return envelopeTeste(resultado()); } });
+        const primeira = m.reconciliar(); await entrou.promessa;
+        try { await assert.rejects(m.reconciliar(), codigo('OPERACAO_EM_ANDAMENTO')); }
+        finally { liberar.resolver(); }
+        await primeira; assert.equal(m.chamadas.reconciliar.length, 1); assert.equal(m.chamadas.capturar, 0);
+    });
+    await t.test('trabalhador antigo nao sobrescreve reconciliacao posterior', async () => {
+        const entrou = adiar(), liberar = adiar(); let n = 0;
+        const m = montarSemBanco({ responder: async (a, resultado) => {
+            if (++n === 1) { entrou.resolver(); await liberar.promessa; }
+            return envelopeTeste(resultado());
+        } });
+        const primeira = m.reconciliar(); await entrou.promessa; m.avancar(2000);
+        assert.equal((await m.reconciliar()).estado, 'CAPTURADO');
+        const antes = JSON.stringify(m.estado); liberar.resolver(); await primeira;
+        assert.equal(JSON.stringify(m.estado), antes); assert.equal(m.chamadas.capturar, 0);
+    });
+    await t.test('aprovacao antes de capturar preserva consultar; nao usa reconciliar', async () => {
+        const m = montarSemBanco(); m.pg().estado = 'AGUARDANDO_APROVACAO';
+        m.op().acao = 'CRIAR'; m.op().envio_iniciado_em = null;
+        const r = await m.service.capturar({ id: 1 }, { pagamentoPublicId: m.pgPublicId }, randomUUID());
+        assert.equal(r.estado, 'CAPTURADO'); assert.equal(m.chamadas.consultar, 1); assert.equal(m.chamadas.capturar, 1);
+        assert.equal(m.chamadas.reconciliar.length, 0);
+    });
+    await t.test('recuperacao automatica existente continua consultar sem novo metodo', async () => {
+        const m = montarSemBanco(); m.pg().estado = 'DESCONHECIDO'; m.op().estado = 'DESCONHECIDA';
+        m.op().solicitacao_hash = hashPagamento({ versao: 1, acao: 'CAPTURAR', pagamentoPublicId: m.pgPublicId, ...contexto });
+        const r = await m.service.capturar({ id: 1 }, { pagamentoPublicId: m.pgPublicId }, m.op().chave_idempotencia);
+        assert.equal(r.estado, 'DESCONHECIDO'); assert.equal(m.chamadas.consultar, 1);
+        assert.equal(m.chamadas.capturar, 0); assert.equal(m.chamadas.reconciliar.length, 0);
+    });
+});
 
 test('nucleo transacional em MariaDB descartavel e adaptador exclusivo de testes', {
     skip: !process.env.IST_LOJA_PAGAMENTOS_MARIADB_BIN, timeout: 180000
@@ -17,9 +291,10 @@ test('nucleo transacional em MariaDB descartavel e adaptador exclusivo de testes
     t.after(() => { if (anterior === undefined) delete process.env.NODE_ENV; else process.env.NODE_ENV = anterior; });
     const banco = await criarBancoPagamentoIsolado(t);
     const { pool, admin, novaCompra } = banco;
+    const criarServico = opcoes => criarLojaPagamentoService({ ...opcoes, adaptador: comReconciliacaoTeste(opcoes.adaptador) });
     const montar = (opcoes = {}) => {
         const sim = criarPagamentoSimulado(opcoes);
-        const service = criarLojaPagamentoService({ db: opcoes.db ?? pool, adaptador: sim.adaptador,
+        const service = criarServico({ db: opcoes.db ?? pool, adaptador: sim.adaptador,
             contexto: opcoes.contexto ?? contexto, ...(opcoes.agora ? { agora: opcoes.agora } : {}),
             timeoutMs: opcoes.timeoutMs ?? 1000, execucaoMs: opcoes.execucaoMs ?? 5000 });
         return { sim, service };
@@ -242,14 +517,14 @@ test('nucleo transacional em MariaDB descartavel e adaptador exclusivo de testes
     await t.test('dados privados do adaptador sao descartados de DTO, operacoes e eventos', async () => {
         const compra = await novaCompra(); const sim = criarPagamentoSimulado();
         const adaptador = { ...sim.adaptador, async criar(args) { return { ...await sim.adaptador.criar(args), access_token: 'SEGREDO_FIXTURE', cartao: 'PAN_FIXTURE' }; } };
-        const service = criarLojaPagamentoService({ db: pool, contexto, adaptador }); const pg = await criar(service, compra);
+        const service = criarServico({ db: pool, contexto, adaptador }); const pg = await criar(service, compra);
         const conteudo = JSON.stringify({ pg, dados: await ler(pg) }); assert.doesNotMatch(conteudo, /SEGREDO_FIXTURE|PAN_FIXTURE/);
         assert.doesNotMatch(JSON.stringify(pg), /request_id|recebedor|solicitacao_hash|ordem_externa|comprador_email|execucao_token/);
     });
     for (const falha of [null, Object.assign(new Error('segredo externo'), { codigo: 'APROVACAO_PENDENTE' })]) {
         await t.test(`excecao arbitraria do adaptador nao simula erro de dominio: ${falha === null ? 'null' : 'codigo'}`, async () => {
             const compra = await novaCompra(); const sim = criarPagamentoSimulado();
-            const service = criarLojaPagamentoService({ db: pool, contexto, adaptador: { ...sim.adaptador, async criar() { throw falha; } } });
+            const service = criarServico({ db: pool, contexto, adaptador: { ...sim.adaptador, async criar() { throw falha; } } });
             await assert.rejects(criar(service, compra), e => e.codigo === 'RESULTADO_DESCONHECIDO' && !e.message.includes('segredo externo'));
             const [[p]] = await admin.query('SELECT estado,reserva_ativa FROM ist_loja_pagamentos WHERE pedido_id=?', [compra.pedidoId]);
             assert.equal(p.estado, 'DESCONHECIDO'); assert.equal(p.reserva_ativa, 1);
@@ -273,7 +548,7 @@ test('nucleo transacional em MariaDB descartavel e adaptador exclusivo de testes
             if (!ordemAnterior) ordemAnterior = r.ordemId;
             return { ...r, ordemId: ordemAnterior };
         } };
-        const service = criarLojaPagamentoService({ db: pool, contexto, adaptador }); await criar(service, a);
+        const service = criarServico({ db: pool, contexto, adaptador }); await criar(service, a);
         const pg = await criar(service, b); assert.equal(pg.estado, 'REVISAO'); const dados = await ler(pg);
         assert.equal(dados.p.ordem_externa_id, null); assert.equal(dados.pedido.estado, 'REVISAO');
         assert.ok(dados.eventos.some(e => JSON.parse(e.evidencia_json).motivo === 'IDENTIFICADOR_EXTERNO_DUPLICADO'));
@@ -328,7 +603,7 @@ test('nucleo transacional em MariaDB descartavel e adaptador exclusivo de testes
             },
             async capturar() { assert.fail('nao capturar'); }
         };
-        const s = () => criarLojaPagamentoService({ db: pool, contexto, adaptador });
+        const s = () => criarServico({ db: pool, contexto, adaptador });
         const pg = await criar(s(), compra, chave); let dados = await ler(pg);
         assert.equal(pg.estado, 'DESCONHECIDO'); assert.equal(dados.p.ordem_externa_id, 'ordem-parcial-reinicio');
         assert.equal(dados.p.reserva_ativa, 1); assert.equal(dados.operacoes[0].estado, 'DESCONHECIDA');
@@ -345,7 +620,7 @@ test('nucleo transacional em MariaDB descartavel e adaptador exclusivo de testes
             return { estado: 'DESCONHECIDO', referencia: args.referencia, ambiente: args.ambiente,
                 ordemId: args.ordemId, [campo]: campo === 'ambiente' ? 'live' : 'divergente' };
         } };
-        const s = criarLojaPagamentoService({ db: pool, contexto, adaptador });
+        const s = criarServico({ db: pool, contexto, adaptador });
         assert.equal((await reconciliar(s, compra, pg)).estado, 'REVISAO');
         const dados = await ler(pg); assert.equal(dados.p.ordem_externa_id, antes.p.ordem_externa_id);
         assert.equal(dados.p.reserva_ativa, 1); assert.notEqual(dados.pedido.estado, 'PAGO');
@@ -353,7 +628,7 @@ test('nucleo transacional em MariaDB descartavel e adaptador exclusivo de testes
     await t.test('colisao UNIQUE entre IDs parciais bloqueia a segunda tentativa para revisao', async () => {
         const adaptador = { async criar(args) { return { estado: 'DESCONHECIDO', referencia: args.referencia,
             ambiente: args.ambiente, ordemId: 'ordem-parcial-colisao' }; }, async consultar() {}, async capturar() {} };
-        const s = criarLojaPagamentoService({ db: pool, contexto, adaptador });
+        const s = criarServico({ db: pool, contexto, adaptador });
         await criar(s, await novaCompra()); const compra = await novaCompra(); const pg = await criar(s, compra);
         const dados = await ler(pg); assert.equal(pg.estado, 'REVISAO'); assert.equal(dados.p.ordem_externa_id, null);
         assert.equal(dados.p.reserva_ativa, 1); assert.equal(dados.p.motivo_revisao, 'IDENTIFICADOR_EXTERNO_DUPLICADO');
@@ -365,7 +640,7 @@ test('nucleo transacional em MariaDB descartavel e adaptador exclusivo de testes
             const compra = await novaCompra(); const chave = randomUUID(); let chamadas = 0;
             const adaptador = { async criar() { chamadas++; throw criarFalhaPagamento({ categoria, envio, segredo: 'nao-persistir' }); },
                 async consultar(args) { return { estado: 'DESCONHECIDO', referencia: args.referencia, ambiente: args.ambiente }; }, async capturar() {} };
-            const s = criarLojaPagamentoService({ db: pool, contexto, adaptador });
+            const s = criarServico({ db: pool, contexto, adaptador });
             await assert.rejects(criar(s, compra, chave), codigo('RESULTADO_DESCONHECIDO'));
             const pg = await criar(s, compra, chave); const dados = await ler(pg);
             assert.equal(chamadas, 1); assert.equal(dados.p.reserva_ativa, 1); assert.equal(pg.estado, 'DESCONHECIDO');
@@ -380,7 +655,7 @@ test('nucleo transacional em MariaDB descartavel e adaptador exclusivo de testes
         const adaptador = { async criar(args) { throw criarFalhaPagamento({ categoria: 'INFRAESTRUTURA', envio: 'ENVIADO',
             resultado: { estado: 'DESCONHECIDO', referencia: args.referencia, ambiente: args.ambiente, ordemId: 'ordem-falha-parcial' } }); },
             async consultar() {}, async capturar() {} };
-        const pg = await criar(criarLojaPagamentoService({ db: pool, contexto, adaptador }), compra, chave);
+        const pg = await criar(criarServico({ db: pool, contexto, adaptador }), compra, chave);
         const dados = await ler(pg); assert.equal(dados.p.ordem_externa_id, 'ordem-falha-parcial');
         assert.equal(dados.operacoes[0].estado, 'DESCONHECIDA'); assert.equal(dados.operacoes[0].codigo_erro, 'INFRAESTRUTURA');
         assert.equal(dados.p.reserva_ativa, 1);
@@ -391,7 +666,7 @@ test('nucleo transacional em MariaDB descartavel e adaptador exclusivo de testes
             const r = await sim.adaptador.consultar(args);
             throw criarFalhaPagamento({ categoria: 'RECUSA_DEFINITIVA', envio: 'ENVIADO', resultado: { ...r, estado: 'RECUSADO' } });
         } };
-        const s = criarLojaPagamentoService({ db: pool, contexto, adaptador });
+        const s = criarServico({ db: pool, contexto, adaptador });
         assert.equal((await capturar(s, compra, pg)).estado, 'RECUSADO');
         const dados = await ler(pg); assert.equal(dados.p.reserva_ativa, null); assert.notEqual(dados.pedido.estado, 'PAGO');
         assert.equal(dados.operacoes[1].codigo_erro, 'RECUSA_DEFINITIVA');
@@ -402,7 +677,7 @@ test('nucleo transacional em MariaDB descartavel e adaptador exclusivo de testes
             return { estado: malformado ? 'CAPTURADO' : 'DESCONHECIDO', referencia: args.referencia, ambiente: args.ambiente,
                 ordemId: args.ordemId, capturaId: `captura-parcial-${pg.publicId}`, capturadoEm: new Date().toISOString() };
         } };
-        const s = criarLojaPagamentoService({ db: pool, contexto, adaptador });
+        const s = criarServico({ db: pool, contexto, adaptador });
         if (malformado) await assert.rejects(capturar(s, compra, pg), codigo('RESULTADO_DESCONHECIDO'));
         else assert.equal((await capturar(s, compra, pg)).estado, 'DESCONHECIDO');
         const dados = await ler(pg); assert.notEqual(dados.pedido.estado, 'PAGO'); assert.equal(dados.pedido.pagamento_confirmado_em, null);
@@ -426,7 +701,7 @@ test('nucleo transacional em MariaDB descartavel e adaptador exclusivo de testes
                 assert.equal(args.ordemId, fato.ordemId); return fato;
             }
         };
-        const novo = () => criarLojaPagamentoService({ db: pool, contexto, adaptador });
+        const novo = () => criarServico({ db: pool, contexto, adaptador });
         const chave = randomUUID(); assert.equal((await capturar(novo(), compra, pg, chave)).estado, 'DESCONHECIDO');
         let dados = await ler(pg); assert.equal(dados.p.captura_externa_id, fato.capturaId);
         assert.equal(dados.pedido.pagamento_confirmado_em, null); assert.equal(dados.p.reserva_ativa, 1);
@@ -438,7 +713,7 @@ test('nucleo transacional em MariaDB descartavel e adaptador exclusivo de testes
     await t.test('timeout imposto pelo nucleo preserva incerteza e classificacao de infraestrutura', async () => {
         const compra = await novaCompra();
         const adaptador = { async criar() { return new Promise(() => {}); }, async consultar() {}, async capturar() {} };
-        const s = criarLojaPagamentoService({ db: pool, contexto, adaptador, timeoutMs: 10, execucaoMs: 1000 });
+        const s = criarServico({ db: pool, contexto, adaptador, timeoutMs: 10, execucaoMs: 1000 });
         await assert.rejects(criar(s, compra), codigo('RESULTADO_DESCONHECIDO'));
         const [[pg]] = await admin.query('SELECT public_id FROM ist_loja_pagamentos WHERE pedido_id=?', [compra.pedidoId]);
         const dados = await ler({ publicId: pg.public_id });
@@ -453,7 +728,7 @@ test('nucleo transacional em MariaDB descartavel e adaptador exclusivo de testes
             envios++; recusa = { ...await sim.adaptador.consultar(args), estado: 'RECUSADO', capturaId: `recusa-${pg.publicId}` };
             throw criarFalhaPagamento({ categoria: 'RECUSA_DEFINITIVA', envio: 'ENVIADO', resultado: recusa });
         } };
-        const novo = adaptador => criarLojaPagamentoService({ db: pool, contexto, adaptador }); const chave = randomUUID();
+        const novo = adaptador => criarServico({ db: pool, contexto, adaptador }); const chave = randomUUID();
         const resultado = await capturar(novo(adaptador), compra, pg, chave);
         assert.equal(resultado.estado, 'RECUSADO'); assert.notEqual(resultado.pedidoEstado, 'PAGO');
         let dados = await ler(pg); assert.equal(dados.p.captura_externa_id, recusa.capturaId);
@@ -475,10 +750,10 @@ test('nucleo transacional em MariaDB descartavel e adaptador exclusivo de testes
             fato = { ...await sim.adaptador.consultar(args), estado: 'RECUSADO', capturaId: `parcial-recusada-${pg.publicId}` };
             return { estado: 'DESCONHECIDO', referencia: args.referencia, ambiente: args.ambiente, ordemId: args.ordemId, capturaId: fato.capturaId };
         } };
-        const s = criarLojaPagamentoService({ db: pool, contexto, adaptador });
+        const s = criarServico({ db: pool, contexto, adaptador });
         assert.equal((await capturar(s, compra, pg)).estado, 'DESCONHECIDO');
         assert.equal((await ler(pg)).p.reserva_ativa, 1);
-        const novo = criarLojaPagamentoService({ db: pool, contexto, adaptador: { ...adaptador, async consultar(args) {
+        const novo = criarServico({ db: pool, contexto, adaptador: { ...adaptador, async consultar(args) {
             assert.equal(args.capturaId, fato.capturaId); return fato;
         } } });
         assert.equal((await reconciliar(novo, compra, pg)).estado, 'RECUSADO');
@@ -494,7 +769,7 @@ test('nucleo transacional em MariaDB descartavel e adaptador exclusivo de testes
                 ordemId: args.ordemId, capturaId: `insuficiente-${pg.publicId}` };
             return { ...await sim.adaptador.consultar(args), estado: 'PENDENTE', capturaId: `pendente-${pg.publicId}` };
         } };
-        const s = criarLojaPagamentoService({ db: pool, contexto, adaptador });
+        const s = criarServico({ db: pool, contexto, adaptador });
         if (caso === 'pendente') assert.equal((await capturar(s, compra, pg)).estado, 'PENDENTE');
         else await assert.rejects(capturar(s, compra, pg), codigo('RESULTADO_DESCONHECIDO'));
         const dados = await ler(pg); assert.equal(dados.p.reserva_ativa, 1); assert.equal(String(dados.p.capturado_centavos), '0');
@@ -504,7 +779,7 @@ test('nucleo transacional em MariaDB descartavel e adaptador exclusivo de testes
     await t.test('colisao de ID de captura recusada provoca revisao sem liberar reserva', async () => {
         const recusar = async () => {
             const compra = await novaCompra(); const { sim, service } = montar(); const pg = await criar(service, compra); sim.aprovado(pg.publicId);
-            const s = criarLojaPagamentoService({ db: pool, contexto, adaptador: { ...sim.adaptador, async capturar(args) {
+            const s = criarServico({ db: pool, contexto, adaptador: { ...sim.adaptador, async capturar(args) {
                 return { ...await sim.adaptador.consultar(args), estado: 'RECUSADO', capturaId: 'recusa-colisao-compartilhada' };
             } } });
             return { compra, pg, resultado: await capturar(s, compra, pg) };
@@ -520,9 +795,9 @@ test('nucleo transacional em MariaDB descartavel e adaptador exclusivo de testes
         const adaptador = { ...sim.adaptador, async capturar(args) {
             fato = { ...await sim.adaptador.consultar(args), estado: 'DESCONHECIDO', capturaId: `identificado-${pg.publicId}` }; return fato;
         } };
-        await capturar(criarLojaPagamentoService({ db: pool, contexto, adaptador }), compra, pg);
+        await capturar(criarServico({ db: pool, contexto, adaptador }), compra, pg);
         const antes = await ler(pg);
-        const s = criarLojaPagamentoService({ db: pool, contexto, adaptador: { ...adaptador, async consultar() {
+        const s = criarServico({ db: pool, contexto, adaptador: { ...adaptador, async consultar() {
             return { ...fato, estado: 'RECUSADO', [campo]: 'divergente' };
         } } });
         assert.equal((await reconciliar(s, compra, pg)).estado, 'REVISAO');
@@ -532,7 +807,7 @@ test('nucleo transacional em MariaDB descartavel e adaptador exclusivo de testes
     });
     await t.test('recusa identificada antes de qualquer captura autorizada exige revisao', async () => {
         const compra = await novaCompra(); const { sim, service } = montar(); const pg = await criar(service, compra);
-        const s = criarLojaPagamentoService({ db: pool, contexto, adaptador: { ...sim.adaptador, async consultar(args) {
+        const s = criarServico({ db: pool, contexto, adaptador: { ...sim.adaptador, async consultar(args) {
             return { ...await sim.adaptador.consultar(args), estado: 'RECUSADO', capturaId: 'recusa-sem-envio' };
         } } });
         assert.equal((await reconciliar(s, compra, pg)).estado, 'REVISAO');
@@ -545,10 +820,10 @@ test('nucleo transacional em MariaDB descartavel e adaptador exclusivo de testes
         const adaptador = { ...sim.adaptador, async capturar(args) {
             fato = { ...await sim.adaptador.consultar(args), estado: 'DESCONHECIDO', capturaId: `contraditoria-${pg.publicId}` }; return fato;
         } };
-        await capturar(criarLojaPagamentoService({ db: pool, contexto, adaptador }), compra, pg);
+        await capturar(criarServico({ db: pool, contexto, adaptador }), compra, pg);
         // Contradicao controlada exclusivamente na fixture descartavel.
         await admin.query('UPDATE ist_loja_pagamentos SET capturado_centavos=19000,capturado_em=atualizado_em WHERE public_id=?', [pg.publicId]);
-        const s = criarLojaPagamentoService({ db: pool, contexto, adaptador: { ...adaptador, async consultar() {
+        const s = criarServico({ db: pool, contexto, adaptador: { ...adaptador, async consultar() {
             return { ...fato, estado: 'RECUSADO' };
         } } });
         assert.equal((await reconciliar(s, compra, pg)).estado, 'REVISAO');
@@ -558,8 +833,8 @@ test('nucleo transacional em MariaDB descartavel e adaptador exclusivo de testes
     });
     await t.test('importacao/servico nao habilitam simulador em producao nem em live', async () => {
         const sim = criarPagamentoSimulado(); process.env.NODE_ENV = 'production';
-        try { assert.throws(() => criarLojaPagamentoService({ db: pool, contexto, adaptador: sim.adaptador }), codigo('CONFIGURACAO_INVALIDA')); }
+        try { assert.throws(() => criarServico({ db: pool, contexto, adaptador: sim.adaptador }), codigo('CONFIGURACAO_INVALIDA')); }
         finally { process.env.NODE_ENV = 'test'; }
-        assert.throws(() => criarLojaPagamentoService({ db: pool, contexto: { ...contexto, ambiente: 'live' }, adaptador: sim.adaptador }), codigo('CONFIGURACAO_INVALIDA'));
+        assert.throws(() => criarServico({ db: pool, contexto: { ...contexto, ambiente: 'live' }, adaptador: sim.adaptador }), codigo('CONFIGURACAO_INVALIDA'));
     });
 });
