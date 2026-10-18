@@ -3,6 +3,10 @@ import { centavosPagamento, criarFalhaPagamento, classificarFalhaPagamento, erro
     instantePagamento, normalizarResultadoPagamento, uuidPagamento } from '../lojaPagamentoContratos.js';
 
 const HOST = 'https://api-m.sandbox.paypal.com';
+// Somente metadados HATEOAS: nao configura nem altera o destino REST.
+const ORIGENS_HATEOAS_SANDBOX = Object.freeze([
+    'https://api-m.sandbox.paypal.com', 'https://api.sandbox.paypal.com'
+]);
 const ordemValida = v => typeof v === 'string' && /^[A-Z0-9]{1,36}$/.test(v);
 const recebedorValido = v => typeof v === 'string' && /^[2-9A-HJ-NP-Z]{13}$/.test(v);
 const objeto = v => v !== null && typeof v === 'object' && Object.getPrototypeOf(v) === Object.prototype;
@@ -71,6 +75,8 @@ const diagnosticoCaptura = d => {
             const u = new URL(l.href);
             const ordem = /^\/v2\/checkout\/orders\/([A-Z0-9]{1,36})$/.exec(u.pathname);
             const autorizacao = /^\/v2\/payments\/authorizations\/([A-Z0-9]{1,36})$/.test(u.pathname);
+            const origemPermitida = ORIGENS_HATEOAS_SANDBOX.includes(u.origin);
+            const representacaoCanonica = origemPermitida && l.href === `${u.origin}${u.pathname}`;
             diagnostico.protocolo = ['https:', 'http:'].includes(u.protocol) ? u.protocol : 'DESCONHECIDO';
             diagnostico.hostname = u.hostname.length <= 253 && /^[a-z0-9.\-\[\]:]+$/.test(u.hostname) ? u.hostname : null;
             diagnostico.porta = /^\d{1,5}$/.test(u.port) ? u.port : null;
@@ -78,10 +84,10 @@ const diagnosticoCaptura = d => {
             diagnostico.possuiCredenciais = Boolean(u.username || u.password);
             diagnostico.possuiQuery = Boolean(u.search);
             diagnostico.possuiFragmento = Boolean(u.hash);
-            diagnostico.origemPermitida = u.origin === HOST;
-            diagnostico.representacaoCanonica = l.href === `${HOST}${u.pathname}`;
+            diagnostico.origemPermitida = origemPermitida;
+            diagnostico.representacaoCanonica = representacaoCanonica;
             const verificar = (condicao, codigo) => { if (condicao) { rejeitar(codigo); valido = false; } };
-            verificar(u.origin !== HOST, 'UP_ORIGEM_NAO_PERMITIDA');
+            verificar(!origemPermitida, 'UP_ORIGEM_NAO_PERMITIDA');
             verificar(Boolean(u.username || u.password), 'UP_CREDENCIAIS_PROIBIDAS');
             verificar(Boolean(u.search), 'UP_QUERY_PROIBIDA');
             verificar(Boolean(u.hash), 'UP_FRAGMENTO_PROIBIDO');
@@ -89,7 +95,7 @@ const diagnosticoCaptura = d => {
                 verificar(true, /^\/v2\/(checkout\/orders|payments\/authorizations)\//.test(u.pathname)
                     ? 'UP_RECURSO_ID_INVALIDO' : 'UP_CAMINHO_NAO_RECONHECIDO');
             }
-            verificar(l.href !== `${HOST}${u.pathname}`, 'UP_URL_NAO_CANONICA');
+            verificar(!representacaoCanonica, 'UP_URL_NAO_CANONICA');
             // up pode identificar a autorizacao pai; seu ID nao e um Order ID.
             // Validar esse relacionamento nao demonstra nem contradiz a ordem.
             if (valido && ordem) ordensRelacionadas.add(ordem[1]);

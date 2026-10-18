@@ -30,9 +30,65 @@ const rodar = async (m, opcoes = {}) => {
 };
 
 // Os codigos sao diagnosticos; nao alteram a precedencia das classificacoes.
+for (const host of ['api-m.sandbox.paypal.com', 'api.sandbox.paypal.com']) {
+    for (const status of ['COMPLETED', 'PENDING']) test(`${host}: ordem e autorizacao legitimas preservam ${status}`, async () => {
+        const d = recurso(status); d.status_details = { reason: 'PENDING_REVIEW' };
+        d.links = [{ rel: 'up', method: 'GET', href: `https://${host}/v2/checkout/orders/${ORDEM}` },
+            { rel: 'up', method: 'GET', href: `https://${host}/v2/payments/authorizations/AUTH123` }];
+        const m = montar({ status: 200, data: d }); const r = await rodar(m);
+        assert.equal(r.resultado.associacaoOrdem, 'CONFIRMADA'); assert.equal(r.resultado.validacao, 'CONSISTENTE');
+        assert.equal(r.resultado.statusFinanceiro, status); assert.equal(r.resultado.motivoPendencia, 'PENDING_REVIEW');
+        assert.deepEqual(r.resultado.motivosAssociacaoInvalida, []); assert.deepEqual(r.resultado.ordensRelacionadas, [ORDEM]);
+        assert.ok(r.resultado.diagnosticosLinksUp.every(l => l.origemPermitida && l.representacaoCanonica && !l.codigos.length));
+        assert.equal(m.chamadas.length, 2); // montar exige destino api-m e apenas OAuth + GET fixo.
+    });
+    for (const [nome, transformar, codigo] of [
+        ['HTTP', href => href.replace('https:', 'http:'), 'UP_ORIGEM_NAO_PERMITIDA'],
+        ['subdominio', href => href.replace(host, `extra.${host}`), 'UP_ORIGEM_NAO_PERMITIDA'],
+        ['sufixo malicioso', href => href.replace(host, `${host}.evil.example`), 'UP_ORIGEM_NAO_PERMITIDA'],
+        ['porta alternativa', href => href.replace(host, `${host}:8443`), 'UP_ORIGEM_NAO_PERMITIDA'],
+        ['porta padrao explicita', href => href.replace(host, `${host}:443`), 'UP_URL_NAO_CANONICA'],
+        ['capitalizacao', href => href.replace(host, host.toUpperCase()), 'UP_URL_NAO_CANONICA'],
+        ['credenciais', href => href.replace('https://', 'https://user:fixture-secret@'), 'UP_CREDENCIAIS_PROIBIDAS'],
+        ['query', href => `${href}?private=fixture-secret`, 'UP_QUERY_PROIBIDA'],
+        ['fragmento', href => `${href}#fixture-secret`, 'UP_FRAGMENTO_PROIBIDO'],
+        ['normalizacao', href => href.replace('/v2/', '/extra/../v2/'), 'UP_URL_NAO_CANONICA'],
+        ['codificacao', href => href.replace(ORDEM, '%39' + ORDEM.slice(1)), 'UP_RECURSO_ID_INVALIDO'],
+        ['segmento adicional', href => `${href}/extra`, 'UP_RECURSO_ID_INVALIDO'],
+        ['caminho desconhecido', href => href.replace('/checkout/orders/', '/unknown/'), 'UP_CAMINHO_NAO_RECONHECIDO']
+    ]) test(`${host}: rejeita ${nome}`, async () => {
+        const d = recurso(); d.links = [{ rel: 'up', method: 'GET', href: transformar(`https://${host}/v2/checkout/orders/${ORDEM}`) }];
+        const r = await rodar(montar({ status: 200, data: d }));
+        assert.equal(r.resultado.associacaoOrdem, 'INVALIDA'); assert.equal(r.resultado.validacao, 'INCONCLUSIVA');
+        assert.ok(r.resultado.motivosAssociacaoInvalida.includes(codigo));
+        assert.ok(r.resultado.diagnosticosLinksUp[0].codigos.includes(codigo));
+        assert.equal(r.linhas.join().includes('fixture-secret'), false);
+    });
+    test(`${host}: autorizacao isolada, ordem divergente e estrutura invalida preservadas`, async () => {
+        const d = recurso(); delete d.supplementary_data;
+        d.links = [{ rel: 'up', method: 'GET', href: `https://${host}/v2/payments/authorizations/AUTH123` }];
+        assert.equal((await rodar(montar({ status: 200, data: d }))).resultado.associacaoOrdem, 'NAO_DEMONSTRADA');
+        d.supplementary_data = { related_ids: { order_id: ORDEM } };
+        d.links.push({ rel: 'up', method: 'GET', href: `https://${host}/v2/checkout/orders/OTHERORDER` });
+        assert.equal((await rodar(montar({ status: 200, data: d }))).resultado.associacaoOrdem, 'DIVERGENTE');
+        d.supplementary_data.related_ids = [];
+        const r = await rodar(montar({ status: 200, data: d }));
+        assert.equal(r.resultado.associacaoOrdem, 'INVALIDA'); assert.ok(r.resultado.motivosAssociacaoInvalida.includes('RELATED_IDS_INVALIDO'));
+    });
+}
+
+test('origens autorizadas podem coexistir sem seguir links', async () => {
+    const d = recurso(); delete d.supplementary_data;
+    d.links = [{ rel: 'up', method: 'GET', href: `https://api.sandbox.paypal.com/v2/checkout/orders/${ORDEM}` },
+        { rel: 'up', method: 'GET', href: 'https://api-m.sandbox.paypal.com/v2/payments/authorizations/AUTH123' }];
+    const m = montar({ status: 200, data: d }); const r = await rodar(m);
+    assert.equal(r.resultado.associacaoOrdem, 'CONFIRMADA'); assert.deepEqual(r.resultado.ordensRelacionadas, [ORDEM]);
+    assert.equal(m.chamadas.length, 2);
+});
+
 for (const [nome, origem, permitida, canonica, porta] of [
     ['Sandbox', 'https://api-m.sandbox.paypal.com', true, true, null],
-    ['alternativa', 'https://api.sandbox.paypal.com', false, false, null],
+    ['alternativa autorizada', 'https://api.sandbox.paypal.com', true, true, null],
     ['Live', 'https://api-m.paypal.com', false, false, null],
     ['externa', 'https://evil.example', false, false, null],
     ['porta padrao explicita', 'https://api-m.sandbox.paypal.com:443', true, false, null],
