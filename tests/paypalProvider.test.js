@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import axios from 'axios';
 import { criarPaypalProvider } from '../src/services/pagamentos/paypalProvider.js';
-import { classificarFalhaPagamento, normalizarResultadoPagamento } from '../src/services/lojaPagamentoContratos.js';
+import { classificarFalhaPagamento, normalizarResultadoPagamento, normalizarReconciliacaoPagamento } from '../src/services/lojaPagamentoContratos.js';
 import { criarLojaPagamentoService } from '../src/services/lojaPagamentoService.js';
 import { criarBancoPagamentoIsolado } from './fixtures/lojaPagamentoBancoIsolado.js';
 
@@ -56,7 +56,7 @@ test('OAuth usa Client Credentials, token em memoria e margem de renovacao', asy
     assert.equal(m.chamadas[1].headers.Authorization, 'Bearer fixture-access-token');
     instante = 3570000; await m.provider.consultar(a);
     assert.equal(m.chamadas.filter(c => c.url.endsWith('/token')).length, 2);
-    assert.deepEqual(Object.keys(m.provider).sort(), ['capturar', 'consultar', 'consultarCaptura', 'criar']);
+    assert.deepEqual(Object.keys(m.provider).sort(), ['capturar', 'consultar', 'consultarCaptura', 'criar', 'reconciliar']);
 });
 test('OAuth concorrente compartilha uma unica requisicao e recupera apos falha', async () => {
     const a = args(); let liberar; const bloqueio = new Promise(r => { liberar = r; }); let n = 0;
@@ -281,6 +281,162 @@ test('token que ja venceu durante a obtencao nao e enviado a Orders API', async 
     let instante = 0;
     const m = montar(() => assert.fail(), { agora: () => instante, oauth: () => { instante = 3600001; return token(); } });
     await assert.rejects(m.provider.criar(args()), falha('INFRAESTRUTURA', 'NAO_ENVIADO')); assert.equal(m.financeiras().length, 0);
+});
+
+const montarReconciliacao = (a, alterar = () => {}) => {
+    const c = { ...captura(), supplementary_data: { related_ids: { order_id: ORDEM } },
+        payer: { email_address: 'private@example.invalid' } };
+    const d = ordem(a, 'COMPLETED', captura());
+    const f = { ordem: d, captura: c, statusOrdem: 200, statusCaptura: 200 };
+    alterar(f);
+    const m = montar(config => {
+        assert.equal(config.method, 'GET'); assert.equal(config.headers['PayPal-Request-Id'], undefined);
+        if (config.url === `${HOST}/v2/checkout/orders/${ORDEM}`) return { status: f.statusOrdem, data: f.ordem };
+        assert.equal(config.url, `${HOST}/v2/payments/captures/${CAPTURA}`);
+        if (f.erroCaptura) throw f.erroCaptura;
+        return { status: f.statusCaptura, data: f.captura };
+    });
+    return { ...m, f };
+};
+
+for (const conhecido of [false, true]) test(`reconciliar confirma captura completa com ID conhecido=${conhecido}`, async () => {
+    const a = args({ ...(conhecido ? { capturaId: CAPTURA } : {}), provedor: 'paypal' });
+    Object.freeze(a); const antes = JSON.stringify(a); const m = montarReconciliacao(a);
+    const r = await m.provider.reconciliar(a);
+    assert.equal(r.resultado.estado, 'CAPTURADO'); assert.equal(r.resultado.capturaId, CAPTURA);
+    assert.equal(r.resultado.valorCentavos, '19000'); assert.equal(r.resultado.contaRecebedora, CONTA);
+    assert.equal(r.observacao.associacaoOrdem, 'CONFIRMADA'); assert.equal(r.observacao.validacao, 'CONSISTENTE');
+    assert.deepEqual(normalizarReconciliacaoPagamento(r), r); assert.equal(JSON.stringify(a), antes);
+    assert.equal(m.chamadas.length, 3); assert.equal(m.financeiras().length, 0);
+    for (const secreto of ['fixture-secret', 'fixture-access-token', 'private@example.invalid', 'https://', 'payer']) assert.equal(JSON.stringify(r).includes(secreto), false);
+});
+
+test('reconciliar preserva PENDING/PENDING_REVIEW sem pagamento ou download', async () => {
+    const a = args(); const m = montarReconciliacao(a, f => {
+        f.captura.status = 'PENDING'; f.captura.status_details = { reason: 'PENDING_REVIEW' };
+        f.ordem.purchase_units[0].payments.captures[0].status = 'PENDING';
+    });
+    const r = await m.provider.reconciliar(a);
+    assert.equal(r.resultado.estado, 'PENDENTE'); assert.equal(r.resultado.capturadoEm, null);
+    assert.equal(r.observacao.motivoPendencia, 'PENDING_REVIEW'); assert.equal(r.pedidoEstado, undefined);
+    assert.equal(r.downloadAutorizado, undefined);
+});
+
+test('reconciliar ordem APPROVED sem captura nao cobra nem confirma pagamento', async () => {
+    const a = args(); const m = montarReconciliacao(a, f => { f.ordem = ordem(a, 'APPROVED'); });
+    const r = await m.provider.reconciliar(a);
+    assert.equal(r.resultado.estado, 'APROVADO'); assert.equal(r.observacao.statusCaptura, null);
+    assert.equal(r.observacao.associacaoOrdem, 'NAO_DEMONSTRADA'); assert.equal(m.chamadas.length, 2);
+});
+
+for (const [nome, alterar] of [
+    ['captura divergente', f => { f.captura.id = 'OTHERCAPTURE'; }],
+    ['ordem divergente', f => { f.ordem.id = 'OTHERORDER'; }],
+    ['referencia divergente', f => { f.ordem.purchase_units[0].reference_id = 'OTHERREF'; }],
+    ['referencia da captura divergente', f => { f.captura.custom_id = 'OTHERREF'; }],
+    ['valor divergente', f => { f.captura.amount.value = '191.00'; }],
+    ['valor da ordem divergente', f => { f.ordem.purchase_units[0].amount.value = '191.00'; }],
+    ['moeda divergente', f => { f.captura.amount.currency_code = 'USD'; }],
+    ['recebedor divergente', f => { f.captura.payee = { merchant_id: 'ABCD23456789A' }; }],
+    ['associacao contraditoria', f => { f.captura.supplementary_data.related_ids.order_id = 'OTHERORDER'; }],
+    ['multiplas capturas', f => { f.ordem.purchase_units[0].payments.captures.push({ ...captura(), id: 'OTHER' }); }],
+    ['montante malformado', f => { f.captura.amount.value = '1e2'; }],
+    ['HATEOAS invalido', f => { f.captura.links = [{ rel: 'up', method: 'GET', href: 'https://evil.example/v2/checkout/orders/OTHER' }]; }],
+    ['captura embutida divergente', f => { f.ordem.purchase_units[0].payments.captures[0].id = 'OTHER'; }],
+    ['tipo de operacao divergente', f => { f.ordem.intent = 'AUTHORIZE'; }],
+    ['estrutura de autorizacoes invalida', f => { f.ordem.purchase_units[0].payments.authorizations = {}; }],
+    ['referencia embutida contraditoria', f => { f.ordem.purchase_units[0].payments.captures[0].custom_id = 'OTHERREF'; }]
+]) test(`reconciliar ${nome} nunca produz resultado confirmavel`, async () => {
+    const a = args({ capturaId: CAPTURA }); const m = montarReconciliacao(a, alterar);
+    const r = await m.provider.reconciliar(a);
+    assert.equal(r.resultado.estado, 'DESCONHECIDO'); assert.equal(r.resultado.capturadoEm, null);
+    assert.equal(r.observacao.evidencia, 'CONTRADITORIA'); assert.equal(r.observacao.validacao, 'DIVERGENTE');
+    assert.deepEqual(normalizarReconciliacaoPagamento(r), r); assert.equal(m.financeiras().length, 0);
+});
+
+for (const [nome, alterar] of [
+    ['recebedor ausente', f => { delete f.ordem.purchase_units[0].payee; }],
+    ['referencia ausente', f => { delete f.ordem.purchase_units[0].reference_id; delete f.ordem.purchase_units[0].custom_id; }],
+    ['valor ausente', f => { delete f.captura.amount; }],
+    ['identidade da ordem ausente', f => { delete f.ordem.id; }],
+    ['final_capture ausente', f => { delete f.captura.final_capture; }],
+    ['associacao nao demonstrada', f => { delete f.ordem.purchase_units[0].payments; delete f.captura.supplementary_data; }]
+]) test(`reconciliar ${nome} permanece inconclusivo`, async () => {
+    const a = args({ capturaId: CAPTURA }); const m = montarReconciliacao(a, alterar);
+    const r = await m.provider.reconciliar(a);
+    assert.equal(r.resultado.estado, 'DESCONHECIDO'); assert.equal(r.observacao.validacao, 'INCONCLUSIVA');
+    if (nome === 'recebedor ausente') assert.equal(r.resultado.contaRecebedora, null);
+    if (nome === 'associacao nao demonstrada') assert.equal(r.observacao.associacaoOrdem, 'NAO_DEMONSTRADA');
+});
+
+for (const status of ['DECLINED', 'FAILED', 'REFUNDED', 'PARTIALLY_REFUNDED', 'FUTURE_SECRET']) test(`reconciliar ${status} conservador`, async () => {
+    const a = args(); const m = montarReconciliacao(a, f => {
+        f.captura.status = status; f.ordem.purchase_units[0].payments.captures[0].status = status;
+    });
+    const r = await m.provider.reconciliar(a);
+    assert.equal(r.resultado.estado, 'DESCONHECIDO'); assert.equal(r.observacao.validacao, 'INCONCLUSIVA');
+    assert.equal(r.observacao.statusCaptura, status === 'FUTURE_SECRET' ? 'DESCONHECIDO' : status);
+    assert.equal(JSON.stringify(r).includes('FUTURE_SECRET'), false);
+});
+
+test('reconciliar usa recebedor observado na captura e evidencia da ordem quando disponivel', async () => {
+    const a = args(); const m = montarReconciliacao(a, f => { delete f.ordem.purchase_units[0].payee; f.captura.payee = { merchant_id: CONTA }; });
+    assert.equal((await m.provider.reconciliar(a)).resultado.estado, 'CAPTURADO');
+});
+
+test('reconciliar sem captura embutida exige associacao direta demonstrada', async () => {
+    const a = args({ capturaId: CAPTURA }); const m = montarReconciliacao(a, f => { delete f.ordem.purchase_units[0].payments; });
+    assert.equal((await m.provider.reconciliar(a)).resultado.estado, 'CAPTURADO');
+});
+
+test('reconciliar permite PENDING passar a COMPLETED entre leituras sem POST', async () => {
+    const a = args(); const m = montarReconciliacao(a, f => { f.ordem.purchase_units[0].payments.captures[0].status = 'PENDING'; });
+    assert.equal((await m.provider.reconciliar(a)).resultado.estado, 'CAPTURADO'); assert.equal(m.financeiras().length, 0);
+});
+
+for (const recurso of ['ordem', 'captura']) test(`reconciliar 404 de ${recurso} nao prova ausencia de cobranca`, async () => {
+    const a = args(); const m = montarReconciliacao(a, f => {
+        f[recurso] = { name: 'RESOURCE_NOT_FOUND', private: 'fixture-secret' };
+        f[recurso === 'ordem' ? 'statusOrdem' : 'statusCaptura'] = 404;
+    });
+    const r = await m.provider.reconciliar(a);
+    assert.equal(r.resultado.estado, 'DESCONHECIDO'); assert.equal(r.observacao.validacao, 'INCONCLUSIVA');
+    assert.equal(JSON.stringify(r).includes('fixture-secret'), false);
+});
+
+test('reconciliar timeout e resposta malformada falham sem exposicao ou retry', async () => {
+    const a = args(); const m = montarReconciliacao(a, f => { f.erroCaptura = Object.assign(new Error('fixture-secret'), { code: 'ETIMEDOUT' }); });
+    await assert.rejects(m.provider.reconciliar(a), falha('INFRAESTRUTURA', 'INDETERMINADO'));
+    assert.equal(m.chamadas.length, 3);
+    const invalido = montarReconciliacao(a, f => { f.captura = ['fixture-secret']; });
+    await assert.rejects(invalido.provider.reconciliar(a), falha('RESPOSTA_INVALIDA', 'ENVIADO'));
+});
+
+test('reconciliar rejeita contexto invalido antes de HTTP e nao exige nova chave', async () => {
+    const m = montar(() => assert.fail('sem HTTP'));
+    for (const extra of [{ provedor: 'outro' }, { ambiente: 'live' }, { ordemId: '../orders' }, { capturaId: '../capture' }, { moeda: 'USD' }]) {
+        await assert.rejects(m.provider.reconciliar(args(extra)), falha('VALIDACAO_LOCAL', 'NAO_ENVIADO'));
+    }
+    const a = args({ ordemId: null, requestId: undefined });
+    const r = await m.provider.reconciliar(a); assert.equal(r.observacao.evidencia, 'AUSENTE'); assert.equal(m.chamadas.length, 0);
+});
+
+test('reconciliar nao registra segredos e sanitiza motivos desconhecidos e autenticacao', async t => {
+    const logs = []; for (const k of ['log', 'error', 'warn', 'info', 'debug']) t.mock.method(console, k, (...v) => logs.push(v));
+    const a = args({ requestId: undefined });
+    const m = montarReconciliacao(a, f => {
+        f.captura.status_details = { reason: 'fixture-secret private@example.invalid' };
+        f.captura.links = [{ rel: 'up', method: 'GET', href: `https://api.sandbox.paypal.com/v2/checkout/orders/${ORDEM}` }];
+    });
+    const r = await m.provider.reconciliar(a);
+    assert.equal(r.resultado.estado, 'CAPTURADO'); assert.equal(r.observacao.motivoPendencia, null);
+    assert.ok(Buffer.byteLength(JSON.stringify(r.observacao), 'utf8') <= 1024);
+    for (const secreto of ['fixture-secret', 'fixture-access-token', 'private@example.invalid', 'Authorization', 'https://']) {
+        assert.equal(JSON.stringify(r).includes(secreto), false);
+    }
+    const outro = montarReconciliacao(a, f => { f.statusCaptura = 401; f.captura = { name: 'AUTHENTICATION_FAILURE', description: 'fixture-secret' }; });
+    await assert.rejects(outro.provider.reconciliar(a), falha('AUTENTICACAO', 'ENVIADO'));
+    assert.deepEqual(logs, []);
 });
 
 test('adaptador HTTP simulado com nucleo real e MariaDB descartavel', {

@@ -1,6 +1,6 @@
 import axios from 'axios';
 import { centavosPagamento, criarFalhaPagamento, classificarFalhaPagamento, erroPagamento, idExterno,
-    instantePagamento, normalizarResultadoPagamento, uuidPagamento } from '../lojaPagamentoContratos.js';
+    instantePagamento, normalizarResultadoPagamento, normalizarReconciliacaoPagamento, uuidPagamento } from '../lojaPagamentoContratos.js';
 
 const HOST = 'https://api-m.sandbox.paypal.com';
 // Somente metadados HATEOAS: nao configura nem altera o destino REST.
@@ -271,7 +271,123 @@ export const criarPaypalProvider = ({ env = process.env, http = axios.create(), 
         falhar(categoria, 'ENVIADO', normalizarResultadoPagamento(evidencia));
     };
     const consultarValidado = a => a.ordemId ? trocar(a, 'GET', `/v2/checkout/orders/${a.ordemId}`) : Promise.resolve(normalizarResultadoPagamento(parcial(a)));
+    // Leitura de recursos fixos. Nenhuma URL do provedor/comprador e executada.
+    const lerRecursoReconciliacao = async (a, caminho) => {
+        if (a.signal?.aborted) falhar('INFRAESTRUTURA', 'NAO_ENVIADO');
+        const acesso = await obterToken();
+        if (a.signal?.aborted) falhar('INFRAESTRUTURA', 'NAO_ENVIADO');
+        let resposta;
+        try {
+            resposta = await requisitar({ method: 'GET', url: caminho, signal: a.signal,
+                headers: { Authorization: `Bearer ${acesso}`, Accept: 'application/json' } });
+        } catch (e) {
+            if (e?.response) resposta = e.response;
+            else falhar(e?.code === 'ERR_BAD_RESPONSE' || e instanceof SyntaxError ? 'RESPOSTA_INVALIDA' : 'INFRAESTRUTURA', 'INDETERMINADO');
+        }
+        const d = resposta?.data;
+        if (resposta?.status === 200) {
+            if (!objeto(d)) falhar('RESPOSTA_INVALIDA', 'ENVIADO');
+            return d;
+        }
+        if (resposta?.status === 404 && d?.name === 'RESOURCE_NOT_FOUND') return null;
+        if (d?.name === 'AUTHENTICATION_FAILURE' || ['invalid_client', 'invalid_token'].includes(d?.error)) {
+            if (token === acesso) { token = null; validoAte = 0; }
+            falhar('AUTENTICACAO', 'ENVIADO');
+        }
+        falhar(resposta?.status === 429 || resposta?.status >= 500 ? 'INFRAESTRUTURA' : 'OPERACAO', 'ENVIADO');
+    };
+    const reconciliar = async args => {
+        const a = validar(args, 'consultar');
+        if (args.provedor != null && args.provedor !== 'paypal') falhar('VALIDACAO_LOCAL', 'NAO_ENVIADO');
+        let r = parcial(a);
+        const obs = { evidencia: 'AUSENTE', associacaoOrdem: 'NAO_DEMONSTRADA', validacao: 'INCONCLUSIVA',
+            statusOrdem: null, statusCaptura: null, motivoPendencia: null };
+        const concluir = () => normalizarReconciliacaoPagamento({ resultado: r, observacao: obs });
+        const contradicao = associacao => {
+            r.estado = 'DESCONHECIDO'; r.capturadoEm = null;
+            obs.evidencia = 'CONTRADITORIA'; obs.validacao = 'DIVERGENTE';
+            if (associacao) obs.associacaoOrdem = associacao;
+            return concluir();
+        };
+        if (!a.ordemId) return concluir();
+        const d = await lerRecursoReconciliacao(a, `/v2/checkout/orders/${a.ordemId}`);
+        if (!d) return concluir();
+        obs.evidencia = 'PRESENTE';
+        obs.statusOrdem = ['CREATED', 'SAVED', 'PAYER_ACTION_REQUIRED', 'APPROVED', 'COMPLETED', 'VOIDED'].includes(d.status) ? d.status : 'DESCONHECIDO';
+        try { r = normalizar(d, a); }
+        catch (e) { r = classificarFalhaPagamento(e).resultado ?? parcial(a); }
+        // Uma ordem sozinha nunca confirma uma captura neste caminho.
+        r = { ...r, estado: 'DESCONHECIDO', capturadoEm: null };
+        if (!ordemValida(d.id)) return concluir();
+        if (d.id !== a.ordemId) return contradicao('DIVERGENTE');
+        if (!Array.isArray(d.purchase_units) || d.purchase_units.length !== 1 || !objeto(d.purchase_units[0])) return contradicao('INVALIDA');
+        const u = d.purchase_units[0];
+        if ((d.intent != null && d.intent !== 'CAPTURE') || (u.payments != null && !objeto(u.payments))) return contradicao('INVALIDA');
+        const cs = u.payments?.captures ?? [];
+        if (!Array.isArray(cs) || cs.length > 1 || (cs.length && !objeto(cs[0]))
+            || (u.payments?.authorizations != null && (!Array.isArray(u.payments.authorizations)
+                || u.payments.authorizations.length))) return contradicao('INVALIDA');
+        const embutida = cs[0];
+        if (embutida && !ordemValida(embutida.id)) return contradicao('INVALIDA');
+        if (embutida?.custom_id != null && embutida.custom_id !== a.referencia) return contradicao('DIVERGENTE');
+        if (a.capturaId && embutida && a.capturaId !== embutida.id) return contradicao('DIVERGENTE');
+        const ref = u.reference_id ?? u.custom_id;
+        if ((ref != null && ref !== a.referencia) || (u.reference_id != null && u.custom_id != null && u.reference_id !== u.custom_id)) return contradicao('DIVERGENTE');
+        const capturaId = a.capturaId ?? embutida?.id;
+        if (!capturaId) {
+            const semCaptura = normalizar(d, a);
+            const confere = semCaptura.valorCentavos === a.valorCentavos && semCaptura.moeda === a.moeda
+                && semCaptura.contaRecebedora === a.contaRecebedora;
+            if ((semCaptura.valorCentavos !== null && semCaptura.valorCentavos !== a.valorCentavos)
+                || (semCaptura.moeda !== null && semCaptura.moeda !== a.moeda)
+                || (semCaptura.contaRecebedora !== null && semCaptura.contaRecebedora !== a.contaRecebedora)) return contradicao();
+            if (confere && ref != null) r = semCaptura;
+            return concluir(); // Ordem identificada nao demonstra associacao com captura inexistente.
+        }
+        const c = await lerRecursoReconciliacao(a, `/v2/payments/captures/${capturaId}`);
+        if (!c) return concluir();
+        const diag = diagnosticoCaptura(c);
+        obs.statusCaptura = diag.statusFinanceiro;
+        obs.motivoPendencia = diag.motivoPendencia;
+        if (diag.capturaId !== capturaId) return contradicao(diag.capturaId ? 'DIVERGENTE' : 'INVALIDA');
+        if (diag.associacaoInvalida) return contradicao('INVALIDA');
+        if (diag.ordensRelacionadas.some(id => id !== a.ordemId)) return contradicao('DIVERGENTE');
+        obs.associacaoOrdem = embutida || diag.ordensRelacionadas.includes(a.ordemId) ? 'CONFIRMADA' : 'NAO_DEMONSTRADA';
+        if (c.custom_id != null && c.custom_id !== a.referencia) return contradicao('DIVERGENTE');
+        if (embutida?.status != null && embutida.status !== c.status
+            && !(embutida.status === 'PENDING' && c.status === 'COMPLETED')) return contradicao();
+        if (embutida?.final_capture != null && c.final_capture != null && embutida.final_capture !== c.final_capture) return contradicao();
+        if (diag.respostaInvalida) return contradicao('INVALIDA');
+        const montante = m => m == null ? { valor: null, moeda: null } : (() => {
+            if (!objeto(m)) throw new Error();
+            if (m.currency_code != null && (typeof m.currency_code !== 'string' || !/^[A-Z]{3}$/.test(m.currency_code))) throw new Error();
+            return { valor: m.value == null ? null : lerValor(m.value), moeda: m.currency_code ?? null };
+        })();
+        let ordemValor, embutidaValor, recebedor;
+        try {
+            ordemValor = montante(u.amount); embutidaValor = montante(embutida?.amount);
+            for (const p of [u.payee, c.payee]) if (p != null && (!objeto(p) || (p.merchant_id != null && !recebedorValido(p.merchant_id)))) throw new Error();
+            recebedor = c.payee?.merchant_id ?? u.payee?.merchant_id ?? null;
+        } catch { return contradicao('INVALIDA'); }
+        if ([ordemValor.valor, embutidaValor.valor, diag.valorCentavos].some(v => v !== null && v !== a.valorCentavos)
+            || [ordemValor.moeda, embutidaValor.moeda, diag.moeda].some(v => v !== null && v !== a.moeda)
+            || [u.payee?.merchant_id, c.payee?.merchant_id].some(v => v != null && v !== a.contaRecebedora)) return contradicao();
+        r = { ...r, ordemId: d.id, capturaId: diag.capturaId, valorCentavos: diag.valorCentavos,
+            moeda: diag.moeda, contaRecebedora: recebedor };
+        const completa = obs.associacaoOrdem === 'CONFIRMADA' && ref != null && recebedor != null
+            && ordemValor.valor !== null && ordemValor.moeda !== null && diag.valorCentavos !== null && diag.moeda !== null;
+        if (!completa) return concluir();
+        // Preservar os requisitos financeiros anteriores usando somente fatos observados.
+        const combinado = normalizar({ ...d, purchase_units: [{ ...u,
+            payee: c.payee?.merchant_id ? c.payee : u.payee, payments: { captures: [c] } }] }, a);
+        // DECLINED/FAILED/refundos continuam inconclusivos: nao provar ausencia de efeitos por GET isolado.
+        if (['CAPTURADO', 'PENDENTE'].includes(combinado.estado)) {
+            r = combinado; obs.validacao = 'CONSISTENTE';
+        }
+        return concluir();
+    };
     return Object.freeze({
+        reconciliar,
         // Leitura auxiliar: sem normalizar para CAPTURADO/PAGO, sem consultar banco
         // e sem criar operacao financeira. OAuth compartilha cache e single-flight.
         async consultarCaptura({ capturaId, ambiente, signal } = {}) {
