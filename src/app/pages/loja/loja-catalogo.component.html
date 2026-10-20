@@ -1,6 +1,6 @@
 <main class="loja" aria-labelledby="catalogo-titulo">
     <header class="cabecalho">
-        <div><p class="sobretitulo">Instituto Sebastião Tapajós</p><h1 id="catalogo-titulo">Loja Virtual</h1><p>Partituras e livros digitais para conhecer e preservar nossa música.</p></div>
+        <div><p class="sobretitulo">Instituto Sebastião Tapajós</p><h1 id="catalogo-titulo">Loja Virtual</h1><p>Produtos do Instituto Sebastião Tapajós.</p></div>
         <a pButton [routerLink]="['/loja/carrinho']" class="p-button-outlined" data-testid="ir-carrinho"><i class="pi pi-shopping-bag" aria-hidden="true"></i><span>Carrinho ({{ carrinho.quantidadeTitulos() }})</span></a>
     </header>
     <section class="filtros" aria-label="Categorias do catálogo">
@@ -9,21 +9,21 @@
         @if (erroCategorias()) { <p-message severity="warn">{{ erroCategorias() }}</p-message><p-button label="Tentar carregar categorias" [text]="true" (onClick)="recarregarCategorias()" /> }
     </section>
     @if (aviso()) { <p-message severity="warn" aria-live="polite">{{ aviso() }}</p-message> }
-    <section [attr.aria-busy]="carregando()" aria-label="Livros digitais">
+    <section [attr.aria-busy]="carregando()" aria-label="Produtos">
         @if (carregando()) {
-            <p role="status">Carregando livros…</p>
+            <p role="status">Carregando produtos…</p>
             <div class="livros">@for (item of [1, 2]; track item) { <div class="livro" aria-hidden="true"><p-skeleton height="18rem" /><p-skeleton width="80%" height="2rem" /></div> }</div>
         } @else if (erro()) {
             <p-message severity="error">{{ erro() }}</p-message><p-button label="Tentar novamente" (onClick)="recarregar()" />
         } @else if (produtos().length === 0) {
-            <div class="vazio" role="status"><h2>Nenhum livro encontrado</h2><p>{{ categoria() ? 'Esta categoria ainda não tem livros disponíveis.' : 'Novos títulos serão apresentados aqui quando estiverem disponíveis.' }}</p></div>
+            <div class="vazio" role="status"><h2>Nenhum produto encontrado</h2><p>{{ categoria() ? 'Esta categoria ainda não tem produtos disponíveis.' : 'Novos produtos serão apresentados aqui quando estiverem disponíveis.' }}</p></div>
         } @else {
             <div class="livros">@for (produto of produtos(); track produto.id) {
                 <article class="livro">
-                    <div class="capa">@if (produto.imagemUrl) { <img [src]="produto.imagemUrl" [alt]="'Capa de ' + (produto.titulo ?? 'livro digital')" loading="lazy" /> } @else { <span>Livro digital</span> }</div>
-                    <div class="livro-conteudo"><p class="sobretitulo">{{ produto.categoria.nome }}</p><h2><a [routerLink]="['/loja/produto', produto.id]">{{ produto.titulo ?? 'Livro digital' }}</a></h2>
+                    <div class="capa">@if (produto.imagemUrl) { <img [src]="produto.imagemUrl" [alt]="'Capa de ' + (produto.titulo ?? 'produto')" loading="lazy" /> } @else { <span>Produto</span> }</div>
+                    <div class="livro-conteudo"><p class="sobretitulo">{{ produto.categoria.nome }}</p><h2><a [routerLink]="['/loja/produto', produto.id]">{{ produto.titulo ?? 'Produto' }}</a></h2>
                         @if (produto.idioma) { <p>{{ idioma(produto.idioma) }}</p> }
-                        <p class="preco">{{ preco(produto.precoCentavos) }}</p><p class="discreto">Uma unidade por título digital.</p>
+                        <p class="discreto">{{ tipoProduto(produto.tipo) }}</p><p class="preco">{{ preco(produto.precoCentavos) }}</p><p class="discreto">Quantidade máxima: 1.</p>
                         <p-button [label]="carrinho.contem(produto.id) ? 'Adicionado ao carrinho' : 'Adicionar ao carrinho'" [icon]="carrinho.contem(produto.id) ? 'pi pi-check' : 'pi pi-plus'" [disabled]="carrinho.contem(produto.id) || !produto.disponivel" (onClick)="adicionar(produto.id)" [attr.data-produto]="produto.id" />
                     </div>
                 </article>

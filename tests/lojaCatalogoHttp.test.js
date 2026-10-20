@@ -7,7 +7,9 @@ import { criarLojaCatalogoService } from '../src/services/lojaCatalogoService.js
 const iniciar = async (t, { globalParser = false, falha = false } = {}) => {
     const categorias = [{ id: 1, nome: 'Música', slug: 'musica', categoria_pai_id: null, ativo: 1, ordem: 1 }];
     const produtos = [1, 2].map((id) => ({ id, sku: `SKU${id}`, categoria_id: 1, ativo: 1, title: 'Livro', description: 'Texto',
-        language: 'pt-br', img: 'assets/images/livros/capa.png', price: '95.00', currency: 'BRL', onsale: 1, format: 'E-Book', inventory: 'Em estoque', arquivo_presente: 1 }));
+        livro_id: id, titulo: 'Livro', descricao: 'Texto', imagem_url: 'assets/images/livros/capa.png',
+        tipo: 'DIGITAL', em_venda: 1, disponivel: 1, preco_centavos: '9500', moeda: 'BRL', formato_editorial: 'E-Book',
+        language: 'pt-br', img: 'assets/images/livros/capa.png', price: '95.00', currency: 'BRL', onsale: 1, format: 'E-Book', inventory: 'Em estoque', versao_publicada: 1 }));
     const service = criarLojaCatalogoService({ db: { async getConnection() {
         if (falha) throw Error('SELECT segredo /privado/livro.pdf');
         return { async query(sql) { return [sql.includes('FROM ist_loja_categorias') ? categorias : sql.includes('FROM ist_loja_produtos') ? produtos : []]; }, async commit() {}, async rollback() {}, release() {} };

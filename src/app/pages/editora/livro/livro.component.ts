@@ -1,15 +1,11 @@
-import { Component, ElementRef, OnInit, ViewChild } from '@angular/core';
+import { Component, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { CardModule } from 'primeng/card';
-import { ActivatedRoute, Router } from '@angular/router';
-import { BookService } from '../../../services/book.service'; 
-import { HttpClient } from '@angular/common/http';
+import { ActivatedRoute, RouterLink } from '@angular/router';
+import { BookService, Book, precoEditorial } from '../../../services/book.service';
 import { ButtonModule } from 'primeng/button';
-import { environment } from '../../../../environments/environment'; 
 import { JsonDescriptionPipe } from '../../../pipes/json-description.pipe';
 import { FooterWidget } from 'src/app/shared/footer';
-
-declare var paypal: any; 
 
 @Component({
   standalone: true,
@@ -18,6 +14,7 @@ declare var paypal: any;
     CommonModule,
     CardModule,
     ButtonModule,
+    RouterLink,
     JsonDescriptionPipe,
     FooterWidget
   ],
@@ -25,17 +22,13 @@ declare var paypal: any;
   styleUrls: ['./livro.component.css']
 })
 export class LivroComponent implements OnInit {
-  @ViewChild('paypalRef', { static: true }) private paypalRef!: ElementRef;
-  private readonly paypalTemporariamenteDesabilitado = true;
-  
-  livro: any;
+  livroEditorial: Book | null = null;
+  readonly preco = precoEditorial;
   livroId: string | null = null;
 
   constructor(
     private route: ActivatedRoute,
-    private bookService: BookService,
-    private http: HttpClient,
-    private router: Router
+    private bookService: BookService
   ) {}
 
   ngOnInit() {
@@ -44,154 +37,12 @@ export class LivroComponent implements OnInit {
     if (this.livroId) {
       this.bookService.getById(this.livroId).subscribe({
         next: (data) => {
-          this.livro = data;
+          this.livroEditorial = data;
         },
         error: (err) => {
           console.error('Erro ao buscar livro:', err);
         }
       });
     }
-  }
-
-  renderPaypalButton() {
-    // PAYPAL TEMPORARIAMENTE DESABILITADO. Reativar somente após revisão da integração.
-    if (this.paypalTemporariamenteDesabilitado) return;
-    if (!this.livro) return;
-    console.log('[PayPal] Iniciando renderização do botão...');
-
-    paypal.Buttons({
-      // --- CRIAÇÃO DO PEDIDO ---
-      createOrder: async (data: any, actions: any) => {
-        
-        console.log('[PayPal] Criando ordem...');
-
-        // Neste ponto chame a função generateAccessToken em paypalController.js para obter o access_token do paypal e armazene em uma variável local
-        let accessToken = '';
-        
-        // Tratamento seguro da descrição para não quebrar o fluxo se o Pipe falhar
-        let descr = '';
-        try {
-            // Tenta usar o pipe existente para formatar
-            descr = new JsonDescriptionPipe().transform(this.livro.description);
-            // Se o resultado for objeto ou HTML complexo, o backend irá truncar, 
-            // mas garantimos que seja string aqui.
-            if (typeof descr !== 'string') {
-                descr = String(descr); 
-            }
-        } catch (e) {
-            console.warn('[PayPal] Erro ao formatar descrição, usando título.', e);
-            descr = this.livro.title;
-        }
-
-        try {
-            const response = await fetch(`${environment.apiUrl}/paypal/create-order`, {
-                method: 'post',
-                headers: { 'content-type': 'application/json' },
-                body: JSON.stringify({
-                    livroId: String(this.livro.id), // Força string para segurança
-                    sku: this.livro.sku,        
-                    titulo: this.livro.title,   
-                    preco: this.livro.price,
-                    imagem: this.livro.img,
-                    filename: this.livro.file,
-                    descricao: descr
-                })
-            });
-
-            const order = await response.json();
-
-            if (!response.ok) {
-                console.error('[PayPal] Erro retornado pelo backend na criação:', order);
-                throw new Error(order.error || 'Erro ao criar pedido no servidor');
-            }
-
-            console.log('[PayPal] Ordem criada com ID:', order.id);
-            return order.id;
-
-        } catch (err) {
-            console.error('[PayPal] Falha crítica no createOrder:', err);
-            // Redireciona para tela de erro
-            this.router.navigate(['/editora/checkout'], { queryParams: { code: 'CREATE_ERROR' } });
-            // Retorna vazio para cancelar o fluxo do botão
-            return null; 
-        }
-      },
-
-      // --- APROVAÇÃO E CAPTURA ---
-      onApprove: async (data: any, actions: any) => {
-        console.log('[PayPal] Ordem aprovada pelo usuário. ID:', data.orderID);
-        
-        try {
-            const response = await fetch(`${environment.apiUrl}/paypal/capture-order`, {
-                method: 'post',
-                headers: { 'content-type': 'application/json' },
-                body: JSON.stringify({ orderID: data.orderID })
-            });
-
-            const paypalreturn = await response.json();
-
-            if (!response.ok) {
-                // Se o backend retornar erro (ex: cartão recusado na captura)
-                console.error('[PayPal] Erro na captura:', paypalreturn);
-
-                const issue = paypalreturn?.details?.[0]?.issue;
-                const code = issue || 'CAPTURE_ERROR';
-                this.router.navigate(['/editora/checkout'], { queryParams: { code: code } });
-                return;
-
-                /*
-                if (issue === 'INSTRUMENT_DECLINED') {
-                    console.warn('Cartão recusado. Tentando novamente.');
-                    // PayPal recomenda retry
-                    return actions.restart();
-                } else {
-                    const code = issue || 'CAPTURE_ERROR';
-                    this.router.navigate(['/editora/checkout'], { queryParams: { code: code } });
-                    return;
-                };
-                */
-            }
-
-            console.log('[PayPal] Pagamento capturado com sucesso:', paypalreturn);
-
-            // Preparando categoria para exibição no sucesso
-            let catDisplay = 'Livro Digital';
-            if (this.livro.description && typeof this.livro.description === 'object') {
-                 catDisplay = (this.livro.description.Conteúdo || '') + ' - ' + (this.livro.description.Formato || '');
-            } else if (this.livro.category) {
-                 catDisplay = this.livro.category;
-            }
-
-            this.router.navigate(['/editora/checkout'], { 
-                queryParams: { 
-                    code: 'SUCCESS', 
-                    // O ID da ordem vem na raiz do objeto retornado pelo controller
-                    orderId: paypalreturn.id, 
-                    bookTitle: this.livro.title,
-                    bookCategory: catDisplay,
-                    bookImg: this.livro.img,
-                    bookSku: this.livro.sku,
-                    bookFile: this.livro.file
-              } 
-            });
-
-        } catch (err: any) {
-            console.error("Erro no fluxo de aprovação/captura:", err);
-            
-            // Usa o código de erro vindo do throw acima ou fallback
-            const code = err.type || 'CAPTURE_ERROR';
-            this.router.navigate(['/editora/checkout'], { queryParams: { code: code } });
-        }
-      },
-
-      // --- ERROS GENÉRICOS ---
-      onError: (err: any) => {
-        console.error('[PayPal] Erro genérico do componente Buttons:', err);
-        // this.router.navigate(['/editora/checkout'], { queryParams: { code: 'CREATE_ERROR' } });
-      }
-
-    }).render(this.paypalRef.nativeElement);
-    
-    console.log('[PayPal] Botão renderizado no DOM.');
   }
 }

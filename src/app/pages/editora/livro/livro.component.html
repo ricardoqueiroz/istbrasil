@@ -14,15 +14,16 @@
             </ng-template>
             <div class="flex flex-col md:flex-row gap-8">
                 <div class="w-full md:w-1/2">
-                    <img *ngIf="livro" [src]="livro.img" alt="Capa" class="w-full h-auto rounded shadow-lg">
+                    <img *ngIf="livroEditorial" [src]="livroEditorial.img" alt="Capa" class="w-full h-auto rounded shadow-lg">
                 </div>
                 <div class="w-full md:w-1/2 flex flex-col gap-4">
-                    <h2 class="text-2xl font-bold mb-1" style="line-height: 1.1">{{ livro?.title }}</h2>
-                    <h3 class="text-lg text-gray-700" style="margin-top: 0px">Formato: {{ livro?.format }}</h3>
-                    <p class="text-xl text-primary font-semibold">R$ {{ livro?.price }}</p>
-                    <div class="text-gray-600" [innerHTML]="livro?.description | jsonDescription"></div>
-                    <!-- PAYPAL TEMPORARIAMENTE DESABILITADO. -->
-                    <p class="mt-6 text-sm text-surface-600 dark:text-surface-300">Compra temporariamente indisponível.</p>
+                    <h2 class="text-2xl font-bold mb-1" style="line-height: 1.1">{{ livroEditorial?.title }}</h2>
+                    <h3 class="text-lg text-gray-700" style="margin-top: 0px">Formato: {{ livroEditorial?.format }}</h3>
+                    <p *ngIf="livroEditorial && preco(livroEditorial)" class="text-xl text-primary font-semibold">{{ livroEditorial && preco(livroEditorial) }}</p>
+                    <div class="text-gray-600" [innerHTML]="livroEditorial?.description | jsonDescription"></div>
+                    <a *ngIf="livroEditorial?.comercial?.podeComprar === true" pButton
+                        [routerLink]="['/loja/produto', livroEditorial?.comercial?.produtoId]">Comprar</a>
+                    <p *ngIf="livroEditorial && livroEditorial.comercial?.podeComprar !== true" class="mt-6 text-sm text-surface-600 dark:text-surface-300">Indisponível para compra.</p>
                 </div>
             </div>
         </p-card>

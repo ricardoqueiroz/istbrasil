@@ -7,7 +7,7 @@ import { SelectButtonModule } from 'primeng/selectbutton';
 import { FormsModule } from '@angular/forms';
 import { RouterModule } from '@angular/router';
 import { HttpClientModule } from '@angular/common/http'; // Importante para o Service funcionar no Standalone
-import { BookService, Book } from '../../services/book.service'; // Ajuste o caminho conforme necessário
+import { BookService, Book, precoEditorial } from '../../services/book.service'; // Ajuste o caminho conforme necessário
 import { JsonDescriptionPipe } from '../../pipes/json-description.pipe';
 import { FooterWidget } from 'src/app/shared/footer';
 
@@ -34,7 +34,7 @@ export class EditoraComponent implements OnInit {
 
   layout: 'list' | 'grid' = 'grid';
 
-  options: any[] = [
+  options: { label: string; value: string }[] = [
     { label: 'List', value: 'list' },
     { label: 'Grid', value: 'grid' }
   ];
@@ -51,13 +51,7 @@ export class EditoraComponent implements OnInit {
   loadBooks() {
     this.bookService.getBooks().subscribe({
       next: (data) => {
-        this.books = data.map(book => {
-          return {
-            ...book,
-            inventoryStatus: book.inventory
-          };
-        });
-        console.log('Books loaded from DB:', this.books);
+        this.books = data;
       },
       error: (err) => {
         console.error('Error loading books:', err);
@@ -91,18 +85,12 @@ export class EditoraComponent implements OnInit {
     return html;
   }
 
-  getSeverity(book: Book): 'success' | 'warn' | 'danger' | 'info' | 'secondary' | 'contrast' | undefined {
-    // Verifica inventory ou inventoryStatus
-    const status = book.inventory || book.inventoryStatus;
-    switch (status) {
-        case 'Em estoque':
-            return 'success';
-        case 'Poucas unidades':
-            return 'warn';
-        case 'Esgotado':
-            return 'danger';
-        default:
-            return 'info';
-    }
+  readonly preco = precoEditorial;
+
+  getSeverity(book: Book): 'success' | 'secondary' {
+    return book.comercial?.podeComprar === true ? 'success' : 'secondary';
+  }
+  situacao(book: Book): string {
+    return book.comercial?.podeComprar === true ? 'Disponível' : 'Indisponível para compra';
   }
 }

@@ -19,7 +19,7 @@ describe('Integracao de navegacao da Loja', () => {
     const url = `${environment.apiUrl}/loja`;
     const livro: LojaProduto = { id: 1, sku: 'SKU1', titulo: 'Livro de teste', descricao: null,
         categoria: { id: 2, nome: 'Música', slug: 'musica', categoriaPaiId: 1, ordem: 1 }, idioma: 'pt-br',
-        imagemUrl: null, precoCentavos: 9500, moeda: 'BRL', disponivel: true, quantidadeMaxima: 1 };
+        imagemUrl: null, precoCentavos: 9500, moeda: 'BRL', disponivel: true, tipo: 'DIGITAL', livroId: 1, formatoEditorial: 'E-Book', quantidadeMaxima: 1 };
 
     beforeEach(() => {
         TestBed.configureTestingModule({ providers: [provideZoneChangeDetection(), provideRouter(appRoutes),
@@ -79,7 +79,8 @@ describe('Integracao de navegacao da Loja', () => {
     it('preserva as duas declaracoes editora e seus filhos', () => {
         const editoras = appRoutes.filter((route) => route.path === 'editora');
         expect(editoras.length).toBe(2); expect(editoras.every((route) => route.component === AppLayout)).toBeTrue();
-        expect(editoras.map((route) => route.children?.map((child) => child.path))).toEqual([[''], ['', 'livro/:id', 'checkout']]);
+        expect(editoras.map((route) => route.children?.map((child) => child.path))).toEqual([[''], ['', 'livro/:id']]);
+        expect(editoras.some(route => route.children?.some(child => child.path === 'checkout'))).toBeFalse();
         expect(appRoutes[appRoutes.length - 1]).toEqual({ path: '**', redirectTo: '/notfound' });
     });
 

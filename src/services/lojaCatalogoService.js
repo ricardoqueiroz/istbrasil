@@ -1,6 +1,7 @@
 import { pool } from '../config/db.js';
 import sanitizeHtml from 'sanitize-html';
 import { CONTRATO_PEDIDO, criarErroPedido } from './lojaPedidoContratos.js';
+import { selecionarVersoesNaConexao } from './lojaArquivoService.js';
 
 export class ErroLoja extends Error {
     constructor(status, codigo, mensagem) {
@@ -30,11 +31,11 @@ export const decimalParaCentavos = (valor) => {
 };
 
 const texto = (valor) => valor == null ? null : sanitizeHtml(String(valor), { allowedTags: [], allowedAttributes: {} });
-const imagemPublica = (valor) => typeof valor === 'string'
+export const imagemPublica = (valor) => typeof valor === 'string'
     && /^\/?assets\/images\/(?:[a-zA-Z0-9_-]+\/)*[a-zA-Z0-9_-]+\.(?:png|jpe?g|webp|avif|gif)$/i.test(valor) ? valor : null;
 
-// Mesmas regras para o snapshot consistente publico e a leitura interna bloqueante.
-const criarContextoCategorias = (categorias) => {
+// Hierarquia compartilhada entre leitura publica e preparacao transacional.
+export const criarContextoCategorias = (categorias) => {
     const mapa = new Map(categorias.map((c) => [c.id, c]));
     const caminho = (id) => {
         const vistos = new Set();
@@ -50,11 +51,27 @@ const criarContextoCategorias = (categorias) => {
     return { mapa, caminho, categoriaPublica };
 };
 
-const precoElegivel = (p, caminho) => {
-    const centavos = decimalParaCentavos(p.price);
-    return p.ativo === 1 && caminho(p.categoria_id) && p.onsale === 1
-        && p.format === 'E-Book' && p.currency === 'BRL' && centavos !== null
-        && ['Em estoque', 'Poucas unidades'].includes(p.inventory) && p.arquivo_presente === 1 ? centavos : null;
+// R3.2: politica reutilizavel; nao consulta o banco nem gerencia transacoes.
+export const contextoComercialBackend = () => ({ ambienteBackend: process.env.NODE_ENV,
+    ambientePaypal: process.env.IST_LOJA_PAYPAL_ENV });
+export const avaliarPoliticaComercial = (p, caminho, contexto = contextoComercialBackend()) => {
+    const valor = p.preco_centavos;
+    const centavos = typeof valor === 'number' && Number.isSafeInteger(valor) && valor > 0 ? valor
+        : typeof valor === 'string' && /^[1-9]\d{0,15}$/.test(valor)
+            && BigInt(valor) <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(valor) : null;
+    const visivel = p.ativo === 1 && p.em_venda === 1 && Boolean(caminho(p.categoria_id))
+        && ['MERCADORIA', 'SERVICO', 'DIGITAL'].includes(p.tipo) && p.moeda === 'BRL' && centavos !== null
+        && textoArmazenavel(p.sku, true) && [...p.sku].length <= 50
+        && textoArmazenavel(p.titulo, true) && (p.descricao === null || typeof p.descricao === 'string');
+    // Ainda nao ha entrega operacional para mercadorias/servicos/digitais sem livro.
+    const sandboxSemConteudo = ['development','test'].includes(contexto.ambienteBackend)
+        && contexto.ambientePaypal === 'sandbox' && (contexto.ambientePedido === undefined || contexto.ambientePedido === 'sandbox')
+        && p.id === 6 && p.livro_id === 3 && p.sku === 'IST-SANDBOX-CHECKOUT-001'
+        && centavos === 100 && p.moeda === 'BRL';
+    const elegivel = visivel && p.disponivel === 1 && p.tipo === 'DIGITAL'
+        && idValido(p.livro_id) && p.formato_editorial === 'E-Book' && (p.versao_publicada === 1 || sandboxSemConteudo)
+        && (p.descricao === null || textoArmazenavel(p.descricao));
+    return { visivel, elegivel, precoCentavos: centavos };
 };
 const somarCentavos = (valores) => {
     const total = valores.reduce((soma, valor) => soma + valor, 0);
@@ -68,11 +85,9 @@ const textoArmazenavel = (valor, obrigatorio = false) => typeof valor === 'strin
     && Buffer.from(valor, 'utf8').toString('utf8') === valor;
 
 const criarSnapshot = (p, precoCentavos) => {
-    if (typeof p.sku !== 'string' || !p.sku.trim() || [...p.sku].length > 50
-        || !textoArmazenavel(p.sku) || !textoArmazenavel(p.title, true)
-        || (p.description !== null && !textoArmazenavel(p.description))) throw indisponivel();
-    return { produto_id: p.id, sku_snapshot: p.sku, titulo_snapshot: p.title,
-        descricao_snapshot: p.description, tipo_snapshot: 'E-Book', quantidade: 1,
+    // Chamado somente apos a politica compartilhada validar os limites de armazenamento.
+    return { produto_id: p.id, sku_snapshot: p.sku, titulo_snapshot: p.titulo,
+        descricao_snapshot: p.descricao, tipo_snapshot: p.tipo, quantidade: 1,
         preco_unitario_centavos: precoCentavos, subtotal_centavos: precoCentavos };
 };
 
@@ -83,7 +98,7 @@ const criarSnapshot = (p, precoCentavos) => {
  * inclusive CONTENCAO_TEMPORARIA, deadlock ou lock timeout. Nenhuma retentativa interna.
  * Os snapshots preservam textos originais; consumidores devem usar saida segura.
  */
-export const prepararItensNaConexao = async (conexao, produtoIds) => {
+export const prepararItensNaConexao = async (conexao, produtoIds, contexto = contextoComercialBackend()) => {
     if (!conexao || typeof conexao.query !== 'function') throw criarErroPedido('ERRO_INTERNO');
     if (!Array.isArray(produtoIds) || produtoIds.length < 1 || produtoIds.length > CONTRATO_PEDIDO.maxProdutos
         || Array.from(produtoIds).some((id) => !idValido(id)) || new Set(produtoIds).size !== produtoIds.length) {
@@ -123,7 +138,8 @@ export const prepararItensNaConexao = async (conexao, produtoIds) => {
 
     const produtos = [];
     for (const anterior of descobertos) {
-        const [[produto]] = await conexao.query(`SELECT id, categoria_id, livro_id, sku, ativo
+        const [[produto]] = await conexao.query(`SELECT id, categoria_id, livro_id, sku, ativo,
+            titulo, descricao, CAST(preco_centavos AS CHAR) AS preco_centavos, moeda, tipo, em_venda, disponivel
             FROM ist_loja_produtos WHERE id = ? LOCK IN SHARE MODE`, [anterior.id]);
         if (!produto) throw indisponivel();
         if (produto.categoria_id !== anterior.categoria_id || produto.livro_id !== anterior.livro_id) {
@@ -132,21 +148,22 @@ export const prepararItensNaConexao = async (conexao, produtoIds) => {
         produtos.push(produto);
     }
     const livros = new Map();
-    const livroIds = [...new Set(produtos.map((p) => p.livro_id))].sort((a, b) => a - b);
+    const livroIds = [...new Set(produtos.map((p) => p.livro_id).filter(id => id !== null))].sort((a, b) => a - b);
     for (const id of livroIds) {
-        const [[livro]] = await conexao.query(`SELECT id, title, description, price, currency, onsale, format, inventory,
-            (file IS NOT NULL AND CHAR_LENGTH(TRIM(file)) > 0) AS arquivo_presente
+        const [[livro]] = await conexao.query(`SELECT id, format
             FROM ist_livros WHERE id = ? LOCK IN SHARE MODE`, [id]);
         if (!livro) throw indisponivel();
         livros.set(id, livro);
     }
+    const versoes = await selecionarVersoesNaConexao(conexao, produtos.filter(p => p.tipo === 'DIGITAL').map(p => p.id));
     const itens = produtos.map((produto) => {
-        const linha = { ...livros.get(produto.livro_id), ...produto };
-        const preco = precoElegivel(linha, atual.caminho);
-        if (preco === null) throw indisponivel();
-        return criarSnapshot(linha, preco);
+        const livro = livros.get(produto.livro_id);
+        const linha = { ...produto, formato_editorial: livro?.format ?? null, versao_publicada: versoes.get(produto.id) ? 1 : 0 };
+        const politica = avaliarPoliticaComercial(linha, atual.caminho, contexto);
+        if (!politica.elegivel) throw indisponivel();
+        return criarSnapshot(produto, politica.precoCentavos);
     });
-    return { itens, moeda: 'BRL', totalCentavos: somarCentavos(itens.map((item) => item.subtotal_centavos)) };
+    return { itens, versoes, moeda: 'BRL', totalCentavos: somarCentavos(itens.map((item) => item.subtotal_centavos)) };
 };
 
 const validarItens = (entrada) => {
@@ -167,7 +184,7 @@ const validarItens = (entrada) => {
     return entrada.itens;
 };
 
-export const criarLojaCatalogoService = ({ db = pool, agora = () => new Date() } = {}) => {
+export const criarLojaCatalogoService = ({ db = pool, agora = () => new Date(), contextoComercial = contextoComercialBackend() } = {}) => {
     const lerCatalogo = async (operacao) => {
         const conexao = await db.getConnection();
         try {
@@ -177,17 +194,21 @@ export const criarLojaCatalogoService = ({ db = pool, agora = () => new Date() }
             const { mapa, caminho, categoriaPublica } = criarContextoCategorias(categorias);
             const carregarProdutos = async () => {
                 const [linhas] = await conexao.query(`SELECT p.id, p.sku, p.categoria_id, p.ativo,
-                    l.title, l.description, l.language, l.img, l.price, l.currency,
-                    l.onsale, l.format, l.inventory,
-                    (l.file IS NOT NULL AND CHAR_LENGTH(TRIM(l.file)) > 0) AS arquivo_presente
-                    FROM ist_loja_produtos p JOIN ist_livros l ON l.id = p.livro_id
+                    p.titulo, p.descricao, CAST(p.preco_centavos AS CHAR) AS preco_centavos,
+                    p.moeda, p.imagem_url, p.tipo, p.em_venda, p.disponivel, p.livro_id,
+                    l.language, l.format AS formato_editorial,
+                    EXISTS(SELECT 1 FROM ist_loja_arquivo_versoes v WHERE v.produto_id=p.id
+                        AND v.estado='PUBLICADA' AND v.publicacao_atual=1) AS versao_publicada
+                    FROM ist_loja_produtos p LEFT JOIN ist_livros l ON l.id = p.livro_id
                     ORDER BY p.ordem, p.id`);
                 return linhas.flatMap((p) => {
-                    const precoCentavos = precoElegivel(p, caminho);
-                    if (precoCentavos === null) return [];
-                    return [{ id: p.id, sku: p.sku, titulo: texto(p.title), descricao: texto(p.description),
+                    const politica = avaliarPoliticaComercial(p, caminho, contextoComercial);
+                    if (!politica.visivel) return [];
+                    return [{ id: p.id, sku: p.sku, titulo: texto(p.titulo), descricao: texto(p.descricao),
                         categoria: categoriaPublica(mapa.get(p.categoria_id)), idioma: texto(p.language),
-                        imagemUrl: imagemPublica(p.img), precoCentavos, moeda: 'BRL', disponivel: true, quantidadeMaxima: 1 }];
+                        imagemUrl: imagemPublica(p.imagem_url), precoCentavos: politica.precoCentavos, moeda: 'BRL',
+                        tipo: p.tipo, livroId: p.livro_id ?? null, formatoEditorial: texto(p.formato_editorial),
+                        disponivel: politica.elegivel, quantidadeMaxima: 1 }];
                 });
             };
             const resultado = await operacao({ categorias, caminho, categoriaPublica, carregarProdutos });
@@ -226,7 +247,7 @@ export const criarLojaCatalogoService = ({ db = pool, agora = () => new Date() }
                 const produtos = new Map((await carregarProdutos()).map((p) => [p.id, p]));
                 const cotados = itens.map(({ produtoId }) => {
                     const produto = produtos.get(produtoId);
-                    if (!produto) throw indisponivel();
+                    if (!produto || !produto.disponivel) throw indisponivel();
                     return { produtoId, quantidade: 1, produto, precoUnitarioCentavos: produto.precoCentavos, subtotalCentavos: produto.precoCentavos };
                 });
                 const totalCentavos = somarCentavos(cotados.map((item) => item.subtotalCentavos));

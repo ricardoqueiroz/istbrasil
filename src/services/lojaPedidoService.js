@@ -1,6 +1,6 @@
 import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { pool } from '../config/db.js';
-import { prepararItensNaConexao } from './lojaCatalogoService.js';
+import { prepararItensNaConexao, contextoComercialBackend } from './lojaCatalogoService.js';
 import { CONTRATO_PEDIDO, criarErroPedido, validarSolicitacaoPedido, validarChaveIdempotencia,
     gerarHashSolicitacaoPedido, pedidoPublico } from './lojaPedidoContratos.js';
 
@@ -97,6 +97,31 @@ const projetarPersistido = (pedido, itens, ids, sessao) => {
     return pedidoPublico(pedido, itens);
 };
 
+const criarDireitoInicialNaConexao = async (c, itemId, produtoId, versaoId, data, gerarUuid) => {
+    const publicId = validarChaveIdempotencia(gerarUuid());
+    const [r] = await c.query(`INSERT INTO ist_loja_download_direitos
+        (public_id,pedido_item_id,produto_id,arquivo_versao_id,estado,versao,criado_em,atualizado_em)
+        VALUES(?,?,?,?,'AGUARDANDO_CONFIRMACAO',1,?,?)`, [publicId,itemId,produtoId,versaoId,data,data]);
+    if (!uint32(r.insertId) || r.affectedRows !== 1 || r.warningStatus > 0) throw interno();
+    const [e] = await c.query(`INSERT INTO ist_loja_download_direito_eventos
+        (direito_id,direito_versao,estado_anterior,estado_novo,origem,motivo_codigo,ocorrido_em)
+        VALUES(?,1,NULL,'AGUARDANDO_CONFIRMACAO','PEDIDO','DIREITO_CRIADO',?)`, [r.insertId,data]);
+    if (e.affectedRows !== 1 || e.warningStatus > 0) throw interno();
+    return { itemId, produtoId, versaoId, publicId };
+};
+const conferirDireitosDaTentativa = async (c, esperados) => {
+    for (const x of esperados) {
+        const [rows] = await c.query(`SELECT d.public_id,d.produto_id,d.arquivo_versao_id,
+            e.estado_anterior,e.estado_novo,e.origem,e.motivo_codigo
+            FROM ist_loja_download_direitos d JOIN ist_loja_download_direito_eventos e
+              ON e.direito_id=d.id AND e.direito_versao=1 WHERE d.pedido_item_id=?`, [x.itemId]);
+        if (rows.length !== 1 || rows[0].public_id !== x.publicId || rows[0].produto_id !== x.produtoId
+            || rows[0].arquivo_versao_id !== x.versaoId || rows[0].estado_anterior !== null
+            || rows[0].estado_novo !== 'AGUARDANDO_CONFIRMACAO' || rows[0].origem !== 'PEDIDO'
+            || rows[0].motivo_codigo !== 'DIREITO_CRIADO') throw interno();
+    }
+};
+
 /** Servico INTERNO, sem adapter HTTP.
  * criarPedido(sessaoValidada, solicitacao, chaveIdempotencia)
  * sessaoValidada e contexto confiavel do mecanismo 65.2 (res.locals.sessaoLoja),
@@ -104,7 +129,8 @@ const projetarPersistido = (pedido, itens, ids, sessao) => {
  * ambiente e definido exclusivamente nesta fabrica pelo servidor, fora do payload.
  */
 export const criarLojaPedidoService = ({ db = pool, ambiente = CONTRATO_PEDIDO.ambienteInicial,
-    agora = () => new Date(), gerarUuid = randomUUID, prepararItens = prepararItensNaConexao } = {}) => {
+    agora = () => new Date(), gerarUuid = randomUUID, prepararItens = prepararItensNaConexao,
+    contextoComercial = contextoComercialBackend() } = {}) => {
     const obterConexaoConfigurada = async () => {
         const conexao = await db.getConnection();
         try {
@@ -117,7 +143,7 @@ export const criarLojaPedidoService = ({ db = pool, ambiente = CONTRATO_PEDIDO.a
             throw erro;
         }
     };
-    const reconciliar = async (sessaoId, chave, hash, ids, publicIdCriado = null) => {
+    const reconciliar = async (sessaoId, chave, hash, ids, publicIdCriado = null, direitosEsperados = []) => {
         let conexao;
         let iniciada = false;
         try {
@@ -130,6 +156,10 @@ export const criarLojaPedidoService = ({ db = pool, ambiente = CONTRATO_PEDIDO.a
             if (!pedido) throw temporario(); // Nunca repetir cegamente a criacao.
             compararHash(pedido, hash);
             const publico = projetarPersistido(pedido, await lerItens(conexao, pedido.id), ids, sessao);
+            if (publicIdCriado !== null) {
+                if (pedido.public_id !== publicIdCriado) throw interno();
+                await conferirDireitosDaTentativa(conexao, direitosEsperados);
+            }
             validarSessaoTemporal(sessao, instanteUtc(agora));
             await conexao.commit();
             iniciada = false;
@@ -155,6 +185,7 @@ export const criarLojaPedidoService = ({ db = pool, ambiente = CONTRATO_PEDIDO.a
             let iniciada = false;
             let commitIniciado = false;
             let publicIdCriado = null;
+            const direitosEsperados = [];
             try {
                 conexao = await obterConexaoConfigurada();
                 iniciada = true;
@@ -168,8 +199,10 @@ export const criarLojaPedidoService = ({ db = pool, ambiente = CONTRATO_PEDIDO.a
                     // Repeticoes devolvem o estado armazenado, mesmo apos a validade
                     // original do pedido; nao renovam datas nem recriam/cotam itens.
                 } else {
-                    const preparados = await prepararItens(conexao, solicitacao.produtoIds);
+                    const preparados = await prepararItens(conexao, solicitacao.produtoIds,
+                        { ...contextoComercial, ambientePedido: ambiente });
                     if (preparados.moeda !== CONTRATO_PEDIDO.moeda) throw interno();
+                    if (!(preparados.versoes instanceof Map)) throw interno();
                     const total = conferirItens(preparados.itens, solicitacao.produtoIds);
                     const criadoEm = instanteUtc(agora);
                     validarSessaoTemporal(sessao, criadoEm);
@@ -191,7 +224,14 @@ export const criarLojaPedidoService = ({ db = pool, ambiente = CONTRATO_PEDIDO.a
                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
                         [inserido.insertId, item.produto_id, indice + 1, item.sku_snapshot, item.titulo_snapshot,
                             item.descricao_snapshot, item.tipo_snapshot, item.quantidade, item.preco_unitario_centavos, item.subtotal_centavos]);
-                        if (resultado.affectedRows !== 1 || resultado.warningStatus > 0) throw interno();
+                        if (!uint32(resultado.insertId) || resultado.affectedRows !== 1 || resultado.warningStatus > 0) throw interno();
+                        if (!preparados.versoes.has(item.produto_id)) throw interno();
+                        const versaoId = preparados.versoes.get(item.produto_id);
+                        if (versaoId !== null) {
+                            if (!uint32(versaoId)) throw interno();
+                            direitosEsperados.push(await criarDireitoInicialNaConexao(conexao, resultado.insertId,
+                                item.produto_id, versaoId, sqlUtc(criadoEm), gerarUuid));
+                        }
                     }
                     pedido = await procurarPedido(conexao, sessaoId, chave);
                     if (!pedido || pedido.id !== inserido.insertId || pedido.public_id !== publicId
@@ -222,7 +262,7 @@ export const criarLojaPedidoService = ({ db = pool, ambiente = CONTRATO_PEDIDO.a
                     // Nao sabemos se COMMIT ocorreu. Fechar, nunca devolver ao pool,
                     // e consultar em nova conexao sem emitir INSERT novamente.
                     descartar(conexao); conexao = null;
-                    return reconciliar(sessaoId, chave, hash, solicitacao.produtoIds, publicIdCriado);
+                    return reconciliar(sessaoId, chave, hash, solicitacao.produtoIds, publicIdCriado, direitosEsperados);
                 }
                 if (conexao && iniciada) {
                     try { await conexao.rollback(); }

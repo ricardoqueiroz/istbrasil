@@ -8,7 +8,7 @@ import { SkeletonModule } from 'primeng/skeleton';
 import { MessageModule } from 'primeng/message';
 import { LojaService } from '../../services/loja.service';
 import { CarrinhoService } from '../../services/carrinho.service';
-import { LojaProdutoDetalhe } from './models/loja.model';
+import { LojaProdutoDetalhe, tipoProduto } from './models/loja.model';
 
 interface DescricaoPropriedade {
     readonly chave: string;
@@ -21,6 +21,7 @@ interface DescricaoPropriedade {
     templateUrl: './loja-produto.component.html', styleUrl: './loja-produto.component.scss'
 })
 export class LojaProdutoComponent implements OnInit {
+    readonly tipoProduto = tipoProduto;
     readonly carrinho = inject(CarrinhoService);
     private readonly loja = inject(LojaService);
     private readonly route = inject(ActivatedRoute);
@@ -91,7 +92,7 @@ export class LojaProdutoComponent implements OnInit {
     recarregar(): void { this.tentativas.next(); }
     adicionar(): void {
         const produto = this.produto();
-        if (produto && !this.carrinho.adicionar(produto.id) && !this.carrinho.contem(produto.id)) this.aviso.set('O carrinho permite até 100 títulos.');
+        if (produto?.disponivel && !this.carrinho.adicionar(produto.id) && !this.carrinho.contem(produto.id)) this.aviso.set('O carrinho permite até 100 títulos.');
     }
     idioma(codigo: string): string { return codigo === 'en-uk' ? 'Inglês' : codigo === 'pt-br' ? 'Português' : codigo; }
 }

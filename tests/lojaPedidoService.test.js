@@ -13,7 +13,7 @@ const copiar = linha => ({ ...linha, ...(linha.solicitacao_hash ? { solicitacao_
 // sessao. Nenhum mock abre conexao real ou aplica escrita no banco recuperado.
 const preparar = ({ ambiente = 'sandbox' } = {}) => {
     const pedidos = []; const itens = []; const chamadas = []; const conexoes = [];
-    const preparacoes = []; const filas = new Map();
+    const direitos = [], eventos = []; const preparacoes = []; const filas = new Map();
     let agora = new Date('2026-10-15T12:00:00.123Z');
     let hook = async () => {}; let sequencia = 0;
     const sessoes = [1, 2].map(id => ({ id, criada_em_utc: '2026-10-15T00:00:00.123000Z', expira_em_utc: '2026-10-16T00:00:00.123000Z', revogada: 0 }));
@@ -21,13 +21,15 @@ const preparar = ({ ambiente = 'sandbox' } = {}) => {
     const produtos = [1, 2].map(id => ({ id, categoria_id: 2, livro_id: id, sku: `SKU${id}`, ativo: 1 }));
     const livros = [1, 2].map(id => ({ id, title: `Livro ${id}`, description: '{"Content":"PDF & música"}',
         price: '95.00', currency: 'BRL', onsale: 1, format: 'E-Book', inventory: 'Em estoque', arquivo_presente: 1 }));
+    produtos.forEach((p,i) => Object.assign(p, { titulo: livros[i].title, descricao: livros[i].description,
+        preco_centavos: '9500', moeda: 'BRL', tipo: 'DIGITAL', em_venda: 1, disponivel: 1 }));
     const evento = async (tipo, c, extra = {}) => {
         chamadas.push({ tipo, conexao: c?.numero, ...extra });
         await hook({ tipo, c, ...extra });
     };
     const db = { async getConnection() {
         await evento('getConnection');
-        const c = { numero: conexoes.length + 1, ativa: false, novosPedidos: [], novosItens: [], liberarLock: null, destruida: false,
+        const c = { numero: conexoes.length + 1, ativa: false, novosPedidos: [], novosItens: [], novosDireitos: [], novosEventos: [], liberarLock: null, destruida: false,
             soltar() { if (this.liberarLock) { this.liberarLock(); this.liberarLock = null; } },
             async beginTransaction() { await evento('begin', this); this.ativa = true; },
             async query(sql, params = []) {
@@ -43,6 +45,12 @@ const preparar = ({ ambiente = 'sandbox' } = {}) => {
                     await anterior; this.liberarLock = liberar;
                     return [sessoes.filter(s => s.id === params[0]).map(copiar)];
                 }
+                if (sql.includes('FROM ist_loja_arquivo_versoes')) return [[{id:params[0],produto_id:params[0]}]];
+                if (sql.includes('FROM ist_loja_download_direitos')) return [[...direitos,...this.novosDireitos].filter(x=>x.pedido_item_id===params[0]).map(d=>({...d,...[...eventos,...this.novosEventos].find(e=>e.direito_id===d.id)}))];
+                if (sql.startsWith('INSERT INTO ist_loja_download_direitos')) {
+                    const d={id:++sequencia,public_id:params[0],pedido_item_id:params[1],produto_id:params[2],arquivo_versao_id:params[3]};this.novosDireitos.push(d);return [{insertId:d.id,affectedRows:1,warningStatus:0}];
+                }
+                if (sql.startsWith('INSERT INTO ist_loja_download_direito_eventos')) {this.novosEventos.push({direito_id:params[0],estado_anterior:null,estado_novo:'AGUARDANDO_CONFIRMACAO',origem:'PEDIDO',motivo_codigo:'DIREITO_CRIADO'});return [{affectedRows:1,warningStatus:0}];}
                 if (sql.includes('FROM ist_loja_pedidos')) return [[...pedidos, ...this.novosPedidos]
                     .filter(p => p.sessao_id === params[0] && p.idempotencia_criacao === params[1]).map(copiar)];
                 if (sql.includes('FROM ist_loja_pedido_itens')) return [[...itens, ...this.novosItens]
@@ -59,7 +67,7 @@ const preparar = ({ ambiente = 'sandbox' } = {}) => {
                     const campos = ['pedido_id', 'produto_id', 'posicao', 'sku_snapshot', 'titulo_snapshot', 'descricao_snapshot',
                         'tipo_snapshot', 'quantidade', 'preco_unitario_centavos', 'subtotal_centavos'];
                     this.novosItens.push(Object.fromEntries(campos.map((campo, indice) => [campo, params[indice]])));
-                    return [{ affectedRows: 1, warningStatus: 0 }];
+                    return [{ insertId: ++sequencia, affectedRows: 1, warningStatus: 0 }];
                 }
                 let linhas;
                 if (sql.includes('FROM ist_loja_categorias')) linhas = categorias;
@@ -71,18 +79,18 @@ const preparar = ({ ambiente = 'sandbox' } = {}) => {
             },
             async commit() {
                 await evento('commitAntes', this);
-                pedidos.push(...this.novosPedidos); itens.push(...this.novosItens);
-                this.novosPedidos = []; this.novosItens = []; this.ativa = false; this.soltar();
+                pedidos.push(...this.novosPedidos); itens.push(...this.novosItens); direitos.push(...this.novosDireitos); eventos.push(...this.novosEventos);
+                this.novosDireitos = []; this.novosEventos = []; this.novosPedidos = []; this.novosItens = []; this.ativa = false; this.soltar();
                 await evento('commitDepois', this);
             },
             async rollback() {
                 await evento('rollback', this);
-                this.novosPedidos = []; this.novosItens = []; this.ativa = false; this.soltar();
+                this.novosDireitos = []; this.novosEventos = []; this.novosPedidos = []; this.novosItens = []; this.ativa = false; this.soltar();
             },
             release() { assert.equal(this.ativa, false); chamadas.push({ tipo: 'release', conexao: this.numero }); },
             destroy() {
                 chamadas.push({ tipo: 'destroy', conexao: this.numero }); this.destruida = true;
-                this.novosPedidos = []; this.novosItens = []; this.ativa = false; this.soltar();
+                this.novosDireitos = []; this.novosEventos = []; this.novosPedidos = []; this.novosItens = []; this.ativa = false; this.soltar();
             }
         };
         conexoes.push(c); return c;
@@ -182,11 +190,11 @@ test('sessões diferentes podem criar pedidos em paralelo', async () => {
     assert.notEqual(respostas[0].publicId, respostas[1].publicId); assert.equal(a.pedidos.length, 2);
 });
 test('nova chave utiliza preço oficial alterado e preserva o snapshot anterior', async () => {
-    const a = preparar(); await a.criar(); a.livros[0].price = '100.01';
+    const a = preparar(); await a.criar(); a.produtos[0].preco_centavos = '10001';
     const r = await a.criar(entrada(), OUTRA_CHAVE); assert.equal(r.totalCentavos, 19501); assert.equal(a.itens[0].preco_unitario_centavos, 9500);
 });
 test('produto indisponível reverte sem escrever pedido', async () => {
-    const a = preparar(); a.livros[0].onsale = 0;
+    const a = preparar(); a.produtos[0].em_venda = 0;
     await assert.rejects(a.criar(), { codigo: 'PRODUTO_INDISPONIVEL' }); conferirLimpo(a);
 });
 for (const local of ['getConnection', 'begin', 'sessão', 'inserir pedido', 'inserir segundo item', 'reler pedido', 'reler itens']) {
@@ -225,7 +233,7 @@ for (const momento of ['commitAntes', 'commitDepois']) test(`COMMIT incerto em $
         const r = await a.criar(); assert.equal(r.publicId, a.pedidos[0].public_id); assert.equal(a.itens.length, 2);
     } else { await assert.rejects(a.criar(), { codigo: 'CONTENCAO_TEMPORARIA' }); conferirLimpo(a); }
     assert.equal(a.conexoes.length, 2); assert.equal(a.conexoes[0].destruida, true);
-    assert.equal(a.preparacoes.length, 1); assert.equal(inserts(a).length, 3);
+    assert.equal(a.preparacoes.length, 1); assert.equal(inserts(a).length, 7);
     assert.equal(a.chamadas.some(e => e.tipo === 'rollback' && e.conexao === 1), false);
 });
 test('falha na reconciliação devolve erro temporário e permite replay posterior seguro', async () => {

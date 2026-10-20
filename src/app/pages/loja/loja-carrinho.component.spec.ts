@@ -15,7 +15,7 @@ describe('LojaCarrinhoComponent', () => {
     let dados: Map<string, string>;
     const url = `${environment.apiUrl}/loja/cotacao`;
     const dto = (ids = [1, 2], totalCentavos = 19000): LojaCotacao => ({ moeda: 'BRL', totalCentavos, geradaEm: '2026-10-15T12:00:00Z', itens: ids.map((id) => ({ produtoId: id, quantidade: 1, precoUnitarioCentavos: 9500, subtotalCentavos: 9500,
-        produto: { id, sku: `SKU${id}`, titulo: `Livro ${id}`, descricao: null, categoria: { id: 2, nome: 'Música', slug: 'musica', categoriaPaiId: 1, ordem: 1 }, idioma: 'pt-br', imagemUrl: null, precoCentavos: 9500, moeda: 'BRL', disponivel: true, quantidadeMaxima: 1 } })) });
+        produto: { id, sku: `SKU${id}`, titulo: `Livro ${id}`, descricao: null, categoria: { id: 2, nome: 'Música', slug: 'musica', categoriaPaiId: 1, ordem: 1 }, idioma: 'pt-br', imagemUrl: null, precoCentavos: 9500, moeda: 'BRL', disponivel: true, tipo: 'DIGITAL', livroId: 1, formatoEditorial: 'E-Book', quantidadeMaxima: 1 } })) });
     beforeEach(() => { dados = new Map(); TestBed.configureTestingModule({ imports: [LojaCarrinhoComponent], providers: [provideZoneChangeDetection(), provideRouter([]), provideHttpClient(), provideHttpClientTesting(), { provide: CARRINHO_STORAGE, useValue: { getItem: (k: string) => dados.get(k) ?? null, setItem: (k: string, v: string) => dados.set(k, v), removeItem: (k: string) => dados.delete(k) } }] }); http = TestBed.inject(HttpTestingController); carrinho = TestBed.inject(CarrinhoService); });
     afterEach(() => http.verify());
     const pagina = (ids = [1, 2]) => { ids.forEach((id) => carrinho.adicionar(id)); fixture = TestBed.createComponent(LojaCarrinhoComponent); fixture.detectChanges(); };

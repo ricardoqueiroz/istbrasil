@@ -9,7 +9,7 @@ import { SkeletonModule } from 'primeng/skeleton';
 import { MessageModule } from 'primeng/message';
 import { LojaService } from '../../services/loja.service';
 import { CarrinhoService } from '../../services/carrinho.service';
-import { LojaCategoria, LojaProduto } from './models/loja.model';
+import { LojaCategoria, LojaProduto, tipoProduto } from './models/loja.model';
 
 @Component({
     selector: 'app-loja-catalogo', standalone: true,
@@ -17,6 +17,7 @@ import { LojaCategoria, LojaProduto } from './models/loja.model';
     templateUrl: './loja-catalogo.component.html', styleUrl: './loja-catalogo.component.scss'
 })
 export class LojaCatalogoComponent implements OnInit {
+    readonly tipoProduto = tipoProduto;
     readonly carrinho = inject(CarrinhoService);
     private readonly loja = inject(LojaService);
     private readonly destroyRef = inject(DestroyRef);
@@ -66,6 +67,7 @@ export class LojaCatalogoComponent implements OnInit {
     recarregar(): void { this.filtro.next(this.categoria() ?? undefined); }
     recarregarCategorias(): void { this.tentarCategorias.next(); }
     adicionar(id: number): void {
+        if (!this.produtos().find(produto => produto.id === id)?.disponivel) return;
         this.aviso.set(null);
         if (!this.carrinho.adicionar(id) && !this.carrinho.contem(id)) this.aviso.set('O carrinho permite até 100 títulos.');
     }

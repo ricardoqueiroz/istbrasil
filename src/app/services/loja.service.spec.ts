@@ -11,7 +11,7 @@ describe('LojaService', () => {
     const url = `${environment.apiUrl}/loja`;
     const categoria: LojaCategoria = { id: 2, nome: 'Música', slug: 'musica', categoriaPaiId: 1, ordem: 1 };
     const produto: LojaProduto = { id: 1, sku: '9788552911036EN2E', titulo: 'Livro', descricao: null, categoria,
-        idioma: 'en-uk', imagemUrl: null, precoCentavos: 9500, moeda: 'BRL', disponivel: true, quantidadeMaxima: 1 };
+        idioma: 'en-uk', imagemUrl: null, precoCentavos: 9500, moeda: 'BRL', disponivel: true, tipo: 'DIGITAL', livroId: 1, formatoEditorial: 'E-Book', quantidadeMaxima: 1 };
     const cotacao: LojaCotacao = { itens: [{ produtoId: 1, quantidade: 1, produto, precoUnitarioCentavos: 9500, subtotalCentavos: 9500 }],
         moeda: 'BRL', totalCentavos: 9500, geradaEm: '2026-10-15T12:00:00.000Z' };
 

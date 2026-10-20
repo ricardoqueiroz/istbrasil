@@ -2,63 +2,67 @@
 import { pool as db } from '../config/db.js';
 import path from 'path';
 import fs from 'fs';
+import { avaliarPoliticaComercial, criarContextoCategorias, imagemPublica, validarProdutoId } from '../services/lojaCatalogoService.js';
 
-const PRODUCTS_PATH = process.env.PRODUCTS_PATH || '/var/www/istbrasil_private/products/livros/';
 
-const getAllBooks = async (req, res) => {
-    console.log('getAllBooks chamado!');
-    try {
-        const [rows] = await db.execute('SELECT * FROM ist_livros WHERE onsale = 1');
-        res.json(rows);
-    } catch (error) {
-        res.status(404).json({ message: 'Erro ao buscar livros', error: error.message });
-    }
-};
-
-const getBookById = async (req, res) => {
-    const { id } = req.params;
-    try {
-        const [rows] = await db.execute('SELECT * FROM ist_livros WHERE id = ?', [id]);
-        if (rows.length === 0) {
-            return res.status(404).json({ message: 'Livro não encontrado' });
+// Leitura editorial independente da venda. A oferta e a hierarquia sao lidas no
+// mesmo snapshot; somente a politica compartilhada decide se e possivel comprar.
+export const criarBookController = ({ banco = db } = {}) => {
+    const ler = async (id) => {
+        const conexao = await banco.getConnection();
+        try {
+            await conexao.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ');
+            await conexao.query('START TRANSACTION WITH CONSISTENT SNAPSHOT, READ ONLY');
+            const [categorias] = await conexao.query('SELECT id, categoria_pai_id, ativo FROM ist_loja_categorias ORDER BY id');
+            const { caminho } = criarContextoCategorias(categorias);
+            const [rows] = await conexao.query(`SELECT l.id, l.title, l.description, l.language, l.format, l.img, l.category,
+                p.id AS produto_id, p.sku, p.categoria_id, p.ativo, p.livro_id,
+                p.titulo, p.descricao, CAST(p.preco_centavos AS CHAR) AS preco_centavos,
+                p.moeda, p.tipo, p.em_venda, p.disponivel,
+                l.format AS formato_editorial,
+                EXISTS(SELECT 1 FROM ist_loja_arquivo_versoes v WHERE v.produto_id=p.id
+                    AND v.estado='PUBLICADA' AND v.publicacao_atual=1) AS versao_publicada
+                FROM ist_livros l LEFT JOIN ist_loja_produtos p ON p.livro_id = l.id
+                WHERE l.pertence_editora_ist = 1${id === undefined ? '' : ' AND l.id = ?'} ORDER BY l.id`,
+            id === undefined ? [] : [id]);
+            const livros = rows.map(l => {
+                const politica = avaliarPoliticaComercial({ ...l, id: l.produto_id }, caminho);
+                return { id: l.id, title: l.title, description: l.description, language: l.language,
+                    format: l.format, img: imagemPublica(l.img), category: l.category,
+                    comercial: l.produto_id === null ? null : {
+                        produtoId: l.produto_id, sku: l.sku, precoCentavos: politica.precoCentavos,
+                        moeda: l.moeda, podeComprar: politica.elegivel
+                    } };
+            });
+            await conexao.commit();
+            return livros;
+        } catch (erro) {
+            await conexao.rollback();
+            throw erro;
+        } finally {
+            conexao.release();
         }
-        res.json(rows[0]);
-    } catch (error) {
-        res.status(500).json({ message: 'Erro ao buscar livro', error: error.message });
-    }
-};
-
-const downloadBook = async (req, res) => {
-    const { sku } = req.params;
-    try {
-        const [rows] = await db.execute('SELECT file, title FROM ist_livros WHERE sku LIKE ?', [sku]);
-
-        if (rows.length === 0 || !rows[0].file) {
-            return res.status(404).json({ message: 'Arquivo não encontrado para este produto.' });
+    };
+    return {
+        async getAllBooks(req, res) {
+            try { res.json(await ler()); }
+            catch { res.status(404).json({ message: 'Erro ao buscar livros' }); }
+        },
+        async getBookById(req, res) {
+            let id;
+            try { id = validarProdutoId(req.params.id); }
+            catch { return res.status(404).json({ message: 'Livro não encontrado' }); }
+            try {
+                const rows = await ler(id);
+                if (rows.length === 0) return res.status(404).json({ message: 'Livro não encontrado' });
+                res.json(rows[0]);
+            } catch { res.status(500).json({ message: 'Erro ao buscar livro' }); }
         }
-
-        const filename = rows[0].file;
-        const filePath = path.join(PRODUCTS_PATH, filename);
-
-        if (!fs.existsSync(filePath)) {
-            console.error(`Arquivo físico não encontrado: ${filePath}`);
-            return res.status(404).json({ message: 'Arquivo indisponível no servidor.' });
-        }
-
-        res.download(filePath, filename, (err) => {
-            if (err) {
-                console.error('Erro no download:', err);
-            }
-        });
-
-    } catch (error) {
-        console.error('Erro no controller de download:', error);
-        res.status(500).json({ message: 'Erro interno ao processar download.' });
-    }
+    };
 };
+const { getAllBooks, getBookById } = criarBookController();
 
 export default {
     getAllBooks,
-    getBookById,
-    downloadBook
+    getBookById
 };

@@ -14,7 +14,7 @@ describe('LojaProdutoComponent', () => {
     let http: HttpTestingController;
     let params: BehaviorSubject<ReturnType<typeof convertToParamMap>>;
     const url = `${environment.apiUrl}/loja`;
-    const livro: LojaProduto = { id: 1, sku: 'SKU1', titulo: 'Livro 1', descricao: 'Música &amp; memória\nSegunda linha', categoria: { id: 2, nome: 'Música', slug: 'musica', categoriaPaiId: 1, ordem: 1 }, idioma: 'en-uk', imagemUrl: null, precoCentavos: 9500, moeda: 'BRL', disponivel: true, quantidadeMaxima: 1 };
+    const livro: LojaProduto = { id: 1, sku: 'SKU1', titulo: 'Livro 1', descricao: 'Música &amp; memória\nSegunda linha', categoria: { id: 2, nome: 'Música', slug: 'musica', categoriaPaiId: 1, ordem: 1 }, idioma: 'en-uk', imagemUrl: null, precoCentavos: 9500, moeda: 'BRL', disponivel: true, tipo: 'DIGITAL', livroId: 1, formatoEditorial: 'E-Book', quantidadeMaxima: 1 };
     beforeEach(() => {
         params = new BehaviorSubject(convertToParamMap({ id: '1' }));
         TestBed.configureTestingModule({ imports: [LojaProdutoComponent], providers: [provideZoneChangeDetection(), provideRouter([]), provideHttpClient(), provideHttpClientTesting(), { provide: CARRINHO_STORAGE, useValue: null }] });
@@ -106,4 +106,11 @@ describe('LojaProdutoComponent', () => {
     it('troca de ID cancela resposta obsoleta', () => { pagina(); const antiga = http.expectOne(`${url}/produtos/1`); params.next(convertToParamMap({ id: '2' })); expect(antiga.cancelled).toBeTrue(); http.expectOne(`${url}/produtos/2`).flush({ ...livro, id: 2, titulo: 'Livro 2' }); fixture.detectChanges(); expect(texto()).toContain('Livro 2'); expect(texto()).not.toContain('Livro 1'); });
     it('ID invalido cancela consulta anterior', () => { pagina(); const antiga = http.expectOne(`${url}/produtos/1`); params.next(convertToParamMap({ id: 'invalido' })); expect(antiga.cancelled).toBeTrue(); expect(fixture.componentInstance.produto()).toBeNull(); });
     it('destruicao cancela HTTP pendente', () => { pagina(); const req = http.expectOne(`${url}/produtos/1`); fixture.destroy(); expect(req.cancelled).toBeTrue(); });
+    for (const tipo of ['DIGITAL', 'MERCADORIA', 'SERVICO'] as const) it(`detalhe ${tipo} sem livro nao presume E-Book`, () => {
+        pagina(); http.expectOne(`${url}/produtos/1`).flush({ ...livro, tipo, livroId: null, formatoEditorial: null, disponivel: false });
+        fixture.detectChanges(); expect(texto()).toContain(fixture.componentInstance.tipoProduto(tipo));
+        expect(texto()).not.toContain('Livro digital'); expect(texto()).not.toContain('E-Book');
+        expect(fixture.nativeElement.querySelector('[data-testid="adicionar"] button').disabled).toBeTrue();
+        fixture.componentInstance.adicionar(); expect(TestBed.inject(CarrinhoService).ids()).toEqual([]);
+    });
 });

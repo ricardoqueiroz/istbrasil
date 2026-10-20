@@ -12,7 +12,7 @@ const cotacaoPara = (ids: number[], totalCentavos = ids.length * 9500): LojaCota
     itens: ids.map((produtoId) => {
         const produto: LojaProduto = { id: produtoId, sku: `SKU${produtoId}`, titulo: 'Livro', descricao: null,
             categoria: { id: 2, nome: 'Música', slug: 'musica', categoriaPaiId: 1, ordem: 1 }, idioma: 'pt-br',
-            imagemUrl: null, moeda: 'BRL', precoCentavos: 9500, quantidadeMaxima: 1, disponivel: true };
+            imagemUrl: null, moeda: 'BRL', precoCentavos: 9500, tipo: 'DIGITAL', livroId: 1, formatoEditorial: 'E-Book', quantidadeMaxima: 1, disponivel: true };
         return { produtoId, quantidade: 1, produto, precoUnitarioCentavos: 9500, subtotalCentavos: 9500 };
     })
 });

@@ -103,7 +103,7 @@
                             <div class="flex flex-col sm:flex-row sm:items-center p-6 gap-4 border-b border-slate-200">
                                 <div class="md:w-40 relative">
                                     <img class="block xl:block mx-auto rounded w-full shadow-md hover:shadow-lg transition-shadow duration-300" [src]="book.img" [alt]="book.title" />
-                                    <p-tag [value]="book.inventoryStatus" [severity]="getSeverity(book)" class="absolute top-2 left-2"></p-tag>
+                                    <p-tag [value]="situacao(book)" [severity]="getSeverity(book)" class="absolute top-2 left-2"></p-tag>
                                 </div>
                                 <div class="flex flex-col md:flex-row justify-between md:items-center flex-1 gap-6">
                                     <div class="flex flex-col md:flex-row justify-between items-start gap-4 flex-1">
@@ -115,22 +115,19 @@
                                         <div class="bg-slate-100 p-1 rounded">
                                             <div class="surface-100 p-1" style="border-radius: 30px">
                                                 <div class="surface-0 flex items-center gap-2 justify-center py-1 px-2" style="border-radius: 30px; box-shadow: 0px 1px 2px 0px rgba(0, 0, 0, 0.04), 0px 1px 2px 0px rgba(0, 0, 0, 0.06)">
-                                                    <span class="text-surface-900 font-medium text-sm">{{ book.sku }}</span>
+                                                    <span class="text-surface-900 font-medium text-sm">{{ book.comercial?.sku }}</span>
                                                     <i class="pi pi-star-fill text-yellow-500"></i>
                                                 </div>
                                             </div>
                                         </div>
                                     </div>
                                     <div class="flex flex-col md:items-end gap-5">
-                                        <span class="text-xl font-bold text-emerald-600">{{ 'R$ ' + book.price }}</span>
+                                        <span *ngIf="preco(book)" class="text-xl font-bold text-emerald-600">{{ preco(book) }}</span>
                                         <div class="flex gap-2">
                                             <p-button icon="pi pi-heart" [outlined]="true"></p-button>
-                                            <p-button
-                                                icon="pi pi-shopping-cart"
-                                                class="flex-auto md:flex-initial whitespace-nowrap"
-                                                [label]="book.inventoryStatus === 'OUTOFSTOCK' ? 'Sold Out' : 'Comprar'"
-                                                [disabled]="book.inventoryStatus === 'OUTOFSTOCK'"
-                                                [routerLink]="['/editora/livro']"></p-button>
+                                            <a pButton [routerLink]="['/editora/livro', book.id]">Ver livro</a>
+                                            <a *ngIf="book.comercial?.podeComprar === true" pButton [routerLink]="['/loja/produto', book.comercial.produtoId]">
+                                                <i class="pi pi-shopping-cart" aria-hidden="true"></i> Comprar</a>
                                         </div>
                                     </div>
                                 </div>
@@ -148,23 +145,23 @@
                                         <i class="pi pi-tag"></i>
                                         <span class="font-semibold text-sm">{{ book.category }}</span>
                                     </div>
-                                    <p-tag [value]="book.inventoryStatus" [severity]="getSeverity(book)"></p-tag>
+                                    <p-tag [value]="situacao(book)" [severity]="getSeverity(book)"></p-tag>
                                 </div>
                                 <div class="flex flex-col items-center gap-4 py-4 flex-grow">
                                     <img class="w-8/12 shadow-md rounded object-cover" [src]="book.img" [alt]="book.title" />
                                     <div class="text-center">
                                         <div class="text-lg font-bold text-slate-800">{{ book.title }}</div>
+                                        <p *ngIf="book.comercial" class="text-sm text-slate-500">{{ book.comercial.sku }}</p>
                                         <div class="text-sm text-slate-500 mt-1 text-left" [innerHTML]="book.description | jsonDescription"></div>
                                     </div>
                                 </div>
                                 <div class="flex items-center justify-between mt-auto pt-4 border-t border-slate-100">
-                                    <span class="text-2xl font-bold text-emerald-600">{{ 'R$ ' + book.price }}</span>
+                                    <span *ngIf="preco(book)" class="text-2xl font-bold text-emerald-600">{{ preco(book) }}</span>
                                     <div class="flex gap-2">
                                         <p-button icon="pi pi-heart" severity="secondary" [outlined]="true"></p-button>
-                                        <!--
-                                        <p-button icon="pi pi-shopping-cart" class="flex-auto whitespace-nowrap" [disabled]="book.inventoryStatus === 'OUTOFSTOCK'"
-                                        [routerLink]="['/editora/livro', book.id]"></p-button>
-                                        -->
+                                        <a pButton [routerLink]="['/editora/livro', book.id]">Ver livro</a>
+                                        <a *ngIf="book.comercial?.podeComprar === true" pButton [routerLink]="['/loja/produto', book.comercial.produtoId]">
+                                            <i class="pi pi-shopping-cart" aria-hidden="true"></i> Comprar</a>
                                     </div>
                                 </div>
                             </div>

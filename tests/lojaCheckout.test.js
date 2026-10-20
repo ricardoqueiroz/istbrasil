@@ -13,6 +13,7 @@ import { criarLojaPagamentoService } from '../src/services/lojaPagamentoService.
 import { normalizarResultadoPagamento, normalizarReconciliacaoPagamento } from '../src/services/lojaPagamentoContratos.js';
 import { criarPagamentoSimulado } from './fixtures/lojaPagamentoSimulado.js';
 import { criarBancoPagamentoIsolado } from './fixtures/lojaPagamentoBancoIsolado.js';
+import { expandirCatalogoSintetico } from './fixtures/lojaCatalogoComercialFixture.js';
 
 const origem = 'http://localhost:4200';
 const config = criarConfiguracaoLojaSessao({ origens: [origem], segredoCsrf: Buffer.alloc(32, 31) });
@@ -81,6 +82,7 @@ test('checkout com pedidos, catalogo e financeiro reais em MariaDB descartavel; 
         VALUES(1,'Livro EN','{}',95.00,'BRL',1,'E-Book','Em estoque','sintetico-en.pdf'),
               (2,'Livro PT','{}',95.00,'BRL',1,'E-Book','Em estoque','sintetico-pt.pdf')`);
     await admin.query("INSERT INTO ist_loja_produtos(id,categoria_id,livro_id,sku) VALUES(1,1,1,'SKU-EN'),(2,1,2,'SKU-PT')");
+    await expandirCatalogoSintetico(admin);
     const sessoes = new Map(); const contexto = { provedor: 'simulado', ambiente: 'sandbox', contaRecebedora: 'recebedor-fixture' };
     // A fixture financeira força BIGINT como string; o pool real da aplicacao nao.
     // Espelhar as opcoes reais nas consultas do catalogo/pedidos, sem alterar a fixture.
@@ -152,7 +154,7 @@ test('checkout com pedidos, catalogo e financeiro reais em MariaDB descartavel; 
     });
     await t.test('preco oficial muda para novo pedido sem alterar snapshots nem replay anterior', async () => {
         const m = await preparar();
-        await admin.query('UPDATE ist_livros SET price=110.00 WHERE id=1');
+        await admin.query('UPDATE ist_loja_produtos SET preco_centavos=11000 WHERE id=1');
         try {
             const chave = randomUUID(); const entrada = { produtoIds: [1, 2], compradorEmail: 'visitante@example.invalid' };
             const novo = await pedidos.criarPedido(m.compra.sessao, entrada, chave);
@@ -160,6 +162,6 @@ test('checkout com pedidos, catalogo e financeiro reais em MariaDB descartavel; 
             assert.deepEqual(await pedidos.criarPedido(m.compra.sessao, entrada, chave), novo);
             const anterior = await m.enviar('estado', { pedidoPublicId: m.pedido.publicId }, m.token);
             assert.equal(anterior.body.pedido.totalCentavos, 19000);
-        } finally { await admin.query('UPDATE ist_livros SET price=95.00 WHERE id=1'); }
+        } finally { await admin.query('UPDATE ist_loja_produtos SET preco_centavos=9500 WHERE id=1'); }
     });
 });

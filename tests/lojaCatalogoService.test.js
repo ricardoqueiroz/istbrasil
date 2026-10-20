@@ -8,9 +8,12 @@ const preparar = () => {
         { id: 2, nome: 'Música', slug: 'musica', categoria_pai_id: 1, ativo: 1, ordem: 1 }
     ];
     const produtos = [1, 2].map((id) => ({ id, sku: `SKU${id}`, categoria_id: 2, ativo: 1,
+        livro_id: id, tipo: 'DIGITAL', em_venda: 1, disponivel: 1, preco_centavos: '9500', moeda: 'BRL',
+        titulo: `Livro ${id}`, descricao: '<script>alert(1)</script>Texto &amp; música\nSegunda linha',
+        imagem_url: 'assets/images/livros/capa.png', formato_editorial: 'E-Book',
         title: `Livro ${id}`, description: '<script>alert(1)</script>Texto &amp; música\nSegunda linha',
         language: id === 1 ? 'en-uk' : 'pt-br', img: 'assets/images/livros/capa.png',
-        price: '95.00', currency: 'BRL', onsale: 1, format: 'E-Book', inventory: 'Em estoque', arquivo_presente: 1,
+        price: '95.00', currency: 'BRL', onsale: 1, format: 'E-Book', inventory: 'Em estoque', versao_publicada: 1,
         file: '/privado/livro.pdf' }));
     const chamadas = [];
     const conexao = {
@@ -55,7 +58,7 @@ test('categoria órfã é inelegível', async () => {
     const { categorias, service } = preparar(); categorias[1].categoria_pai_id = 99;
     assert.deepEqual(await service.listarProdutos(), []);
 });
-for (const [campo, valor] of [['ativo', 0], ['onsale', 0], ['format', 'Livro Físico'], ['currency', 'USD'], ['inventory', 'Esgotado'], ['arquivo_presente', 0], ['price', '0.00'], ['price', '-1.00'], ['price', '95.001']]) {
+for (const [campo, valor] of [['ativo', 0], ['em_venda', 0], ['moeda', 'USD'], ['preco_centavos', null], ['preco_centavos', 0], ['preco_centavos', '-1'], ['preco_centavos', '95.001']]) {
     test(`produto inelegível: ${campo}=${valor}`, async () => {
         const { produtos, service } = preparar(); produtos[0][campo] = valor;
         assert.equal((await service.listarProdutos()).length, 1);
@@ -63,7 +66,7 @@ for (const [campo, valor] of [['ativo', 0], ['onsale', 0], ['format', 'Livro Fí
     });
 }
 test('poucas unidades permite venda; imagem não pública é omitida', async () => {
-    const { produtos, service } = preparar(); produtos[0].inventory = 'Poucas unidades'; produtos[0].img = '/privado/livro.pdf';
+    const { produtos, service } = preparar(); produtos[0].inventory = 'Poucas unidades'; produtos[0].imagem_url = '/privado/livro.pdf';
     assert.equal((await service.obterProduto(1)).imagemUrl, null);
 });
 test('DECIMAL é convertido exatamente, sem aceitar floats ou precisão indevida', () => {
@@ -99,4 +102,71 @@ test('filtro e ID inválidos são rejeitados antes do banco', async () => {
     const { service, chamadas } = preparar();
     assert.throws(() => service.listarProdutos(['musica']), { status: 400 });
     assert.throws(() => service.obterProduto(1.5), { status: 400 }); assert.deepEqual(chamadas, []);
+});
+
+test('SQL publico usa LEFT JOIN e somente produto para campos comerciais', async () => {
+    const a = preparar(); await a.service.listarProdutos();
+    const sql = a.chamadas.find(x => x.includes('FROM ist_loja_produtos'));
+    assert.match(sql, /FROM ist_loja_produtos p LEFT JOIN ist_livros l ON l.id = p.livro_id/);
+    assert.doesNotMatch(sql, /l\.(title|description|price|currency|img|inventory|onsale|file)/i);
+    assert.match(sql, /CAST\(p.preco_centavos AS CHAR\)/);
+});
+
+test('campos legados divergentes nunca substituem a autoridade comercial', async () => {
+    const a = preparar(); Object.assign(a.produtos[0], { title: 'LEGADO', description: 'LEGADO',
+        price: '0.01', currency: 'USD', img: '/legado.pdf', onsale: 0, inventory: 'Esgotado' });
+    const p = await a.service.obterProduto(1);
+    assert.equal(p.titulo, 'Livro 1'); assert.equal(p.precoCentavos, 9500); assert.equal(p.moeda, 'BRL');
+    assert.equal(p.imagemUrl, 'assets/images/livros/capa.png'); assert.equal(p.disponivel, true);
+    assert.notEqual(p.descricao, 'LEGADO');
+    delete a.produtos[0].preco_centavos;
+    assert.equal((await a.service.listarProdutos()).length, 1);
+});
+
+for (const campo of ['titulo', 'descricao', 'moeda', 'tipo', 'em_venda']) {
+    test(`campo comercial ausente nao recorre ao livro: ${campo}`, async () => {
+        const a = preparar(); delete a.produtos[0][campo];
+        await assert.rejects(a.service.obterProduto(1), { status: 404 });
+    });
+}
+
+for (const mudanca of [{ disponivel: 0 }, { tipo: 'MERCADORIA' }, { tipo: 'SERVICO' },
+    { livro_id: null, formato_editorial: null, versao_publicada: 0, language: null },
+    { versao_publicada: 0 }, { formato_editorial: 'Livro Físico' }]) {
+    test(`visibilidade nao autoriza compra: ${JSON.stringify(mudanca)}`, async () => {
+        const a = preparar(); Object.assign(a.produtos[0], mudanca);
+        const p = await a.service.obterProduto(1);
+        assert.equal(p.disponivel, false); assert.equal(p.precoCentavos, 9500);
+        if (mudanca.livro_id === null) { assert.equal(p.livroId, null); assert.equal(p.formatoEditorial, null); }
+        await assert.rejects(a.service.cotar({ itens: [{ produtoId: 1, quantidade: 1 }] }), { status: 422 });
+    });
+}
+
+for (const valor of [undefined, null, 0, -1, 1.5, NaN, Infinity, '1.0', '1e2', '9007199254740992', Number.MAX_SAFE_INTEGER + 1]) {
+    test(`centavos invalidos sem fallback: ${String(valor)}`, async () => {
+        const a = preparar(); a.produtos[0].preco_centavos = valor;
+        await assert.rejects(a.service.obterProduto(1), { status: 404 });
+    });
+}
+
+test('centavos seguros e soma com overflow controlado', async () => {
+    const a = preparar(); a.produtos[0].preco_centavos = String(Number.MAX_SAFE_INTEGER);
+    assert.equal((await a.service.obterProduto(1)).precoCentavos, Number.MAX_SAFE_INTEGER);
+    await assert.rejects(a.service.cotar({ itens: [{ produtoId: 1, quantidade: 1 }, { produtoId: 2, quantidade: 1 }] }), { status: 422 });
+});
+
+test('produtos 1, 2 e 6 preservam valores e novos DTOs sem campos privados', async () => {
+    const a = preparar(); a.produtos.push({ ...a.produtos[0], id: 6, livro_id: 3, sku: 'IST-SANDBOX-CHECKOUT-001', preco_centavos: '100' });
+    const ps = await a.service.listarProdutos();
+    assert.deepEqual(ps.map(p => [p.id,p.precoCentavos,p.tipo,p.livroId,p.formatoEditorial,p.disponivel]),
+        [[1,9500,'DIGITAL',1,'E-Book',true],[2,9500,'DIGITAL',2,'E-Book',true],[6,100,'DIGITAL',3,'E-Book',true]]);
+    for (const p of ps) assert.deepEqual(Object.keys(p).sort(), ['id','sku','titulo','descricao','categoria','idioma','imagemUrl',
+        'precoCentavos','moeda','tipo','livroId','formatoEditorial','disponivel','quantidadeMaxima'].sort());
+});
+
+test('descricao acima do limite de snapshot nao e truncada nem autoriza cotacao', async () => {
+    const a = preparar(); a.produtos[0].descricao = 'á'.repeat(32768);
+    const p = await a.service.obterProduto(1);
+    assert.equal(p.descricao, a.produtos[0].descricao); assert.equal(p.disponivel, false);
+    await assert.rejects(a.service.cotar({ itens: [{ produtoId: 1, quantidade: 1 }] }), { status: 422 });
 });

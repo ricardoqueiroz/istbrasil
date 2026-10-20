@@ -3,21 +3,32 @@ import { HttpClient } from '@angular/common/http';
 import { Observable } from 'rxjs';
 import { environment } from '../../environments/environment';
 
-export interface Book {
-  id: number;
-  onsale: number;
-  sku: string;
-  format: 'E-Book' | 'Livro Físico';
-  category: string;
-  language: string;
-  title: string;
-  descriptionDisplay?: string;
-  currency: string;
-  price: number;
-  img: string;
-  inventory: 'Em estoque' | 'Poucas unidades' | 'Esgotado';
-  inventoryStatus?: string;
+export interface BookComercial {
+  readonly produtoId: number;
+  readonly sku: string;
+  readonly precoCentavos: number | null;
+  readonly moeda: string;
+  readonly podeComprar: boolean;
 }
+
+export interface Book {
+  readonly id: number;
+  readonly title: string | null;
+  readonly description: string | null;
+  readonly language: string | null;
+  readonly format: string | null;
+  readonly img: string | null;
+  readonly category: string | null;
+  readonly comercial?: BookComercial | null;
+}
+
+// Apenas apresentacao: a autorizacao de compra continua sendo fornecida pela API.
+export const precoEditorial = (book: Book): string | null => {
+  const oferta = book.comercial;
+  return oferta && oferta.moeda === 'BRL' && typeof oferta.precoCentavos === 'number'
+    && Number.isSafeInteger(oferta.precoCentavos) && oferta.precoCentavos > 0
+    ? new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(oferta.precoCentavos / 100) : null;
+};
 
 @Injectable({
   providedIn: 'root'

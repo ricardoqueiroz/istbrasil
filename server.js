@@ -4,15 +4,6 @@ import cookieParser from 'cookie-parser';
 import path from 'path';
 import express from 'express';
 import bodyParser from "body-parser"; // Importação movida para cima por organização
-/* PAYPAL TEMPORARIAMENTE DESABILITADO.
- * Reativar somente após revisão da integração e configuração de produção.
-import {
-    Client,
-    Environment, // Importante
-    LogLevel,
-    OrdersController
-} from "@paypal/paypal-server-sdk";
-*/
 
 // Importação das rotas
 import bookRoutes from './src/routes/book.routes.js';
@@ -20,8 +11,6 @@ import lojaRoutes, { tratarErroLoja } from './src/routes/loja.routes.js';
 import releaseRoutes from './src/routes/releases.routes.js';
 import timelineRoutes from './src/routes/timeline.routes.js';
 import obraRoutes from './src/routes/obra.routes.js';
-// PAYPAL TEMPORARIAMENTE DESABILITADO.
-// import paypalRoutes from './src/routes/paypal.routes.js';
 import contactRoutes from './src/routes/contact.routes.js';
 import usuariosRoutes from './src/routes/usuarios.routes.js';
 import eventosRoutes from './src/routes/eventos.routes.js';
@@ -33,6 +22,7 @@ import { pool } from './src/config/db.js';
 import { iniciarRecuperacaoLoja, comporFinanceiroLoja } from './src/services/lojaPagamentoAgendador.js';
 import { criarLojaPaypalWebhookRouter } from './src/routes/lojaPaypalWebhook.routes.js';
 import { criarLojaCheckoutRouter } from './src/routes/lojaCheckout.routes.js';
+import { criarLojaDownloadsRouter } from './src/routes/lojaDownloads.routes.js';
 
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
@@ -49,6 +39,7 @@ const app = express();
 app.set('trust proxy', 'loopback');
 
 // Configurações
+app.use('/api/loja/downloads', criarLojaDownloadsRouter({ db: pool }));
 app.use(cors());
 app.use(cookieParser());
 let financeiroLoja;
@@ -64,55 +55,18 @@ app.use(express.json());
 app.use(bodyParser.json());
 app.use('/api', contactRoutes);
 
-/* PAYPAL TEMPORARIAMENTE DESABILITADO.
- * Reativar somente após revisão da integração e configuração de produção.
-// --- Configuração do Paypal ---
-const {
-    PAYPAL_CLIENT_ID,
-    PAYPAL_CLIENT_SECRET,
-    PAYPAL_ENV,
-    PAYPAL_ENABLED, // 'false' desativa Client SDK e rotas do PayPal para isolar problemas
-    NODE_ENV // Sugestão: Use uma variável de ambiente para definir se é PROD ou DEV
-} = process.env;
-
-const paypalEnabled = PAYPAL_ENABLED !== 'false';
-
-// Define o ambiente baseando-se em variável ou fixa para Production se for o caso
-const paypalEnvironment = (PAYPAL_ENV === 'production')
-    ? Environment.Production
-    : Environment.Sandbox;
-
-let paypalClient;
-
-if (paypalEnabled) {
-    const client = new Client({
-        clientCredentialsAuthCredentials: {
-            oAuthClientId: PAYPAL_CLIENT_ID,
-            oAuthClientSecret: PAYPAL_CLIENT_SECRET,
-        },
-        timeout: 0,
-        environment: paypalEnvironment, // <--- AQUI A MÁGICA ACONTECE
-        logging: {
-            logLevel: LogLevel.Info,
-            logRequest: { logBody: true },
-            logResponse: { logHeaders: true },
-        },
-    });
-
-    // Se você usa o ordersController dentro de paypal.routes.js,
-    // certifique-se de estar exportando ou passando este 'client' para lá.
-    // Se as rotas criam sua própria instância, verifique o arquivo paypal.routes.js também!
-    paypalClient = client;
-
-    app.use('/api/paypal', paypalRoutes); // Suas rotas reais do PayPal
-} else {
-    console.warn('[PayPal] Desativado via PAYPAL_ENABLED=false');
-}
-
-export { paypalClient };
-*/
 
 // --- Rotas ---
+// URLs comerciais antigas nunca devem cair em um fallback de pagina publica.
+app.use((req, res, next) => {
+    let caminho;
+    try { caminho = decodeURIComponent(req.path); } catch { return next(); }
+    if (/^\/(?:api\/)?istbrasil\.private\/products\/livros(?:\/|$)/i.test(caminho)
+        || /^\/api\/books\/download(?:\/|$)/i.test(caminho)) {
+        return res.status(404).set('Cache-Control', 'no-store').json({ erro: { codigo: 'ROTA_NAO_ENCONTRADA' } });
+    }
+    next();
+});
 app.use('/api/books', bookRoutes);
 app.use('/api/releases', releaseRoutes);
 app.use('/api/timeline', timelineRoutes);
@@ -127,12 +81,6 @@ app.use('/api/jurado', juradoRoutes);
 app.use('/istbrasil.private/projetos', projetosDocumentosRoutes);
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-
-const livrosPath = path.join(__dirname, '/istbrasil.private/products/livros/');
-app.use('/istbrasil.private/products/livros/', express.static(livrosPath));
-// Dica: Geralmente não se expõe a rota /api/ para arquivos estáticos, mas mantive sua lógica
-app.use('/api/istbrasil.private/products/livros/', express.static(livrosPath));
-console.log('Acessando arquivos privados em: ' + livrosPath);
 
 const documentosPath = path.join(__dirname, '/istbrasil.private/documents/');
 app.use('/istbrasil.private/documents/', express.static(documentosPath));
@@ -149,8 +97,6 @@ let recuperacaoLoja;
 const servidor = app.listen(PORT, () => {
     if (!encerrando) recuperacaoLoja = iniciarRecuperacaoLoja({ db: pool, obterFinanceiro: obterFinanceiroLoja });
     console.log(`Server running on port ${PORT}`);
-    // PAYPAL TEMPORARIAMENTE DESABILITADO.
-    // console.log(`Ambiente PayPal: ${paypalEnvironment === Environment.Production ? 'PRODUÇÃO (Dinheiro Real)' : 'SANDBOX (Teste)'}`);
 });
 
 let encerrando = false;

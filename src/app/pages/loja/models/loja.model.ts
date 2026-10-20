@@ -6,7 +6,13 @@ export interface LojaCategoria {
     readonly ordem: number;
 }
 
+export type LojaTipoProduto = 'DIGITAL' | 'MERCADORIA' | 'SERVICO';
+export const tipoProduto = (tipo: LojaTipoProduto): string => ({ DIGITAL: 'Digital', MERCADORIA: 'Mercadoria', SERVICO: 'Serviço' })[tipo];
+
 export interface LojaProduto {
+    readonly tipo: LojaTipoProduto;
+    readonly livroId: number | null;
+    readonly formatoEditorial: string | null;
     readonly id: number;
     readonly sku: string;
     readonly titulo: string | null;
