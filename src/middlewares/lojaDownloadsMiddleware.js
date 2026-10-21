@@ -1,5 +1,7 @@
 import {hashTokenSessao} from '../services/lojaSessaoService.js';
 import {lerCookieLoja,criarProtecaoLoja} from './lojaSessaoMiddleware.js';
+import {cookiesRecuperacao,csrfRecuperacaoValido} from './lojaRecuperacaoCsrf.js';
+import {hashSessaoRecuperada,normalizarAutoridadeDownload} from '../services/lojaDownloadAutoridade.js';
 
 export const erroDownload = codigo => Object.assign(new Error(codigo),{codigo});
 export const responderDownload = (res,status,body) => {
@@ -7,7 +9,7 @@ export const responderDownload = (res,status,body) => {
     res.status(status).type('application/json');
     res.end(res.req.method==='HEAD'?undefined:JSON.stringify(body));
 };
-export const criarMiddlewareDownloads = ({sessaoService,obterConfiguracaoSessao,agoraMs=Date.now}) => {
+export const criarMiddlewareDownloads = ({sessaoService,recuperacaoService,obterConfiguracaoSessao,agoraMs=Date.now}) => {
     const sessoes=new Map(),ips=new Map(),ativos=new Map();let ultimaLimpeza=0;
     const consumir=(map,chave,limite)=>{
         const now=agoraMs();
@@ -44,13 +46,21 @@ export const criarMiddlewareDownloads = ({sessaoService,obterConfiguracaoSessao,
         next();
     };
     const autenticar=async(req,res,next)=>{
-        const config=obterConfiguracaoSessao(),token=lerCookieLoja(req,config.cookie.nome);
+        const config=cookiesRecuperacao(obterConfiguracaoSessao());
+        // Presenca, nao validade: RECUPERACAO prevalece ate quando invalida/duplicada.
+        const recuperacao=typeof req.headers.cookie==='string'&&req.headers.cookie.split(';')
+            .some(p=>p.trim().startsWith(config.cookieRecuperacao+'='));
+        const token=lerCookieLoja(req,recuperacao?config.cookieRecuperacao:config.cookie.nome);
         const ip=ips.get(req.ip??'desconhecido');
         if(ip&&ip.ate>agoraMs()&&ip.n>=30)throw erroDownload('LIMITE_REQUISICOES');
-        try{res.locals.sessaoLoja=await sessaoService.obterSessao(token);}
+        try{
+            const a=normalizarAutoridadeDownload({tipo:recuperacao?'RECUPERACAO':'COMPRA',token});
+            res.locals.sessaoLoja=await (recuperacao?recuperacaoService:sessaoService).obterSessao(token);
+            res.locals.autoridadeDownload=a;
+        }
         catch(e){if(e.codigo==='SESSAO_INVALIDA')consumir(ips,req.ip??'desconhecido',30);throw e;}
-        res.locals.tokenDownload=token;
-        res.locals.chaveDownload=hashTokenSessao(token).toString('hex');next();
+        res.locals.tokenDownload=recuperacao?res.locals.autoridadeDownload:token;
+        res.locals.chaveDownload=recuperacao?'RECUPERACAO:'+hashSessaoRecuperada(token).toString('hex'):hashTokenSessao(token).toString('hex');next();
     };
     const limitar=(tipo,limite)=>(req,res,next)=>{
         consumir(sessoes,`${tipo}:${res.locals.chaveDownload}`,limite);next();
@@ -69,7 +79,14 @@ export const criarMiddlewareDownloads = ({sessaoService,obterConfiguracaoSessao,
         req.once('aborted',abortar);res.once('close',abortar);res.once('finish',liberar);
         res.locals.signalDownload=controller.signal;next();
     };
-    return {entrada,autenticar,limitar,entrega,protegerPost:protecao.protegerEscritaLoja};
+    const protegerPost=(req,res,next)=>{
+        if(res.locals.autoridadeDownload?.tipo!=='RECUPERACAO')return protecao.protegerEscritaLoja(req,res,next);
+        const c=cookiesRecuperacao(obterConfiguracaoSessao());
+        if(!c.origens.includes(req.get('Origin')))throw erroDownload('ORIGEM_INVALIDA');
+        if(!req.is('application/json')||Object.keys(req.query).length)throw erroDownload('SOLICITACAO_INVALIDA');
+        if(!csrfRecuperacaoValido(req,c,agoraMs))throw erroDownload('CSRF_INVALIDO');next();
+    };
+    return {entrada,autenticar,limitar,entrega,protegerPost};
 };
 
 export const tratarErroDownload = (e,req,res,next) => {

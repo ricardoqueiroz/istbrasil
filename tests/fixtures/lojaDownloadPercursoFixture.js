@@ -16,7 +16,8 @@ import {criarLojaDownloadAutorizacaoService} from '../../src/services/lojaDownlo
 import {criarLojaDownloadsRouter} from '../../src/routes/lojaDownloads.routes.js';
 import {prepararArquivoValidado} from '../../src/services/lojaDownloadArquivoService.js';
 
-export const criarPercursoDownload=async t=>{
+export const criarPercursoDownload=async(t,{host='127.0.0.1',porta=0,origens=['http://localhost:4200'],
+    relogio=()=>new Date('2026-01-01T12:00:00.000Z'),configurarApp}={})=>{
     process.env.NODE_ENV='test';
     const antigo=Boolean(process.env.IST_R2_10339_MANIFEST);
     const {criarBancoPagamentoIsolado}=await import(antigo?'./lojaCatalogoMariaDB10339.js':'./lojaPagamentoBancoIsolado.js');
@@ -36,7 +37,7 @@ export const criarPercursoDownload=async t=>{
     const raiz=await mkdtemp(path.join(tmpdir(),'ist-d6b4-percurso-'));t.after(()=>rm(raiz,{recursive:true,force:true}));
     const pdf=Buffer.from('%PDF-1.7\nPERCURSO INTEGRADO EXCLUSIVAMENTE SINTETICO\n%%EOF\n');
     await writeFile(path.join(raiz,'comprado.pdf'),pdf);
-    const arquivos=criarConfiguracaoArquivosLoja({raizPrivada:raiz}),agora=()=>new Date('2026-01-01T12:00:00.000Z');
+    const arquivos=criarConfiguracaoArquivosLoja({raizPrivada:raiz}),agora=relogio;
     const publicacao=arquivos.criarPublicacao({db:pool,agora});
     const versao=await publicacao.registrarRascunho({produtoId:1,registroPublicId:randomUUID(),arquivoLogicoId:randomUUID(),caminhoRelativo:'comprado.pdf'});
     await publicacao.publicar({produtoId:1,versaoPublicId:versao.versaoPublicId,publicacaoAtualEsperada:null});
@@ -53,9 +54,10 @@ export const criarPercursoDownload=async t=>{
     };}};
     const sessoes=criarLojaSessaoService({db,agora}),pedidos=criarLojaPedidoService({db,agora,contextoComercial:{ambienteBackend:'test',ambientePaypal:'sandbox'}});
     const contexto={provedor:'paypal',ambiente:'sandbox',contaRecebedora:'RECEBEDOR-SINTETICO'};
-    const config=criarConfiguracaoLojaSessao({origens:['http://localhost:4200'],segredoCsrf:Buffer.alloc(32,23)});
+    const config=criarConfiguracaoLojaSessao({origens,segredoCsrf:Buffer.alloc(32,23)});
     const autoriza=criarLojaDownloadAutorizacaoService({db,contextoEsperado:contexto,agora});
     const app=express();
+    await configurarApp?.(app,{db,pool,sessoes,config,agora,contexto});
     app.use((req,res,next)=>{
         const end=res.end;res.end=function(...args){
             if(this.getHeader('Content-Type')==='application/pdf'){
@@ -72,7 +74,7 @@ export const criarPercursoDownload=async t=>{
             assert.equal(estado.ativos.size,0,'Nao ler PDF sob transacao SQL');estado.log.push('PREPARACAO');
             const r=await prepararArquivoValidado(...args);if(estado.preparar)await estado.preparar();estado.log.push('PDF_VALIDADO');return r;
         }}));
-    const server=await new Promise(resolve=>{const s=app.listen(0,'127.0.0.1',()=>resolve(s));});
+    const server=await new Promise((resolve,reject)=>{const s=app.listen(porta,host,()=>resolve(s));s.once('error',reject);});
     t.after(async()=>{server.closeAllConnections();await new Promise(r=>server.close(r));});
     const base=`http://127.0.0.1:${server.address().port}/api/loja/downloads`;
     const compra=async()=>{

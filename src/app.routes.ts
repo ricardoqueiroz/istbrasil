@@ -15,6 +15,8 @@ import { juradoGuard } from './app/guards/jurado.guard';
 // import { LivroComponent } from './app/pages/editora/livro/livro.component';
 
 export const appRoutes: Routes = [
+    { path: 'loja/recuperar', data: { confirmar: true }, loadComponent: () => import('./app/pages/loja/loja-recuperacao.component').then(m => m.LojaRecuperacaoComponent) },
+    { path: 'loja/biblioteca/confirmar', data: { confirmar: true }, loadComponent: () => import('./app/pages/loja/loja-recuperacao.component').then(m => m.LojaRecuperacaoComponent) },
     { path: '', component: Landing },
     {
         path: 'disclaimers',
@@ -92,6 +94,14 @@ export const appRoutes: Routes = [
             {
                 path: 'produto/:id',
                 loadComponent: () => import('./app/pages/loja/loja-produto.component').then(m => m.LojaProdutoComponent)
+            },
+            {
+                path: 'biblioteca/recuperar',
+                loadComponent: () => import('./app/pages/loja/loja-recuperacao.component').then(m => m.LojaRecuperacaoComponent)
+            },
+            {
+                path: 'biblioteca',
+                loadComponent: () => import('./app/pages/loja/loja-biblioteca.component').then(m => m.LojaBibliotecaComponent)
             }
         ]
     },

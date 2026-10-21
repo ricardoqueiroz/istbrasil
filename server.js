@@ -23,6 +23,8 @@ import { iniciarRecuperacaoLoja, comporFinanceiroLoja } from './src/services/loj
 import { criarLojaPaypalWebhookRouter } from './src/routes/lojaPaypalWebhook.routes.js';
 import { criarLojaCheckoutRouter } from './src/routes/lojaCheckout.routes.js';
 import { criarLojaDownloadsRouter } from './src/routes/lojaDownloads.routes.js';
+import { criarLojaDownloadRecuperacaoRouter } from './src/routes/lojaDownloadRecuperacao.routes.js';
+import { comporEmailRecuperacao } from './src/services/lojaDownloadRecuperacaoSmtp.js';
 
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
@@ -39,6 +41,8 @@ const app = express();
 app.set('trust proxy', 'loopback');
 
 // Configurações
+app.use('/api/loja/downloads/recuperacao', criarLojaDownloadRecuperacaoRouter({ db: pool,
+    adaptadorEmail: comporEmailRecuperacao({ avisar: codigo => console.warn(codigo) }) }));
 app.use('/api/loja/downloads', criarLojaDownloadsRouter({ db: pool }));
 app.use(cors());
 app.use(cookieParser());

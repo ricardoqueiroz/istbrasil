@@ -33,7 +33,7 @@ describe('Integracao de navegacao da Loja', () => {
     it('registra uma unica Loja em AppLayout com catalogo exato e filhos lazy', () => {
         const lojas = appRoutes.filter((route) => route.path === 'loja');
         expect(lojas.length).toBe(1); expect(lojas[0].component).toBe(AppLayout);
-        expect(lojas[0].children?.map((route) => route.path)).toEqual(['', 'carrinho', 'produto/:id']);
+        expect(lojas[0].children?.map((route) => route.path)).toEqual(['', 'carrinho', 'produto/:id', 'biblioteca/recuperar', 'biblioteca']);
         expect(lojas[0].children?.[0].pathMatch).toBe('full');
         expect(lojas[0].children?.every((route) => !!route.loadComponent && !route.component)).toBeTrue();
     });

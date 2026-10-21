@@ -23,7 +23,8 @@ export const criarLojaDownloadsRouter=({db,env=process.env,agora,agoraMs,
             autorizacao:autorizacaoService??criarLojaDownloadAutorizacaoService({db,contextoEsperado:contexto,agora}),
             direitos:direitosService??criarLojaDownloadDireitosService({db,agora})};return servicos;
     };
-    const m=criarMiddlewareDownloads({sessaoService,obterConfiguracaoSessao,agoraMs});
+    const m=criarMiddlewareDownloads({sessaoService,obterConfiguracaoSessao,agoraMs,
+        recuperacaoService:{obterSessao:token=>obterServicos().autorizacao.obterSessaoRecuperada(token)}});
     const c=criarLojaDownloadsController({db,obterServicos,prepararArquivo,obterRaiz:()=>configuracaoArquivos.obterRaizValidada()});
     const router=express.Router();
     router.use(m.entrada,m.autenticar);

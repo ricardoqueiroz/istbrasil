@@ -43,7 +43,9 @@ export const criarLojaDownloadsController = ({db,obterServicos,prepararArquivo,o
             if(!req.body||Array.isArray(req.body)||Object.keys(req.body).length)throw erroDownload('SOLICITACAO_INVALIDA');
             const {autorizacao,direitos,contexto}=obterServicos(),token=res.locals.tokenDownload;
             const proprio=await autorizacao.localizarDireitoDaSessao(token,id);
-            await direitos.reavaliarDireitosDoPedido(proprio.pedidoId,contexto);
+            const guarda=res.locals.autoridadeDownload?.tipo==='RECUPERACAO'
+                ? {autorizarNaConexao:c=>autorizacao.autorizarReavaliacaoNaConexao(c,token,id,proprio.pedidoId)}:undefined;
+            await direitos.reavaliarDireitosDoPedido(proprio.pedidoId,contexto,guarda);
             const atual=await autorizacao.localizarDireitoDaSessao(token,id);
             responderDownload(res,200,{publicId:atual.publicId,estado:atual.estado});
         },

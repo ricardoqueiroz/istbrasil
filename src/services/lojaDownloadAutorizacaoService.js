@@ -1,7 +1,8 @@
 import sanitizeHtml from 'sanitize-html';
-import {criarLojaSessaoService,hashTokenSessao,tokenSessaoValido} from './lojaSessaoService.js';
+import {criarLojaSessaoService,hashTokenSessao} from './lojaSessaoService.js';
 import {uuidPagamento} from './lojaPagamentoContratos.js';
 import {avaliarElegibilidadeFinanceiraNaConexao} from './lojaDownloadFinanceiroService.js';
+import {normalizarAutoridadeDownload,bloquearSessaoRecuperada} from './lojaDownloadAutoridade.js';
 
 const codigos=new Set(['SESSAO_INVALIDA','ENTRADA_INVALIDA','DIREITO_NAO_ENCONTRADO','DIREITO_INDISPONIVEL',
     'FINANCEIRO_INDISPONIVEL','ARQUIVO_INDISPONIVEL','TRANSACAO_INVALIDA','AUTORIZACAO_INDISPONIVEL']);
@@ -29,22 +30,31 @@ export const criarLojaDownloadAutorizacaoService=({db,contextoEsperado,agora=()=
         if(Number(t?.transacao)!==1||t.isolamento!=='READ-COMMITTED')falhar('TRANSACAO_INVALIDA');
     };
     const autenticar=async(c,token)=>{
+        const autoridade=normalizarAutoridadeDownload(token);
+        if(autoridade.tipo==='RECUPERACAO')return bloquearSessaoRecuperada(c,autoridade.token,agora);
+        token=autoridade.token;
         const sessaoService=criarLojaSessaoService({db:{execute:(...args)=>c.query(...args)},agora});
         const sessao=await sessaoService.obterSessao(token),hash=hashTokenSessao(token);
         const [[s]]=await c.query('SELECT id FROM ist_loja_sessoes WHERE id=? AND token_hash=? FOR UPDATE',[sessao.id,hash]);
         if(!s||s.id!==sessao.id)falhar('SESSAO_INVALIDA');
         // O lock pode ter aguardado revogacao/expiracao: autenticar novamente.
         await sessaoService.obterSessao(token);
-        return {id:sessao.id,hash,conferir:()=>sessaoService.obterSessao(token)};
+        return {tipo:'COMPRA',id:sessao.id,hash,conferir:()=>sessaoService.obterSessao(token)};
     };
+    const consulta=s=>s.tipo==='RECUPERACAO'?{
+        vinculo:`${vinculo} JOIN ist_loja_download_recuperacao_direitos rd
+            ON rd.direito_id=d.id AND rd.arquivo_versao_id=d.arquivo_versao_id`,
+        filtro:'rd.recuperacao_id=?',params:[s.id]
+    }:{vinculo,filtro:'p.sessao_id=? AND s.token_hash=?',params:[s.id,s.hash]};
     const localizar=async(c,sessao,publicId)=>{
+        const q=consulta(sessao);
         const [[d]]=await c.query(`SELECT d.id,d.public_id,d.estado,d.versao,d.pedido_item_id,d.produto_id,d.arquivo_versao_id,
-            p.id pedido_id ${vinculo} WHERE d.public_id=? AND p.sessao_id=? AND s.token_hash=?`,[publicId,sessao.id,sessao.hash]);
+            p.id pedido_id,p.sessao_id ${q.vinculo} WHERE d.public_id=? AND ${q.filtro}`,[publicId,...q.params]);
         if(!d)falhar('DIREITO_NAO_ENCONTRADO');
         return d;
     };
     const comTransacao=async(token,operacao)=>{
-        if(!tokenSessaoValido(token))falhar('SESSAO_INVALIDA');
+        normalizarAutoridadeDownload(token);
         let c,iniciada=false,commitIniciado=false,isolamentoAnterior;
         try{
             c=await db.getConnection();
@@ -76,9 +86,10 @@ export const criarLojaDownloadAutorizacaoService=({db,contextoEsperado,agora=()=
         if(!Number.isInteger(limite)||limite<1||limite>50)falhar('ENTRADA_INVALIDA');
         if(apos!==null)apos=uuid(apos);
         return comTransacao(token,async(c,s)=>{
-            const [rows]=await c.query(`SELECT d.public_id,d.estado,i.titulo_snapshot ${vinculo}
-                WHERE p.sessao_id=? AND s.token_hash=? AND (? IS NULL OR d.public_id>?)
-                ORDER BY d.public_id LIMIT ?`,[s.id,s.hash,apos,apos,limite+1]);
+            const q=consulta(s);
+            const [rows]=await c.query(`SELECT d.public_id,d.estado,i.titulo_snapshot ${q.vinculo}
+                WHERE ${q.filtro} AND (? IS NULL OR d.public_id>?)
+                ORDER BY d.public_id LIMIT ?`,[...q.params,apos,apos,limite+1]);
             const pagina=rows.slice(0,limite);
             return {direitos:pagina.map(d=>({publicId:d.public_id,titulo:sanitizeHtml(d.titulo_snapshot,{allowedTags:[],allowedAttributes:{}}),
                 estado:d.estado,podeSolicitarArquivo:d.estado==='ATIVO'})),proximoCursor:rows.length>limite?pagina.at(-1).public_id:null};
@@ -94,7 +105,12 @@ export const criarLojaDownloadAutorizacaoService=({db,contextoEsperado,agora=()=
     };
     const autorizar=async(c,token,publicId)=>{
         await exigirTransacao(c);const s=await autenticar(c,token),descoberta=await localizar(c,s,publicId);
-        const [[p]]=await c.query('SELECT id FROM ist_loja_pedidos WHERE id=? AND sessao_id=? FOR UPDATE',[descoberta.pedido_id,s.id]);
+        const sessaoCompra=s.tipo==='RECUPERACAO'?descoberta.sessao_id:s.id;
+        if(s.tipo==='RECUPERACAO'){
+            const [[original]]=await c.query('SELECT id FROM ist_loja_sessoes WHERE id=? FOR UPDATE',[sessaoCompra]);
+            if(!original)falhar('DIREITO_NAO_ENCONTRADO');
+        }
+        const [[p]]=await c.query('SELECT id FROM ist_loja_pedidos WHERE id=? AND sessao_id=? FOR UPDATE',[descoberta.pedido_id,sessaoCompra]);
         if(!p)falhar('DIREITO_NAO_ENCONTRADO');
         await c.query('SELECT id FROM ist_loja_pagamentos WHERE pedido_id=? ORDER BY id FOR UPDATE',[p.id]);
         await c.query('SELECT id FROM ist_loja_pagamento_operacoes WHERE pedido_id=? ORDER BY id FOR UPDATE',[p.id]);
@@ -111,8 +127,9 @@ export const criarLojaDownloadAutorizacaoService=({db,contextoEsperado,agora=()=
         if(avaliacao.classificacao!=='ELEGIVEL'||avaliacao.elegivel!==true)falhar('FINANCEIRO_INDISPONIVEL');
         const ref=avaliacao.referencias?.direitos.find(d=>d.id===atual.id);
         if(!ref||ref.estado!=='ATIVO'||ref.versao!==atual.versao||ref.arquivoVersaoId!==atual.arquivo_versao_id)falhar('DIREITO_INDISPONIVEL');
+        const q=consulta(s);
         const [[v]]=await c.query(`SELECT v.id,v.produto_id,v.caminho_relativo,CAST(v.tamanho_bytes AS CHAR) tamanho_bytes,v.sha256,v.mime
-            ${vinculo} WHERE d.public_id=? AND p.sessao_id=? AND s.token_hash=?`,[publicId,s.id,s.hash]);
+            ${q.vinculo} WHERE d.public_id=? AND ${q.filtro}`,[publicId,...q.params]);
         if(!v||v.id!==atual.arquivo_versao_id||v.produto_id!==atual.produto_id||!inteiro(v.id)||v.mime!=='application/pdf'
             ||typeof v.caminho_relativo!=='string'||v.caminho_relativo.length>512
             ||!/^[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)*\.pdf$/.test(v.caminho_relativo)
@@ -123,8 +140,21 @@ export const criarLojaDownloadAutorizacaoService=({db,contextoEsperado,agora=()=
             arquivoVersaoId:v.id,caminhoRelativo:v.caminho_relativo,tamanhoBytes:v.tamanho_bytes,sha256:Buffer.from(v.sha256),mime:v.mime};
     };
     const autorizarArquivoNaConexao=async(c,token,publicId)=>{
-        if(!tokenSessaoValido(token))falhar('SESSAO_INVALIDA');publicId=uuid(publicId);
+        normalizarAutoridadeDownload(token);publicId=uuid(publicId);
         try{return await autorizar(c,token,publicId);}catch(e){seguro(e);}
     };
-    return Object.freeze({listarDireitosDaSessao,localizarDireitoDaSessao,autorizarArquivoNaConexao});
+    const obterSessaoRecuperada=token=>comTransacao({tipo:'RECUPERACAO',token},async(c,s)=>({id:s.id,tipo:s.tipo}));
+    const autorizarReavaliacaoNaConexao=async(c,autoridade,publicId,pedidoId)=>{
+        try{
+            const a=normalizarAutoridadeDownload(autoridade);
+            if(a.tipo!=='RECUPERACAO')falhar('SESSAO_INVALIDA');
+            const [[tx]]=await c.query('SELECT @@in_transaction transacao');
+            if(Number(tx?.transacao)!==1)falhar('TRANSACAO_INVALIDA');
+            const s=await autenticar(c,a),d=await localizar(c,s,uuid(publicId));
+            if(d.pedido_id!==pedidoId)falhar('DIREITO_NAO_ENCONTRADO');
+            await s.conferir();return [d.id];
+        }catch(e){seguro(e);}
+    };
+    return Object.freeze({listarDireitosDaSessao,localizarDireitoDaSessao,autorizarArquivoNaConexao,
+        obterSessaoRecuperada,autorizarReavaliacaoNaConexao});
 };

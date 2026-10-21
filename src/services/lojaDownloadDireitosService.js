@@ -94,10 +94,11 @@ export const criarLojaDownloadDireitosService = ({db,agora=()=>new Date()}={}) =
         }
         return {pedido:p,direitos};
     };
-    const reconciliar=async(pedidoId,esperado,efeitos)=>{
+    const reconciliar=async(pedidoId,esperado,efeitos,guarda)=>{
         let c,iniciada=false,commitIniciado=false;
         try{
             c=await conexaoLimpa();await c.beginTransaction();iniciada=true;
+            const permitidos=await guarda(c);
             const bloqueados=await bloquear(c,pedidoId,esperado);
             for(const x of efeitos){
                 const d=bloqueados.direitos.find(d=>d.id===x.direitoId);
@@ -109,21 +110,37 @@ export const criarLojaDownloadDireitosService = ({db,agora=()=>new Date()}={}) =
             }
             const avaliacao=await avaliarElegibilidadeFinanceiraNaConexao(c,pedidoId,esperado);
             if(!avaliacao.referencias)falhar('RESULTADO_DESCONHECIDO');
+            await guarda(c);
             // Retornar observacao atual; uma suspensao posterior nunca e sobrescrita.
             commitIniciado=true;await c.commit();iniciada=false;
-            return {avaliacao,transicoes:efeitos,direitos:bloqueados.direitos.map(d=>({id:d.id,estado:d.estado,versao:d.versao})),reconciliado:true};
+            return {avaliacao,transicoes:efeitos,direitos:bloqueados.direitos.filter(d=>!permitidos||permitidos.has(d.id))
+                .map(d=>({id:d.id,estado:d.estado,versao:d.versao})),reconciliado:true};
         }catch{if(c&&commitIniciado){destruir(c);c=null;}else if(c&&iniciada)try{await c.rollback();}catch{destruir(c);c=null;}falhar('RESULTADO_DESCONHECIDO');}
         finally{c?.release();}
     };
-    const reavaliarDireitosDoPedido=async(pedidoId,contextoEsperado)=>{
+    const reavaliarDireitosDoPedido=async(pedidoId,contextoEsperado,{autorizarNaConexao}={})=>{
         if(!id(pedidoId)||!contextoEsperado||contextoEsperado.provedor!=='paypal'||!['sandbox','live'].includes(contextoEsperado.ambiente)
             ||typeof contextoEsperado.contaRecebedora!=='string'||!/^[A-Za-z0-9-]{1,128}$/.test(contextoEsperado.contaRecebedora))falhar('CONTEXTO_INVALIDO');
         const esperado=Object.freeze({provedor:'paypal',ambiente:contextoEsperado.ambiente,contaRecebedora:contextoEsperado.contaRecebedora});
+        if(autorizarNaConexao!==undefined&&typeof autorizarNaConexao!=='function')falhar('AUTORIZACAO_INVALIDA');
+        let permissao;
+        // Guarda interna opcional: nunca fornecida por body/query. Primeiro lock
+        // e da recuperacao, inclusive em retry e reconciliacao de COMMIT incerto.
+        const guarda=async c=>{
+            if(!autorizarNaConexao)return null;
+            const ids=await autorizarNaConexao(c);
+            if(!Array.isArray(ids)||!ids.length||ids.length>50||ids.some(n=>!id(n))||new Set(ids).size!==ids.length)falhar('AUTORIZACAO_INVALIDA');
+            const assinatura=[...ids].sort((a,b)=>a-b).join(',');
+            if(permissao!==undefined&&permissao!==assinatura)falhar('AUTORIZACAO_INVALIDA');
+            permissao=assinatura;return new Set(ids);
+        };
         for(let tentativa=1;tentativa<=3;tentativa++){
             let c,iniciada=false,commitIniciado=false,efeitos=[],avaliacao;
             try{
                 c=await conexaoLimpa();await c.beginTransaction();iniciada=true;
+                const permitidos=await guarda(c);
                 const ctx=await bloquear(c,pedidoId,esperado);
+                await guarda(c);
                 // B1 sanitiza erros SQL; preservar apenas a categoria para rollback/retry.
                 let falhaLeitura;
                 avaliacao=await avaliarElegibilidadeFinanceiraNaConexao({query:async(...args)=>{
@@ -134,13 +151,16 @@ export const criarLojaDownloadDireitosService = ({db,agora=()=>new Date()}={}) =
                 if(avaliacao.referencias.direitos.length!==ctx.direitos.length)falhar('AVALIACAO_DIVERGENTE');
                 ctx.instante=utc(agora());
                 if(ctx.direitos.some(d=>ctx.instante+'000'<d.atualizado_em))falhar('RELOGIO_REGRESSIVO');
-                efeitos=await aplicarTransicoesNaConexao(c,avaliacao,ctx);
+                const direitosAlvo=ctx.direitos.filter(d=>!permitidos||permitidos.has(d.id));
+                if(permitidos&&direitosAlvo.length!==permitidos.size)falhar('AUTORIZACAO_INVALIDA');
+                efeitos=await aplicarTransicoesNaConexao(c,avaliacao,{...ctx,direitos:direitosAlvo});
+                await guarda(c);
                 commitIniciado=true;await c.commit();iniciada=false;
-                return {avaliacao,transicoes:efeitos,direitos:ctx.direitos.map(d=>{
+                return {avaliacao,transicoes:efeitos,direitos:direitosAlvo.map(d=>{
                     const x=efeitos.find(x=>x.direitoId===d.id);return {id:d.id,estado:x?.estado??d.estado,versao:x?.versao??d.versao};
                 }),reconciliado:false};
             }catch(e){
-                if(commitIniciado){destruir(c);c=null;return reconciliar(pedidoId,esperado,efeitos);}
+                if(commitIniciado){destruir(c);c=null;return reconciliar(pedidoId,esperado,efeitos,guarda);}
                 if(c&&iniciada)try{await c.rollback();}catch{destruir(c);c=null;falhar('RESULTADO_DESCONHECIDO');}
                 if(transitorio(e)){if(tentativa<3)continue;falhar('CONTENCAO_TEMPORARIA');}
                 if(e?.codigo)throw erro(e.codigo);falhar('ERRO_PERSISTENCIA');

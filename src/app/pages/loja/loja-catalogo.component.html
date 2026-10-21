@@ -3,6 +3,7 @@
         <div><p class="sobretitulo">Instituto Sebastião Tapajós</p><h1 id="catalogo-titulo">Loja Virtual</h1><p>Produtos do Instituto Sebastião Tapajós.</p></div>
         <a pButton [routerLink]="['/loja/carrinho']" class="p-button-outlined" data-testid="ir-carrinho"><i class="pi pi-shopping-bag" aria-hidden="true"></i><span>Carrinho ({{ carrinho.quantidadeTitulos() }})</span></a>
     </header>
+    <nav class="mb-4" aria-label="Biblioteca digital"><a routerLink="/loja/biblioteca">Minha biblioteca digital</a></nav>
     <section class="filtros" aria-label="Categorias do catálogo">
         <label for="loja-categoria">Categoria</label>
         <p-select inputId="loja-categoria" [options]="categorias()" optionLabel="nome" optionValue="slug" placeholder="Todas as categorias" [showClear]="true" [ngModel]="categoria()" (ngModelChange)="filtrar($event)" [loading]="carregandoCategorias()" [disabled]="carregandoCategorias() || !!erroCategorias()" />
