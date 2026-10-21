@@ -142,11 +142,84 @@ export const criarPersistenciaPagamento = ({ db, agora }) => {
         if (r.affectedRows !== 1 || r.warningStatus) throw erroPagamento('ERRO_INTERNO');
         Object.assign(e, campos);
     };
-    return { transacao, candidatosRecuperacao, contarRecuperacoes, localizarWebhook, eventoWebhook, atualizarWebhook };
+    const receberEventoAdverso = async (contexto, entrada) => {
+        const erroIngestao = codigo => Object.assign(new Error('Nao foi possivel registrar o evento.'), { codigo });
+        const chave = [contexto.provedor, contexto.ambiente, contexto.contaRecebedora, entrada.eventoId];
+        const selecionar = c => c.query(`SELECT id,conteudo_hash,estado,pagamento_id,evidencia_json FROM ist_loja_pagamento_eventos
+            WHERE provedor=? AND ambiente=? AND conta_recebedora=? AND origem='WEBHOOK' AND evento_id=? FOR UPDATE`, chave);
+        const conferir = e => {
+            if (!Buffer.isBuffer(e.conteudo_hash) || !e.conteudo_hash.equals(entrada.hash)) throw erroIngestao('EVENTO_CONTEUDO_DIVERGENTE');
+            return { eventoId: entrada.eventoId, duplicado: true, estado: e.estado, efeitoFinanceiroAplicado: false };
+        };
+        // Insercao concorrente pode perder a UNIQUE: repetir somente a leitura/
+        // insercao transacional, nunca aplicar efeitos financeiros.
+        for (let tentativa = 0; tentativa < 2; tentativa++) {
+            let c, iniciada = false, commitIniciado = false;
+            try {
+                c = await db.getConnection();
+                const [[s]] = await c.query('SELECT @@in_transaction transacao,@@autocommit autocommit');
+                if (Number(s?.transacao) !== 0 || Number(s?.autocommit) !== 1) {
+                    destruir(c); c = null; throw erroIngestao('CONEXAO_INVALIDA');
+                }
+                await c.query('SET TRANSACTION ISOLATION LEVEL READ COMMITTED');
+                await c.beginTransaction(); iniciada = true;
+                const [[existente]] = await selecionar(c);
+                let resultado;
+                if (existente) resultado = conferir(existente);
+                else {
+                    const { hash, capturasPorAmbiente, ...fatos } = entrada;
+                    const candidatos = [...new Set(capturasPorAmbiente[contexto.ambiente])];
+                    const outro = capturasPorAmbiente[contexto.ambiente === 'sandbox' ? 'live' : 'sandbox'];
+                    let pagamentoId = null;
+                    if (candidatos.length === 1 && !outro.length && !fatos.vinculoInvalido && fatos.reembolsoId) {
+                        fatos.capturaId = candidatos[0];
+                        const [ps] = await c.query(`SELECT id FROM ist_loja_pagamentos WHERE provedor=? AND ambiente=?
+                            AND conta_recebedora=? AND captura_externa_id=? LIMIT 2`, [...chave.slice(0, 3), fatos.capturaId]);
+                        if (ps.length === 1) { pagamentoId = ps[0].id; fatos.correlacao = 'CORRELACIONADO'; }
+                    } else if (candidatos.length > 1 || outro.length || fatos.vinculoInvalido) fatos.correlacao = 'CONTRADITORIA';
+                    const evidencia = JSON.stringify({ ...fatos, contexto: { ...contexto }, capturasPorAmbiente });
+                    if (Buffer.byteLength(evidencia, 'utf8') > 16384) throw erroIngestao('EVIDENCIA_EXCESSIVA');
+                    const instante = instantePagamento(agora().toISOString());
+                    const ctx = { c };
+                    await inserirPagamentoRegistro(ctx, 'ist_loja_pagamento_eventos', {
+                        pagamento_id: pagamentoId, provedor: contexto.provedor, ambiente: contexto.ambiente,
+                        conta_recebedora: contexto.contaRecebedora, origem: 'WEBHOOK', evento_id: entrada.eventoId,
+                        tipo: entrada.tipo, recurso_externo_id: entrada.recursoId, conteudo_hash: hash, evidencia_json: evidencia,
+                        estado: entrada.classificacao === 'DESCONHECIDO' ? 'IGNORADO' : 'RECEBIDO',
+                        ocorrido_em: entrada.ocorridoEm, recebido_em: instante, autenticado_em: instante, atualizado_em: instante
+                    });
+                    resultado = { eventoId: entrada.eventoId, duplicado: false,
+                        correlacao: fatos.correlacao, efeitoFinanceiroAplicado: false };
+                }
+                commitIniciado = true; await c.commit(); iniciada = false;
+                return resultado;
+            } catch (e) {
+                if (commitIniciado) {
+                    destruir(c); c = null;
+                    // COMMIT incerto: apenas observar identidade/hash duraveis em
+                    // nova conexao. Ausencia nao autoriza repetir cegamente.
+                    let leitura;
+                    try {
+                        leitura = await db.getConnection();
+                        const [[persistido]] = await selecionar(leitura);
+                        if (persistido) return { ...conferir(persistido), reconciliado: true };
+                    } catch (consulta) {
+                        if (consulta.codigo === 'EVENTO_CONTEUDO_DIVERGENTE') throw consulta;
+                    } finally { leitura?.release(); }
+                    throw erroPagamento('RESULTADO_DESCONHECIDO');
+                }
+                if (c && iniciada) try { await c.rollback(); } catch { destruir(c); c = null; throw erroPagamento('RESULTADO_DESCONHECIDO'); }
+                if (tentativa === 0 && (e.code === 'ER_DUP_ENTRY' || [1205,1213].includes(e.errno))) continue;
+                if (e.codigo) throw e;
+                throw erroIngestao('ERRO_PERSISTENCIA');
+            } finally { c?.release(); }
+        }
+    };
+    return { transacao, candidatosRecuperacao, contarRecuperacoes, localizarWebhook, eventoWebhook, atualizarWebhook, receberEventoAdverso };
 };
 
 const camposPermitidos = {
-    ist_loja_pagamentos: ['estado', 'reserva_ativa', 'encerrado_em', 'ordem_externa_id', 'captura_externa_id', 'capturado_centavos', 'capturado_em', 'motivo_revisao'],
+    ist_loja_pagamentos: ['estado', 'reserva_ativa', 'encerrado_em', 'ordem_externa_id', 'captura_externa_id', 'capturado_centavos', 'reembolsado_centavos', 'capturado_em', 'motivo_revisao'],
     ist_loja_pagamento_operacoes: ['estado', 'tentativas', 'execucao_token', 'execucao_ate', 'envio_iniciado_em', 'concluido_em', 'resultado_json', 'codigo_erro', 'proxima_tentativa_em'],
     ist_loja_pedidos: ['estado', 'pagamento_confirmado_em', 'motivo_revisao']
 };

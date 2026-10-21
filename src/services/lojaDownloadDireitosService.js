@@ -27,7 +27,7 @@ const decidir = (d,a) => {
     return motivo ? {estado:'SUSPENSO',motivo} : null;
 };
 
-// Somente a fachada chama este auxiliar, com avaliacao real e linhas bloqueadas.
+// Fachada D6 e integracao D8 usam avaliacao real e linhas bloqueadas.
 // Nao recebe decisao financeira por HTTP, nao abre transacao e nao faz COMMIT.
 const aplicarTransicoesNaConexao = async (c,avaliacao,contexto) => {
     const efeitos=[];
@@ -51,6 +51,59 @@ const aplicarTransicoesNaConexao = async (c,avaliacao,contexto) => {
         efeitos.push({direitoId:d.id,versao,anterior:d.estado,estado:alvo.estado,motivo:alvo.motivo,arquivoVersaoId:d.arquivo_versao_id});
     }
     return efeitos;
+};
+
+// Chamador ja detem sessao -> pedido -> pagamentos -> operacoes -> eventos.
+// Compartilhado com a fachada D6, sem reacquirir locks anteriores da cadeia.
+const bloquearDireitosNaConexao = async(c,pedidoId)=>{
+    const [ids]=await c.query(`SELECT d.id FROM ist_loja_download_direitos d JOIN ist_loja_pedido_itens i ON i.id=d.pedido_item_id
+        WHERE i.pedido_id=? ORDER BY d.id`,[pedidoId]);
+    const direitos=[];
+    for(const x of ids){
+        const [[d]]=await c.query(`SELECT ${camposDireito} FROM ist_loja_download_direitos WHERE id=? FOR UPDATE`,[x.id]);
+        if(!d)falhar('DIREITO_DIVERGENTE');direitos.push(d);
+    }
+    for(const d of direitos){
+        const [eventos]=await c.query(`SELECT direito_versao,estado_novo FROM ist_loja_download_direito_eventos
+            WHERE direito_id=? ORDER BY direito_versao FOR UPDATE`,[d.id]);
+        if(!eventos.length||eventos.at(-1).direito_versao!==d.versao||eventos.at(-1).estado_novo!==d.estado)falhar('HISTORICO_DIREITO_INCONSISTENTE');
+    }
+    return direitos;
+};
+
+// Interface interna D8: conexao transacional obrigatoria. Nao aceita uma decisao
+// financeira pronta; reavalia a persistencia real na mesma conexao. Nunca ativa.
+export const suspenderDireitosFinanceirosNaConexao = async(c,pedidoId,esperado,instante)=>{
+    const [[tx]]=await c.query('SELECT @@in_transaction transacao');
+    if(Number(tx?.transacao)!==1||!id(pedidoId))falhar('TRANSACAO_INVALIDA');
+    const direitos=await bloquearDireitosNaConexao(c,pedidoId);
+    let falhaLeitura;
+    const avaliacao=await avaliarElegibilidadeFinanceiraNaConexao({query:async(...args)=>{
+        try{return await c.query(...args);}catch(e){falhaLeitura=e;throw e;}
+    }},pedidoId,esperado);
+    if(falhaLeitura)throw falhaLeitura;
+    if(!avaliacao.referencias||avaliacao.referencias.pedidoId!==pedidoId
+        ||avaliacao.referencias.direitos.length!==direitos.length)falhar('AVALIACAO_INDISPONIVEL');
+    if(avaliacao.elegivel||!['ADVERSO','REVISAO','INCONSISTENTE'].includes(avaliacao.classificacao))falhar('EVIDENCIA_ADVERSA_AUSENTE');
+    const data=utc(instante);
+    if(direitos.some(d=>data+'000'<d.atualizado_em))falhar('RELOGIO_REGRESSIVO');
+    return {avaliacao,transicoes:await aplicarTransicoesNaConexao(c,avaliacao,{direitos,instante:data})};
+};
+
+// Somente confirmacao de resultado persistido, inclusive COMMIT incerto. Nunca
+// corrige historico, altera estado ou transforma prova ausente em sucesso.
+export const confirmarSuspensaoFinanceiraNaConexao = async(c,pedidoId,efeitos=[])=>{
+    const [[tx]]=await c.query('SELECT @@in_transaction transacao');
+    if(Number(tx?.transacao)!==1||!id(pedidoId))falhar('TRANSACAO_INVALIDA');
+    const direitos=await bloquearDireitosNaConexao(c,pedidoId);
+    if(direitos.some(d=>!['SUSPENSO','REVOGADO'].includes(d.estado)))falhar('SUSPENSAO_NAO_CONFIRMADA');
+    for(const x of efeitos){
+        const d=direitos.find(d=>d.id===x.direitoId);
+        const [[e]]=await c.query(`SELECT estado_anterior,estado_novo,origem,motivo_codigo
+            FROM ist_loja_download_direito_eventos WHERE direito_id=? AND direito_versao=?`,[x.direitoId,x.versao]);
+        if(!d||d.versao<x.versao||d.arquivo_versao_id!==x.arquivoVersaoId||!e
+            ||e.estado_anterior!==x.anterior||e.estado_novo!==x.estado||e.origem!=='FINANCEIRO'||e.motivo_codigo!==x.motivo)falhar('SUSPENSAO_NAO_CONFIRMADA');
+    }
 };
 
 export const criarLojaDownloadDireitosService = ({db,agora=()=>new Date()}={}) => {
@@ -79,19 +132,7 @@ export const criarLojaDownloadDireitosService = ({db,agora=()=>new Date()}={}) =
         const [evs]=await c.query(`SELECT e.id FROM ist_loja_pagamento_eventos e JOIN ist_loja_pagamentos p ON p.id=e.pagamento_id
             WHERE p.pedido_id=? ORDER BY e.id`,[pedidoId]);
         for(const e of evs)await c.query('SELECT id FROM ist_loja_pagamento_eventos WHERE id=? FOR UPDATE',[e.id]);
-        const [ids]=await c.query(`SELECT d.id FROM ist_loja_download_direitos d JOIN ist_loja_pedido_itens i ON i.id=d.pedido_item_id
-            WHERE i.pedido_id=? ORDER BY d.id`,[pedidoId]);
-        const direitos=[];
-        for(const x of ids){
-            const [[d]]=await c.query(`SELECT ${camposDireito} FROM ist_loja_download_direitos WHERE id=? FOR UPDATE`,[x.id]);
-            if(!d)falhar('DIREITO_DIVERGENTE');direitos.push(d);
-        }
-        // Evento da versao corrente deve existir; nao reparar historico ausente.
-        for(const d of direitos){
-            const [eventos]=await c.query(`SELECT direito_versao,estado_novo FROM ist_loja_download_direito_eventos
-                WHERE direito_id=? ORDER BY direito_versao FOR UPDATE`,[d.id]);
-            if(!eventos.length||eventos.at(-1).direito_versao!==d.versao||eventos.at(-1).estado_novo!==d.estado)falhar('HISTORICO_DIREITO_INCONSISTENTE');
-        }
+        const direitos=await bloquearDireitosNaConexao(c,pedidoId);
         return {pedido:p,direitos};
     };
     const reconciliar=async(pedidoId,esperado,efeitos,guarda)=>{

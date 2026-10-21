@@ -106,6 +106,20 @@ test('estado do direito nao e reescrito; versao retirada nao substitui o arquivo
         assert.equal(r.elegivel,true);assert.equal(r.referencias.direitos[0].estado,estado);}
 });
 
+for(const [classificacao,esperado]of [['REEMBOLSO_CONFIRMADO','ADVERSO'],['RISCO_DISPUTA','REVISAO'],
+    ['DISPUTA_ENCERRADA','REVISAO'],['INCOMPLETA','REVISAO'],['CONTRADITORIA','INCONSISTENTE']])test(`D8 evidencia normalizada ${classificacao} bloqueia sem reescrever direitos`,async()=>{
+    const b=base(),antes=structuredClone(b.direitos);
+    evento(b,{contrato:'IST_EVIDENCIA_ADVERSA_V1',eventoOrigem:'WH-TESTE',hashOrigem:'a'.repeat(64),contexto:ctx,
+        tipo:classificacao==='REEMBOLSO_CONFIRMADO'?'REEMBOLSO':'DISPUTA',recursoId:'RECURSO123',capturaId:b.r.capturaId,
+        classificacao,valorCentavos:'50',moeda:'BRL'});
+    b.eventos[0].tipo='EVIDENCIA_ADVERSA';
+    assert.equal((await avaliar(banco(b),1,ctx)).classificacao,esperado);assert.deepEqual(b.direitos,antes);
+});
+test('D8 evidencia normalizada invalida nunca permite elegibilidade',async()=>{
+    const b=base();evento(b,{});b.eventos[0].tipo='EVIDENCIA_ADVERSA';
+    assert.equal((await avaliar(banco(b),1,ctx)).classificacao,'INCONSISTENTE');
+});
+
 test('avaliador em MariaDB descartavel: SQL real, somente leitura e integridade',{
     skip:!process.env.IST_LOJA_PAGAMENTOS_MARIADB_BIN&&!process.env.IST_R2_10339_MANIFEST,timeout:120000
 },async t=>{

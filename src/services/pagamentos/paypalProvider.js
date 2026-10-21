@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { projetarRecursoAdversoPaypal, idAdverso } from '../lojaPagamentoAdversoContratos.js';
 import { centavosPagamento, criarFalhaPagamento, classificarFalhaPagamento, erroPagamento, idExterno,
     instantePagamento, normalizarResultadoPagamento, normalizarReconciliacaoPagamento, uuidPagamento } from '../lojaPagamentoContratos.js';
 
@@ -387,6 +388,26 @@ export const criarPaypalProvider = ({ env = process.env, http = axios.create(), 
         return concluir();
     };
     return Object.freeze({
+        // D8: GETs fixos; resposta projetada sem dados pessoais. Sem efeito financeiro.
+        async consultarEvidenciaAdversa({ tipo, recursoId, ambiente, signal } = {}) {
+            const caminhos = { REEMBOLSO: '/v2/payments/refunds/', DISPUTA: '/v1/customer/disputes/', CAPTURA: '/v2/payments/captures/' };
+            if (!Object.hasOwn(caminhos, tipo) || ambiente !== 'sandbox' || !idAdverso(recursoId)
+                || (signal && typeof signal.addEventListener !== 'function')) falhar('VALIDACAO_LOCAL', 'NAO_ENVIADO');
+            if (signal?.aborted) falhar('INFRAESTRUTURA', 'NAO_ENVIADO');
+            const acesso = await obterToken();
+            if (signal?.aborted) falhar('INFRAESTRUTURA', 'NAO_ENVIADO');
+            let resposta;
+            try { resposta = await requisitar({ method: 'GET', url: caminhos[tipo] + recursoId, signal,
+                headers: { Authorization: `Bearer ${acesso}`, Accept: 'application/json' } }); }
+            catch { falhar('INFRAESTRUTURA', 'INDETERMINADO'); }
+            if (resposta?.status === 401) {
+                if (token === acesso) { token = null; validoAte = 0; }
+                falhar('AUTENTICACAO', 'ENVIADO');
+            }
+            if (resposta?.status !== 200) falhar('INFRAESTRUTURA', 'ENVIADO');
+            try { return projetarRecursoAdversoPaypal(tipo, resposta.data); }
+            catch { falhar('RESPOSTA_INVALIDA', 'ENVIADO'); }
+        },
         async verificarWebhook({ corpo, cabecalhos, webhookId } = {}) {
             const limitado = (v, max) => typeof v === 'string' && v.length > 0 && v.length <= max && !/[\r\n]/.test(v);
             if (!limitado(webhookId, 128) || !/^[A-Za-z0-9-]+$/.test(webhookId)

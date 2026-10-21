@@ -1,5 +1,7 @@
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { pedidoPublico } from './lojaPedidoContratos.js';
+import { normalizarEventoAdversoPaypal } from './lojaPaypalEventoAdverso.js';
+import { criarLojaPagamentoAdversoService } from './lojaPagamentoAdversoService.js';
 import { criarPersistenciaPagamento, inserirPagamentoRegistro as inserir, atualizarPagamentoRegistro as atualizar } from './lojaPagamentoPersistencia.js';
 import { camposExatos, centavosPagamento, erroPagamento, hashPagamento, idExterno, instantePagamento,
     normalizarResultadoPagamento, normalizarReconciliacaoPagamento, criarFalhaPagamento, classificarFalhaPagamento, pagamentoPublico, uuidPagamento, validarTransicaoPagamento } from './lojaPagamentoContratos.js';
@@ -474,5 +476,18 @@ export const criarLojaPagamentoService = ({ db, adaptador, contexto, agora = () 
             return { pedido, pagamento: pg ? pagamentoPublico(pg, ctx.pedido) : null, ordemId: pg?.ordem_externa_id ?? null };
         });
     };
-    return Object.freeze({ criarTentativa, capturar, reconciliar, recuperarPendencias, reconciliarWebhook, consultarCheckout });
+    // Entrada interna: somente o processador de webhook apos verificar assinatura.
+    // Ingestao separada: nao executa reconciliacao, captura ou transicao financeira.
+    const receberEventoAdverso = async ({ evento, corpo } = {}) => {
+        if (contexto.provedor !== 'paypal' || !Buffer.isBuffer(corpo) || !corpo.length || corpo.length > 65536) falhar('SOLICITACAO_INVALIDA');
+        let original;
+        try { original = JSON.parse(corpo.toString('utf8')); } catch { falhar('SOLICITACAO_INVALIDA'); }
+        if (!original || !idExterno(original.id) || typeof original.event_type !== 'string'
+            || !/^[A-Z0-9_.]{1,128}$/.test(original.event_type) || evento?.id !== original.id
+            || evento?.event_type !== original.event_type
+            || ['PAYMENT.CAPTURE.COMPLETED','PAYMENT.CAPTURE.PENDING','PAYMENT.CAPTURE.DENIED'].includes(original.event_type)) falhar('SOLICITACAO_INVALIDA');
+        return persistencia.receberEventoAdverso(contexto, normalizarEventoAdversoPaypal(original, corpo));
+    };
+    const { reconciliarEventoAdverso } = criarLojaPagamentoAdversoService({ db, adaptador, contexto, agora });
+    return Object.freeze({ criarTentativa, capturar, reconciliar, recuperarPendencias, reconciliarWebhook, consultarCheckout, receberEventoAdverso, reconciliarEventoAdverso });
 };

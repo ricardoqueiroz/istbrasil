@@ -17,7 +17,7 @@ import {criarLojaDownloadsRouter} from '../../src/routes/lojaDownloads.routes.js
 import {prepararArquivoValidado} from '../../src/services/lojaDownloadArquivoService.js';
 
 export const criarPercursoDownload=async(t,{host='127.0.0.1',porta=0,origens=['http://localhost:4200'],
-    relogio=()=>new Date('2026-01-01T12:00:00.000Z'),configurarApp}={})=>{
+    relogio=()=>new Date('2026-01-01T12:00:00.000Z'),configurarApp,raizTemporariaBase=tmpdir()}={})=>{
     process.env.NODE_ENV='test';
     const antigo=Boolean(process.env.IST_R2_10339_MANIFEST);
     const {criarBancoPagamentoIsolado}=await import(antigo?'./lojaCatalogoMariaDB10339.js':'./lojaPagamentoBancoIsolado.js');
@@ -34,7 +34,7 @@ export const criarPercursoDownload=async(t,{host='127.0.0.1',porta=0,origens=['h
     await a.query("INSERT INTO ist_livros(id,title,description,price,currency,onsale,format,inventory,file) VALUES(1,'Sintetico','{}',95.00,'BRL',1,'E-Book','Em estoque',NULL)");
     await a.query("INSERT INTO ist_loja_produtos(id,categoria_id,livro_id,sku) VALUES(1,1,1,'SINT-1')");
     await expandirCatalogoSintetico(a,{publicar:false});
-    const raiz=await mkdtemp(path.join(tmpdir(),'ist-d6b4-percurso-'));t.after(()=>rm(raiz,{recursive:true,force:true}));
+    const raiz=await mkdtemp(path.join(raizTemporariaBase,'ist-d6b4-percurso-'));t.after(()=>rm(raiz,{recursive:true,force:true}));
     const pdf=Buffer.from('%PDF-1.7\nPERCURSO INTEGRADO EXCLUSIVAMENTE SINTETICO\n%%EOF\n');
     await writeFile(path.join(raiz,'comprado.pdf'),pdf);
     const arquivos=criarConfiguracaoArquivosLoja({raizPrivada:raiz}),agora=relogio;

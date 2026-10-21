@@ -1,4 +1,5 @@
 import { normalizarResultadoPagamento, normalizarReconciliacaoPagamento } from './lojaPagamentoContratos.js';
+import { validarEvidenciaAdversa } from './lojaPagamentoAdversoContratos.js';
 
 const id = n => Number.isInteger(n) && n > 0 && n <= 4294967295;
 const centavos = v => {
@@ -52,7 +53,7 @@ export const avaliarElegibilidadeFinanceiraNaConexao = async (conexao, pedidoId,
             ${instante('envio_iniciado_em')},${instante('concluido_em')}
             FROM ist_loja_pagamento_operacoes WHERE pedido_id=? ORDER BY id`, [pedidoId]);
         const [eventos] = await conexao.query(`SELECT e.id,e.pagamento_id,e.provedor,e.ambiente,e.conta_recebedora,
-            e.origem,e.tipo,e.estado,e.evidencia_json FROM ist_loja_pagamento_eventos e
+            e.origem,e.tipo,e.estado,e.codigo_erro,e.evidencia_json FROM ist_loja_pagamento_eventos e
             JOIN ist_loja_pagamentos pg ON pg.id=e.pagamento_id WHERE pg.pedido_id=? ORDER BY e.id`, [pedidoId]);
         const [itens] = await conexao.query(`SELECT id,produto_id,posicao,tipo_snapshot,quantidade,
             CAST(preco_unitario_centavos AS CHAR) preco_unitario_centavos,CAST(subtotal_centavos AS CHAR) subtotal_centavos
@@ -124,7 +125,9 @@ export const avaliarElegibilidadeFinanceiraNaConexao = async (conexao, pedidoId,
             }
         }
         if (pg) {
-            if (pg.estado !== 'CAPTURADO') conflito('CAPTURA_NAO_CONFIRMADA');
+            // Revisao/efeitos posteriores nao apagam a captura historica. Esses
+            // estados ja bloqueiam elegibilidade por revisao ou evidencia adversa.
+            if (!['CAPTURADO','REVISAO','PARCIALMENTE_REEMBOLSADO','REEMBOLSADO','ESTORNADO'].includes(pg.estado)) conflito('CAPTURA_NAO_CONFIRMADA');
             if (pg.provedor !== contextoEsperado.provedor || pg.ambiente !== contextoEsperado.ambiente
                 || pg.conta_recebedora !== contextoEsperado.contaRecebedora) conflito('PAGAMENTO_CONTEXTO_DIVERGENTE');
             if (!externo(pg.ordem_externa_id) || !externo(pg.captura_externa_id)) falta('IDENTIFICADORES_EXTERNOS_AUSENTES');
@@ -149,9 +152,22 @@ export const avaliarElegibilidadeFinanceiraNaConexao = async (conexao, pedidoId,
             const alvo=pagamentos.find(x=>x.id===e.pagamento_id);
             if (!alvo || e.provedor!==alvo.provedor || e.ambiente!==alvo.ambiente || e.conta_recebedora!==alvo.conta_recebedora) { conflito('EVENTO_CONTEXTO_DIVERGENTE'); continue; }
             if (e.tipo==='REVISAO_FINANCEIRA') { revisao=true; motivos.add('REVISAO_FINANCEIRA'); }
+            if (e.origem==='RECONCILIACAO' && ['EVIDENCIA_ADVERSA','REEMBOLSO_COMPROVADO'].includes(e.tipo)) {
+                try {
+                    const f=validarEvidenciaAdversa(json(e.evidencia_json),alvo,contextoEsperado);
+                    if(e.estado!=='PROCESSADO')falta('AVALIACAO_ADVERSA_NAO_CONCLUIDA');
+                    if(f.classificacao==='REEMBOLSO_CONFIRMADO')adverso('REEMBOLSO_CONFIRMADO_PERSISTIDO');
+                    else if(f.classificacao==='CONTRADITORIA')conflito('EVIDENCIA_ADVERSA_CONTRADITORIA');
+                    else {revisao=true;motivos.add(f.classificacao==='RISCO_DISPUTA'?'RISCO_DISPUTA_PERSISTIDO':'EVIDENCIA_ADVERSA_EM_REVISAO');}
+                } catch {conflito('EVIDENCIA_ADVERSA_INVALIDA');}
+                continue;
+            }
             if (e.origem==='WEBHOOK') {
                 // Assinatura valida nao e prova financeira; payload nao e resultado normalizado.
-                if (e.estado !== 'PROCESSADO') { pendente=true; motivos.add('WEBHOOK_PROCESSAMENTO_PENDENTE'); }
+                if(e.estado==='REVISAO'){
+                    if(e.codigo_erro==='D8_EVIDENCIA_CONTRADITORIA')conflito('EVIDENCIA_ADVERSA_CONTRADITORIA');
+                    else {revisao=true;motivos.add('WEBHOOK_EM_REVISAO');}
+                }else if (e.estado !== 'PROCESSADO') { pendente=true; motivos.add('WEBHOOK_PROCESSAMENTO_PENDENTE'); }
                 continue;
             }
             if (!['API','RECONCILIACAO'].includes(e.origem) || !['CAPTURADO','PENDENTE','DESCONHECIDO','RECUSADO','APROVADO','AGUARDANDO_APROVACAO','CANCELADO','EXPIRADO'].includes(e.tipo)) continue;

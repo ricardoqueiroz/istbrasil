@@ -46,8 +46,12 @@ test('Webhook ID ausente desabilita sem OAuth, banco ou instanciacao financeira'
     const p = criarProcessadorWebhookPayPal({ obterWebhookId: () => undefined, obterFinanceiro() { assert.fail(); } });
     await assert.rejects(p({ corpo: corpo(), cabecalhos }), { status: 503 });
 });
-test('evento autenticado desconhecido e ignorado sem reconciliacao', async () => {
-    const m = montar(); await processador(m, { reconciliarWebhook() { assert.fail(); } })({ corpo: corpo('OTHER.EVENT'), cabecalhos });
+test('evento autenticado desconhecido e persistido explicitamente sem reconciliacao', async () => {
+    let recebidos = 0;
+    const m = montar(); await processador(m, { reconciliarWebhook() { assert.fail(); }, async receberEventoAdverso(w) {
+        recebidos++; assert.equal(w.evento.event_type, 'OTHER.EVENT'); assert.deepEqual(w.corpo, corpo('OTHER.EVENT'));
+    } })({ corpo: corpo('OTHER.EVENT'), cabecalhos });
+    assert.equal(recebidos, 1);
     assert.equal(m.chamadas.length, 2);
 });
 for (const tipo of ['COMPLETED', 'PENDING', 'DENIED']) test(`evento ${tipo} apenas direciona reconciliacao, sem sessao ou valores do payload`, async () => {
