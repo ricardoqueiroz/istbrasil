@@ -2,6 +2,8 @@ import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { pedidoPublico } from './lojaPedidoContratos.js';
 import { normalizarEventoAdversoPaypal } from './lojaPaypalEventoAdverso.js';
 import { criarLojaPagamentoAdversoService } from './lojaPagamentoAdversoService.js';
+import { criarLojaPagamentoAdversoWorker } from './lojaPagamentoAdversoWorker.js';
+import { criarLojaDescobertaService } from './lojaDescobertaService.js';
 import { criarPersistenciaPagamento, inserirPagamentoRegistro as inserir, atualizarPagamentoRegistro as atualizar } from './lojaPagamentoPersistencia.js';
 import { camposExatos, centavosPagamento, erroPagamento, hashPagamento, idExterno, instantePagamento,
     normalizarResultadoPagamento, normalizarReconciliacaoPagamento, criarFalhaPagamento, classificarFalhaPagamento, pagamentoPublico, uuidPagamento, validarTransicaoPagamento } from './lojaPagamentoContratos.js';
@@ -489,5 +491,16 @@ export const criarLojaPagamentoService = ({ db, adaptador, contexto, agora = () 
         return persistencia.receberEventoAdverso(contexto, normalizarEventoAdversoPaypal(original, corpo));
     };
     const { reconciliarEventoAdverso } = criarLojaPagamentoAdversoService({ db, adaptador, contexto, agora });
-    return Object.freeze({ criarTentativa, capturar, reconciliar, recuperarPendencias, reconciliarWebhook, consultarCheckout, receberEventoAdverso, reconciliarEventoAdverso });
+    let worker;
+    const obterWorker=()=>worker??=criarLojaPagamentoAdversoWorker({db,contexto,agora,reconciliar:reconciliarEventoAdverso});
+    const processarEventosAdversos=opcoes=>obterWorker().processar(opcoes);
+    const diagnosticarEventosAdversos=()=>obterWorker().diagnosticar();
+    let descoberta,inicioDescoberta;
+    const descobrirEventosAdversos=({fonte,desde,signal}={})=>{
+        if(descoberta&&inicioDescoberta!==desde)throw erroPagamento('CONFIGURACAO_INVALIDA');
+        if(!descoberta){descoberta=criarLojaDescobertaService({db,adaptador,contexto,desde,agora});inicioDescoberta=desde;}
+        return descoberta.executar({fonte,signal});
+    };
+    return Object.freeze({ criarTentativa, capturar, reconciliar, recuperarPendencias, reconciliarWebhook, consultarCheckout, receberEventoAdverso, reconciliarEventoAdverso,
+        processarEventosAdversos,diagnosticarEventosAdversos,descobrirEventosAdversos });
 };

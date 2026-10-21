@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { criarPaypalProvider } from '../src/services/pagamentos/paypalProvider.js';
 import { projetarRecursoAdversoPaypal, validarEvidenciaAdversa } from '../src/services/lojaPagamentoAdversoContratos.js';
+import {classificarFalhaPagamento} from '../src/services/lojaPagamentoContratos.js';
 
 const env={IST_LOJA_PAYPAL_ENV:'sandbox',IST_LOJA_PAYPAL_CLIENT_ID:'fixture',IST_LOJA_PAYPAL_CLIENT_SECRET:'fixture-secret'};
 const montar=(resposta)=>{
@@ -37,6 +38,13 @@ for(const status of [401,404,429,500])test(`GET HTTP ${status} sanitizado, sem t
     const m=montar({status,data:{message:'SEGREDO'}});
     await assert.rejects(m.provider.consultarEvidenciaAdversa({tipo:'REEMBOLSO',recursoId:'REFUND123',ambiente:'sandbox'}),e=>
         !/SEGREDO|fixture-secret|fixture-token/.test(e.message)&&!e.response);
+});
+test('D9 401/403 pausam autenticacao; 404 e contrato; 429/5xx sao transitorios',async()=>{
+    for(const [status,categoria]of [[401,'AUTENTICACAO'],[403,'AUTENTICACAO'],[404,'RESPOSTA_INVALIDA'],[429,'INFRAESTRUTURA'],[503,'INFRAESTRUTURA']]){
+        const m=montar({status,data:{message:'SEGREDO'}});
+        await assert.rejects(m.provider.consultarEvidenciaAdversa({tipo:'REEMBOLSO',recursoId:'REFUND123',ambiente:'sandbox'}),e=>
+            classificarFalhaPagamento(e).categoria===categoria&&!e.message.includes('SEGREDO'));
+    }
 });
 test('montante ausente, negativo, fracao excessiva e overflow ficam ausentes',()=>{
     for(const v of [undefined,'-1.00','0.001','90071992547409.92']){

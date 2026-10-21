@@ -19,7 +19,7 @@ import projetosDocumentosRoutes from './src/routes/projetosDocumentos.routes.js'
 import adminRoutes from './src/routes/admin.routes.js';
 import juradoRoutes from './src/routes/jurado.routes.js';
 import { pool } from './src/config/db.js';
-import { iniciarRecuperacaoLoja, comporFinanceiroLoja } from './src/services/lojaPagamentoAgendador.js';
+import { iniciarRecuperacaoLoja, iniciarWorkerAdversoLoja, iniciarDescobertaLoja, comporFinanceiroLoja } from './src/services/lojaPagamentoAgendador.js';
 import { criarLojaPaypalWebhookRouter } from './src/routes/lojaPaypalWebhook.routes.js';
 import { criarLojaCheckoutRouter } from './src/routes/lojaCheckout.routes.js';
 import { criarLojaDownloadsRouter } from './src/routes/lojaDownloads.routes.js';
@@ -98,8 +98,12 @@ app.get('/', (req, res) => {
 // --- Inicialização do Servidor (APENAS UMA VEZ) ---
 const PORT = process.env.PORT || 3000;
 let recuperacaoLoja;
+let workerAdversoLoja;
+let descobertaLoja;
 const servidor = app.listen(PORT, () => {
     if (!encerrando) recuperacaoLoja = iniciarRecuperacaoLoja({ db: pool, obterFinanceiro: obterFinanceiroLoja });
+    if (!encerrando) workerAdversoLoja = iniciarWorkerAdversoLoja({db:pool,obterFinanceiro:obterFinanceiroLoja});
+    if (!encerrando) descobertaLoja = iniciarDescobertaLoja({db:pool,obterFinanceiro:obterFinanceiroLoja});
     console.log(`Server running on port ${PORT}`);
 });
 
@@ -107,7 +111,7 @@ let encerrando = false;
 const encerrar = () => {
     if (encerrando) return;
     encerrando = true;
-    const recuperacaoEncerrada = recuperacaoLoja?.parar() ?? Promise.resolve();
+    const recuperacaoEncerrada = Promise.all([recuperacaoLoja?.parar(),workerAdversoLoja?.parar(),descobertaLoja?.parar()]);
     servidor.close(() => {
         recuperacaoEncerrada.then(() => process.exit(0), () => process.exit(1));
     });

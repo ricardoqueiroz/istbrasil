@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { projetarDetalhesDisputaPaypal } from './lojaPagamentoAdversoContratos.js';
 
 // Contratos e limitacoes: docs/loja-paypal-eventos-d8-b1.md.
 const id = v => typeof v === 'string' && /^[A-Za-z0-9-]{1,128}$/.test(v) ? v : null;
@@ -48,6 +49,7 @@ export const normalizarEventoAdversoPaypal = (evento, corpo) => {
         ...montante(refund ? r.amount : disputa ? r.dispute_amount : null),
         estadoRecurso: refund || disputa ? codigo(r.status) : null,
         desfechoDisputa: disputa ? codigo(r.dispute_outcome?.outcome_code) : null,
+        ...(disputa?{detalhesDisputa:projetarDetalhesDisputaPaypal(r)}:{}),
         ocorridoEm: instante(evento.create_time),
         evidenciaOriginal: { resource_type: ['refund','dispute','capture'].includes(evento.resource_type) ? evento.resource_type : null,
             resource_version: /^\d{1,2}\.\d{1,2}$/.test(evento.resource_version ?? '') ? evento.resource_version : null,

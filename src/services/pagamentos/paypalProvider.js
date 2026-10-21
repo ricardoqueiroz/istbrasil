@@ -1,4 +1,5 @@
 import axios from 'axios';
+import {fontesDescoberta,isoDescoberta,observarRecursoPaypal,erroDescoberta} from '../lojaDescobertaContratos.js';
 import { projetarRecursoAdversoPaypal, idAdverso } from '../lojaPagamentoAdversoContratos.js';
 import { centavosPagamento, criarFalhaPagamento, classificarFalhaPagamento, erroPagamento, idExterno,
     instantePagamento, normalizarResultadoPagamento, normalizarReconciliacaoPagamento, uuidPagamento } from '../lojaPagamentoContratos.js';
@@ -388,6 +389,66 @@ export const criarPaypalProvider = ({ env = process.env, http = axios.create(), 
         return concluir();
     };
     return Object.freeze({
+        async listarObservacoesAdversas({fonte,inicio,fim,continuacao,signal}={}){
+            const caminhos={NOTIFICACOES:'/v1/notifications/webhooks-events',DISPUTAS:'/v1/customer/disputes',TRANSACOES:'/v1/reporting/transactions'};
+            const a=isoDescoberta(inicio),b=isoDescoberta(fim);
+            if(!fontesDescoberta.includes(fonte)||!a||!b||a>=b||Date.parse(b)-Date.parse(a)>31*86400000
+                ||signal?.aborted)throw erroDescoberta('D9_DESCOBERTA_PARAMETROS');
+            const caminho=caminhos[fonte];
+            const validarLink=href=>{
+                if(typeof href!=='string')throw erroDescoberta('D9_DESCOBERTA_PAGINACAO');
+                let u;try{u=new URL(href);}catch{throw erroDescoberta('D9_DESCOBERTA_PAGINACAO');}
+                if(href.length>2048||u.origin!==HOST||u.pathname!==caminho||u.username||u.password||u.hash)
+                    throw erroDescoberta('D9_DESCOBERTA_PAGINACAO');
+                // Continuacoes somente do endpoint fixo. Nao executar URLs de
+                // recursos/webhooks nem permitir troca de janela/credenciais.
+                const campos=fonte==='TRANSACOES'?['start_date','end_date']:fonte==='DISPUTAS'?['update_time_after','update_time_before']:['start_time','end_time'];
+                if(u.searchParams.get(campos[0])!==a||u.searchParams.get(campos[1])!==b
+                    ||['access_token','client_secret','authorization'].some(k=>u.searchParams.has(k)))throw erroDescoberta('D9_DESCOBERTA_PAGINACAO');
+                return u.pathname+u.search;
+            };
+            const p=new URLSearchParams(fonte==='TRANSACOES'?{start_date:a,end_date:b,page_size:'100',page:'1',fields:'transaction_info'}:
+                fonte==='DISPUTAS'?{update_time_after:a,update_time_before:b,page_size:'50'}:{start_time:a,end_time:b,page_size:'10'});
+            const url=continuacao?validarLink(continuacao):`${caminho}?${p}`;
+            const acesso=await obterToken();if(signal?.aborted)throw erroDescoberta('D9_DESCOBERTA_CANCELADA');
+            let r;try{r=await requisitar({method:'GET',url,signal,headers:{Authorization:`Bearer ${acesso}`,Accept:'application/json'}});}
+            catch{throw erroDescoberta('D9_DESCOBERTA_TRANSITORIA');}
+            if(r?.status===401||r?.status===403){token=null;validoAte=0;throw erroDescoberta('D9_DESCOBERTA_PERMISSAO');}
+            if(r?.status===429||r?.status>=500)throw erroDescoberta('D9_DESCOBERTA_TRANSITORIA');
+            if(r?.status!==200)throw erroDescoberta('D9_DESCOBERTA_CONTRATO');
+            if(fonte==='TRANSACOES'&&[r.data?.end_date,r.data?.last_refreshed_datetime].filter(v=>v!==undefined).some(v=>
+                !isoDescoberta(v)||isoDescoberta(v)<b))throw erroDescoberta('D9_DESCOBERTA_TRANSITORIA');
+            const itens=fonte==='TRANSACOES'?r.data?.transaction_details:fonte==='DISPUTAS'?r.data?.items:r.data?.events;
+            const max=fonte==='NOTIFICACOES'?10:fonte==='DISPUTAS'?50:100;
+            if(!Array.isArray(itens)||itens.length>max||!Array.isArray(r.data.links??[]))throw erroDescoberta('D9_DESCOBERTA_CONTRATO');
+            const links=(r.data.links??[]).filter(l=>l.rel==='next');
+            if(links.length>1||links.some(l=>l.method&&l.method!=='GET'))throw erroDescoberta('D9_DESCOBERTA_PAGINACAO');
+            let proxima=links[0]?.href??null;
+            if(proxima)validarLink(proxima);
+            if(fonte==='TRANSACOES'){
+                if(!Number.isInteger(r.data.total_pages)||r.data.total_pages<0)throw erroDescoberta('D9_DESCOBERTA_PAGINACAO');
+                const pagina=Number(new URL(HOST+url).searchParams.get('page'));
+                if(pagina<r.data.total_pages){
+                    const next=new URL(HOST+url);next.searchParams.set('page',String(pagina+1));proxima=next.href;
+                }else if(proxima)throw erroDescoberta('D9_DESCOBERTA_PAGINACAO');
+            }
+            const observacoes=[];
+            for(const item of itens){
+                // Listagem de disputas e resumida. Detalhar por ID, sem presumir
+                // que a listagem contem os identificadores de correlacao.
+                let raw=item;
+                if(fonte==='DISPUTAS'){
+                    if(!idAdverso(item?.dispute_id))throw erroDescoberta('D9_DESCOBERTA_CONTRATO');
+                    let d;try{d=await requisitar({method:'GET',url:`${caminho}/${item.dispute_id}`,signal,
+                        headers:{Authorization:`Bearer ${acesso}`,Accept:'application/json'}});}catch{throw erroDescoberta('D9_DESCOBERTA_TRANSITORIA');}
+                    if(d?.status===401||d?.status===403)throw erroDescoberta('D9_DESCOBERTA_PERMISSAO');
+                    if(d?.status===429||d?.status>=500)throw erroDescoberta('D9_DESCOBERTA_TRANSITORIA');
+                    if(d?.status!==200||d.data?.dispute_id!==item.dispute_id)throw erroDescoberta('D9_DESCOBERTA_CONTRATO');raw=d.data;
+                }
+                const o=observarRecursoPaypal(fonte,raw);if(o)observacoes.push(o);
+            }
+            return {observacoes,proxima};
+        },
         // D8: GETs fixos; resposta projetada sem dados pessoais. Sem efeito financeiro.
         async consultarEvidenciaAdversa({ tipo, recursoId, ambiente, signal } = {}) {
             const caminhos = { REEMBOLSO: '/v2/payments/refunds/', DISPUTA: '/v1/customer/disputes/', CAPTURA: '/v2/payments/captures/' };
@@ -400,10 +461,11 @@ export const criarPaypalProvider = ({ env = process.env, http = axios.create(), 
             try { resposta = await requisitar({ method: 'GET', url: caminhos[tipo] + recursoId, signal,
                 headers: { Authorization: `Bearer ${acesso}`, Accept: 'application/json' } }); }
             catch { falhar('INFRAESTRUTURA', 'INDETERMINADO'); }
-            if (resposta?.status === 401) {
+            if (resposta?.status === 401 || resposta?.status === 403) {
                 if (token === acesso) { token = null; validoAte = 0; }
                 falhar('AUTENTICACAO', 'ENVIADO');
             }
+            if (resposta?.status === 404 || (resposta?.status >= 400 && resposta?.status < 500 && resposta?.status !== 429)) falhar('RESPOSTA_INVALIDA','ENVIADO');
             if (resposta?.status !== 200) falhar('INFRAESTRUTURA', 'ENVIADO');
             try { return projetarRecursoAdversoPaypal(tipo, resposta.data); }
             catch { falhar('RESPOSTA_INVALIDA', 'ENVIADO'); }

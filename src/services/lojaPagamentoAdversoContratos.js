@@ -10,6 +10,32 @@ const dinheiro = m => {
     const v = String(BigInt(n) * 100n + BigInt(f.padEnd(2, '0')));
     return centavosAdversos(v) ? { valorCentavos: v, moeda: m.currency_code } : { valorCentavos: null, moeda: null };
 };
+// Fonte: paypal/paypal-rest-api-specifications, customer_disputes_v1.json,
+// transaction_info/seller e fund_movement. Nao ha ID economico em fund_movement.
+export const projetarDetalhesDisputaPaypal = d => {
+    const ts=d.disputed_transactions, t=Array.isArray(ts)&&ts.length===1?ts[0]:null;
+    const merchant=t?.seller?.merchant_id;
+    const movimentos=d.fund_movements;
+    const listaValida=movimentos===undefined||(Array.isArray(movimentos)&&movimentos.length<=50);
+    return {
+        contaRecebedora: idAdverso(merchant)?merchant:null,
+        identidadeRecebedorInvalida: merchant!==undefined&&!idAdverso(merchant),
+        estadoTransacao:codigo(t?.transaction_status),
+        estagio:codigo(d.dispute_life_cycle_stage),canal:codigo(d.dispute_channel),
+        movimentosInvalidos:!listaValida,
+        // Sem truncar uma lista excessiva nem gerar uma identidade por hash/valor/data.
+        movimentos:listaValida?(movimentos??[]).map(m=>({
+            parte:['SELLER','BUYER','PAYMENT_PROCESSOR'].includes(m?.party)?m.party:null,
+            direcao:['DEBIT','CREDIT'].includes(m?.type)?m.type:null,
+            motivo:['REVERSED_TRANSACTION_FEE','DISPUTE_SETTLEMENT','DISPUTE_FEE','CHARGEBACK_FEE'].includes(m?.reason)?m.reason:null,
+            ...dinheiro(m?.amount),
+            iniciadoEm:typeof m?.initiated_time==='string'&&m.initiated_time.length<=64
+                && /^\d{4}-\d\d-\d\dT/.test(m.initiated_time)&&Number.isFinite(Date.parse(m.initiated_time))
+                ?new Date(m.initiated_time).toISOString():null
+        })):[],
+        identidadeEconomica:'NAO_COMPROVADA'
+    };
+};
 export const projetarRecursoAdversoPaypal = (tipo, d) => {
     if (!d || typeof d !== 'object' || Array.isArray(d)) throw Error('RECURSO_INVALIDO');
     const recursoId = tipo === 'DISPUTA' ? d.dispute_id : d.id;
@@ -29,7 +55,7 @@ export const projetarRecursoAdversoPaypal = (tipo, d) => {
     if (tipo === 'DISPUTA') {
         const ts = d.disputed_transactions;
         const completas = Array.isArray(ts) && ts.length === 1 && idAdverso(ts[0]?.seller_transaction_id);
-        return { ...r, transacoesVendedor: completas ? [ts[0].seller_transaction_id] : [],
+        return { ...r, ...projetarDetalhesDisputaPaypal(d), transacoesVendedor: completas ? [ts[0].seller_transaction_id] : [],
             vinculoInvalido: !completas, desfecho: codigo(d.dispute_outcome?.outcome_code) };
     }
     if (tipo === 'CAPTURA') return { ...r,

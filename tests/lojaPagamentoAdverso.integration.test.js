@@ -96,9 +96,9 @@ test('D8-B2/B3 reconciliacao adversa real, historico preservado e PayPal somente
             respostas.set(`/v2/payments/refunds/${id}`,resource);
             return enviar({id:eventoId,event_type:'PAYMENT.CAPTURE.REFUNDED',resource_type:'refund',resource_version:'2.0',resource});
         };
-        const disputa=async(sufixo='CREATED',status='OPEN',desfecho=null)=>{
+        const disputa=async(sufixo='CREATED',status='OPEN',desfecho=null,extras={})=>{
             const resource={dispute_id:`PP-D-${n}`,status,disputed_transactions:[{seller_transaction_id:capturaId}],
-                dispute_amount:{value:'1.00',currency_code:'BRL'},dispute_outcome:{outcome_code:desfecho}};
+                dispute_amount:{value:'1.00',currency_code:'BRL'},dispute_outcome:{outcome_code:desfecho},...extras};
             respostas.set(`/v1/customer/disputes/PP-D-${n}`,resource);
             return enviar({id:`WH-${randomUUID()}`,event_type:`CUSTOMER.DISPUTE.${sufixo}`,resource});
         };
@@ -232,6 +232,31 @@ test('D8-B2/B3 reconciliacao adversa real, historico preservado e PayPal somente
         }
         assert.equal((await c.estado()).reembolso,'50');assert.equal((await c.estado()).capturado,'100');await c.validarIntactos();
         assert.equal(c.consultas.some(s=>/^DELETE/.test(s)),false);
+    });
+    await t.test('D9 vendedor da disputa divergente ou malformado impede vinculo financeiro',async()=>{
+        for(const merchant_id of ['OUTRO-RECEBEDOR','../invalido']){
+            const c=await criar(),id=await c.disputa();
+            const path=[...c.respostas.keys()].find(p=>p.startsWith('/v1/customer/disputes/'));
+            c.respostas.get(path).disputed_transactions[0].seller={merchant_id};
+            const r=await c.service.reconciliarEventoAdverso({eventoId:id});
+            assert.equal(r.efeitoFinanceiroAplicado,false);assert.equal((await c.estado()).reembolso,'0');
+            await c.validarIntactos();
+        }
+    });
+    await t.test('D9 movimento sem ID economico repetido entre webhook/GET nao soma; refund mantem identidade D8',async()=>{
+        const c=await criar(),refund=await c.refund();await c.service.reconciliarEventoAdverso({eventoId:refund});
+        const movimento={party:'SELLER',type:'DEBIT',reason:'DISPUTE_SETTLEMENT',
+            amount:{value:'0.50',currency_code:'BRL'},initiated_time:'2026-01-01T00:00:00Z'};
+        for(const sufixo of ['CREATED','UPDATED','RESOLVED']){
+            const e=await c.disputa(sufixo,sufixo==='RESOLVED'?'RESOLVED':'OPEN','RESOLVED_SELLER_FAVOUR',{
+                dispute_life_cycle_stage:'CHARGEBACK',fund_movements:[movimento,movimento]});
+            await c.service.reconciliarEventoAdverso({eventoId:e});await c.service.reconciliarEventoAdverso({eventoId:e});
+            assert.equal((await c.estado()).reembolso,'50');assert.equal((await c.estado()).capturado,'100');
+            const [[ev]]=await a.query("SELECT evidencia_json FROM ist_loja_pagamento_eventos WHERE origem='RECONCILIACAO' AND tipo='EVIDENCIA_ADVERSA' AND evidencia_json LIKE ?",[`%${e}%`]);
+            const d=JSON.parse(ev.evidencia_json).detalhesDisputa;
+            assert.equal(d.identidadeEconomica,'NAO_COMPROVADA');assert.equal(d.movimentos.length,2);
+        }
+        await c.validarIntactos();await assert.rejects(c.autorizar(),{codigo:'DIREITO_INDISPONIVEL'});
     });
     t.diagnostic(`D8_B2_B3_FINANCEIRO: ${versao}; GETs simulados fora de transacoes; direitos suspensos atomicamente; captura historica preservada.`);
 });
