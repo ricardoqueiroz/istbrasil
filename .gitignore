@@ -64,3 +64,9 @@ src/app/pages/uikit/
 
 # Documentos armazenados no servidor
 istbrasil.private/projetos/
+
+# Dados privados e relatorios locais da Loja
+/ist_loja_export.sql
+/istbrasil.private/products/livros/*.pdf
+/npm-audit-local.json
+/docs/loja-d6-f2-resultado-*.json

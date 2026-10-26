@@ -7,6 +7,7 @@ import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { canonicalPaths, releasePaths, validateActive, validateBackupManifest, validateBackupSeal, validateJournal, validateLock, validateManifest, sha256 } from './production-contract.mjs';
 import { verifyPreparedRelease } from './release-prepare.mjs';
+import {verificarArmazenamentoRelease,antesDeAtivar} from './storage-preflight.mjs';
 
 const execute = promisify(execFile);
 const FORMAT_VERSION = 1;
@@ -261,10 +262,11 @@ async function defaultHealth() {
     finally { clearTimeout(timer); }
 }
 
-export function createPm2Adapter({ pm2Home = '/home/admin/.pm2', name = PM2_NAME, health = defaultHealth, command = 'pm2' } = {}) {
+export function createPm2Adapter({ base, pm2Home = '/home/admin/.pm2', name = PM2_NAME, health = defaultHealth, command = 'pm2', executeCommand = execute } = {}) {
     if (command !== 'pm2' && !path.isAbsolute(command)) throw fail('PM2_COMMAND_INVALID');
+    // Storage is configured exclusively by the persistent .env, never by PM2.
     const env = { PATH: '/usr/local/bin:/usr/bin:/bin', HOME: path.dirname(pm2Home), PM2_HOME: pm2Home, LANG: 'C', LC_ALL: 'C' };
-    const run = (args, maxBuffer = 4 * 1024 * 1024) => execute(command, args, { env, encoding: 'utf8', maxBuffer });
+    const run = (args, maxBuffer = 4 * 1024 * 1024) => executeCommand(command, args, { env, encoding: 'utf8', maxBuffer });
     const checkedHealth = async () => {
         let last;
         for (let attempt = 0; attempt < 12; attempt++) {
@@ -303,6 +305,8 @@ async function operation({ base, operation, workspace, preparationId, backupId, 
         const expectedBackend = active ? releasePaths(paths, active.backend.releaseId).backend : paths.repo;
         if (runtime.name !== PM2_NAME || runtime.cwd !== expectedBackend || runtime.script !== `${expectedBackend}/server.js`
             || typeof runtime.commitSha !== 'string' || !/^[a-f0-9]{40}$/.test(runtime.commitSha)) throw fail('CURRENT_RUNTIME_DIVERGENT');
+        // The automatic recovery target must also understand the official .env contract.
+        await verificarArmazenamentoRelease({backend:runtime.cwd,arquivoEnv:paths.env,base:paths.base});
         recoverySnapshot = await snapshotCurrent(paths, transactionId, active, runtime);
         let installed;
         if (operation === 'deploy') {
@@ -314,9 +318,11 @@ async function operation({ base, operation, workspace, preparationId, backupId, 
             const targetSnapshot = await loadBackup(paths, backupId, transactionId, active, runtime);
             installed = await installBackupAsRelease(paths, targetSnapshot); journal.releaseId = installed.releaseId;
         }
-        await phase(paths, journal, 'prepared');
-        activationStarted = true;
-        await adapter.switchTo({ name: PM2_NAME, cwd: installed.release.backend, script: `${installed.release.backend}/server.js` });
+        await antesDeAtivar({backend:installed.release.backend,arquivoEnv:paths.env,base:paths.base},async()=>{
+            await phase(paths, journal, 'prepared');
+            activationStarted = true;
+            await adapter.switchTo({ name: PM2_NAME, cwd: installed.release.backend, script: `${installed.release.backend}/server.js` });
+        });
         await phase(paths, journal, 'backend_activated');
         const indexSha256 = await publishFrontend(paths, installed.release.frontend);
         await phase(paths, journal, 'frontend_published');

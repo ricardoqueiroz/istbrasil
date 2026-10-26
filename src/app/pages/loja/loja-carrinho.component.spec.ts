@@ -21,6 +21,11 @@ describe('LojaCarrinhoComponent', () => {
     const pagina = (ids = [1, 2]) => { ids.forEach((id) => carrinho.adicionar(id)); fixture = TestBed.createComponent(LojaCarrinhoComponent); fixture.detectChanges(); };
     const carregar = () => { pagina(); http.expectOne(url).flush(dto()); fixture.detectChanges(); };
     const texto = () => fixture.nativeElement.textContent as string;
+    it('identifica email real persistido sem associar conta PayPal', () => {
+        carregar();
+        expect(fixture.nativeElement.querySelector('label[for="comprador-email"]').textContent).toBe('E-mail real para confirmação da compra');
+        expect(texto()).toContain('independentemente do e-mail da conta PayPal Sandbox');
+    });
 
     it('carrinho vazio nao solicita HTTP', () => { pagina([]); expect(texto()).toContain('Seu carrinho está vazio'); http.expectNone(url); });
     it('exibe placeholders durante cotacao', () => { pagina(); expect(texto()).toContain('Consultando preços'); expect(fixture.nativeElement.querySelector('[data-testid="total"]')).toBeNull(); http.expectOne(url).flush(dto()); });

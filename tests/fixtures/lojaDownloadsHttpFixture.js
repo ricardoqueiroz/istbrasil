@@ -34,7 +34,7 @@ export const configurarHttpDownloads=async(t,{opcoes={},dados,publicarRaiz=false
     };
     const app=express();app.set('trust proxy','loopback');
     const configuracaoArquivos=criarConfiguracaoArquivosLoja({raizPrivada:raiz,raizesPublicas:publicarRaiz?[raiz]:[]});
-    app.use('/api/loja/downloads',criarLojaDownloadsRouter({db,env:{PRODUCTS_PATH:raiz},
+    app.use('/api/loja/downloads',criarLojaDownloadsRouter({db,env:{PRODUCTS_LIVROS_PATH:raiz},
         ...(publicarRaiz?{configuracaoArquivos}:{}),
         contextoEsperado:{provedor:'paypal',ambiente:'sandbox',contaRecebedora:'SINTETICO'},
         obterConfiguracaoSessao:()=>config,agoraMs:()=>estado.instante,

@@ -34,6 +34,7 @@ const montarSemBanco = (opcoes = {}) => {
         ist_loja_sessoes: [{ id: 1, criada_em: inicio, expira_em: '2026-10-19T11:59:00.000Z', revogada_em: null },
             { id: 2, criada_em: inicio, expira_em: '2026-10-19T11:59:00.000Z', revogada_em: null }],
         ist_loja_pedidos: [{ id: 1, public_id: pedidoPublicId, sessao_id: 1, estado: 'AGUARDANDO_PAGAMENTO',
+            comprador_email:'comprador.real@example.invalid',
             ambiente: 'sandbox', moeda: 'BRL', total_centavos: '19000', versao: 1,
             criado_em: inicio, atualizado_em: inicio, expira_em: fim, pagamento_confirmado_em: null }],
         ist_loja_pagamentos: [{ id: 1, public_id: pgPublicId, pedido_id: 1, ...contexto,
@@ -45,7 +46,7 @@ const montarSemBanco = (opcoes = {}) => {
             chave_idempotencia: randomUUID(), request_id_provedor: randomUUID(), solicitacao_hash: Buffer.alloc(32),
             estado: 'SUCESSO', tentativas: 1, versao: 1, execucao_token: null, execucao_ate: null,
             criado_em: inicio, atualizado_em: inicio, envio_iniciado_em: inicio, concluido_em: inicio }],
-        ist_loja_pagamento_eventos: []
+        ist_loja_pagamento_eventos: [],ist_loja_notificacoes:[]
     };
     let abertas = 0, conexoes = 0, descartadas = 0, falhou = false;
     const consultas = [];
@@ -67,7 +68,14 @@ const montarSemBanco = (opcoes = {}) => {
             async query(sql, params = []) {
                 consultas.push(sql);
                 if (sql.startsWith('SET TRANSACTION')) return [[]];
+                if(sql.includes('p.id AS pagamentoId'))return [estado.ist_loja_pagamentos.filter(p=>p.provedor===params[0]
+                    &&p.ambiente===params[1]&&p.conta_recebedora===params[2]
+                    &&(p.ordem_externa_id===params[3]||p.captura_externa_id===params[5]))
+                    .map(p=>({pagamentoId:p.id,pedidoId:p.pedido_id,sessaoId:1,ordem_externa_id:p.ordem_externa_id,captura_externa_id:p.captura_externa_id}))];
                 assert.ok(copia);
+                if(sql==='SELECT @@in_transaction AS em_transacao')return [[{em_transacao:1}]];
+                if(sql.includes('FROM ist_loja_pagamento_eventos'))return [clonar(copia.ist_loja_pagamento_eventos.filter(e=>
+                    e.provedor===params[0]&&e.ambiente===params[1]&&e.conta_recebedora===params[2]&&e.origem==='WEBHOOK'&&e.evento_id===params[3]))];
                 if (sql.startsWith('SELECT pedido_id')) return [copia.ist_loja_pagamentos.filter(p => p.public_id === params[0]).map(p => ({ pedido_id: p.pedido_id }))];
                 if (sql.includes('FROM ist_loja_sessoes')) return [clonar(copia.ist_loja_sessoes.filter(s => s.id === params[0]))];
                 if (sql.includes('FROM ist_loja_pedidos')) return [clonar(copia.ist_loja_pedidos.filter(p =>
@@ -80,21 +88,29 @@ const montarSemBanco = (opcoes = {}) => {
                     const tabela = /^UPDATE ([a-z_]+)/.exec(sql)[1];
                     const nomes = [...sql.split('WHERE')[0].matchAll(/([a-z_]+)=\?/g)].map(m => m[1]);
                     const campos = Object.fromEntries(nomes.map((k, i) => [k, data(k, params[i])]));
+                    if(opcoes.falhaDepoisOutbox&&tabela==='ist_loja_pagamento_operacoes'&&campos.estado==='SUCESSO'
+                        &&copia.ist_loja_notificacoes.length)throw Error('fixture-erro-apos-outbox');
                     if (opcoes.colisao && tabela === 'ist_loja_pagamentos' && campos.captura_externa_id) {
                         throw Object.assign(new Error('fixture-duplicado'), { code: 'ER_DUP_ENTRY', sqlMessage: 'uq_lpg_captura_externa' });
                     }
                     if (opcoes.falhaPago && !falhou && tabela === 'ist_loja_pedidos' && campos.estado === 'PAGO') {
                         falhou = true; throw new Error('fixture-SQL-segredo');
                     }
-                    const linha = copia[tabela].find(p => p.id === params.at(-2) && p.versao === params.at(-1));
+                    const linha = copia[tabela].find(p => tabela==='ist_loja_pagamento_eventos'
+                        ? p.id===params.at(-3)&&p.estado===params.at(-2)
+                            &&(p.execucao_token===params.at(-1)||Buffer.isBuffer(p.execucao_token)&&p.execucao_token.equals(params.at(-1)))
+                        : p.id === params.at(-2) && p.versao === params.at(-1));
                     if (!linha) return [{ affectedRows: 0 }];
                     Object.assign(linha, campos, { versao: linha.versao + 1 });
                     return [{ affectedRows: 1, warningStatus: 0 }];
                 }
-                const m = /^INSERT INTO ([a-z_]+) \(([^)]+)\)/.exec(sql); assert.ok(m, 'comando inesperado no double');
-                const linha = { id: copia[m[1]].length + 1, versao: 1, tentativas: 0,
+                const m = /^INSERT INTO ([a-z_]+)\s*\(([^)]+)\)/.exec(sql); assert.ok(m, 'comando inesperado no double');
+                if(m[1]==='ist_loja_notificacoes'&&opcoes.falhaOutbox)throw Error('fixture-schema-outbox-ausente');
+                const linha = { id: copia[m[1]].length + 1, versao: 1, tentativas: 0,execucao_token:null,execucao_ate:null,
                     ...Object.fromEntries(m[2].split(',').map((k, i) => [k, data(k, params[i])])) };
-                copia[m[1]].push(linha); return [{ insertId: linha.id, warningStatus: 0 }];
+                if(m[1]==='ist_loja_notificacoes'&&copia[m[1]].some(n=>n.pedido_id===linha.pedido_id&&n.finalidade===linha.finalidade))
+                    throw Object.assign(Error('fixture-UNIQUE'),{code:'ER_DUP_ENTRY'});
+                copia[m[1]].push(linha); return [{ insertId: linha.id, affectedRows:1, warningStatus: 0 }];
             }
         };
     } };
@@ -281,6 +297,71 @@ test('simulado B2 reconciliacao sem banco', async t => {
         const r = await m.service.capturar({ id: 1 }, { pagamentoPublicId: m.pgPublicId }, m.op().chave_idempotencia);
         assert.equal(r.estado, 'DESCONHECIDO'); assert.equal(m.chamadas.consultar, 1);
         assert.equal(m.chamadas.capturar, 0); assert.equal(m.chamadas.reconciliar.length, 0);
+    });
+});
+
+test('68.1 outbox em integracao simulada do nucleo financeiro, sem banco ou SMTP',async t=>{
+    const notificacoes=m=>m.estado.ist_loja_notificacoes;
+    await t.test('confirmacao cria destinatario persistido, finalidade, ambiente e estado inicial',async()=>{
+        const m=montarSemBanco();await m.reconciliar();
+        assert.equal(notificacoes(m).length,1);
+        const n=notificacoes(m)[0];assert.equal(n.pedido_id,m.pedido().id);
+        assert.equal(n.destinatario,m.pedido().comprador_email);assert.equal(n.ambiente,m.pedido().ambiente);
+        assert.equal(n.finalidade,'CONFIRMACAO_COMPRA');assert.equal(n.estado,'PENDENTE');assert.equal(n.tentativas,0);
+        assert.match(n.public_id,/^[a-f0-9-]{36}$/);assert.equal(n.criado_em,n.atualizado_em);
+        assert(!Object.keys(n).some(k=>/senha|pdf|caminho|credencial|download/.test(k)));
+        const antes=JSON.stringify(m.estado);await m.reconciliar();await m.reconciliar();
+        assert.equal(JSON.stringify(m.estado),antes);
+    });
+    await t.test('PENDENTE e evidencia divergente nao criam notificacao',async()=>{
+        const pendente=montarSemBanco({responder:(_a,r)=>envelopeTeste(r({estado:'PENDENTE',capturadoEm:null}))});
+        await pendente.reconciliar();assert.equal(pendente.pedido().estado,'AGUARDANDO_PAGAMENTO');assert.equal(notificacoes(pendente).length,0);
+        const divergente=montarSemBanco({responder:(_a,r)=>envelopeTeste(r({valorCentavos:'1'}))});
+        await divergente.reconciliar();assert.equal(divergente.pedido().estado,'REVISAO');assert.equal(notificacoes(divergente).length,0);
+    });
+    await t.test('erro depois do INSERT reverte pedido, dinheiro e outbox; tabela ausente nao e ignorada',async()=>{
+        for(const opcoes of [{falhaDepoisOutbox:true},{falhaOutbox:true}]){
+            const m=montarSemBanco(opcoes);await assert.rejects(m.reconciliar(),codigo('RESULTADO_DESCONHECIDO'));
+            assert(m.consultas.some(q=>q.startsWith('INSERT INTO ist_loja_notificacoes')));
+            assert.equal(m.pedido().estado,'AGUARDANDO_PAGAMENTO');assert.equal(m.pedido().pagamento_confirmado_em,null);
+            assert.equal(m.pg().capturado_centavos,'0');assert.equal(notificacoes(m).length,0);assert.equal(m.abertas,0);
+        }
+    });
+    await t.test('captura repetida conserva uma notificacao',async()=>{
+        const m=montarSemBanco();m.pg().estado='AGUARDANDO_APROVACAO';m.op().acao='CRIAR';m.op().envio_iniciado_em=null;
+        const entrada={pagamentoPublicId:m.pgPublicId},chave=randomUUID();
+        await m.service.capturar({id:1},entrada,chave);await m.service.capturar({id:1},entrada,chave);
+        assert.equal(notificacoes(m).length,1);assert.equal(m.chamadas.capturar,1);
+    });
+    await t.test('webhook repetido e reconciliacao posterior conservam uma notificacao',async()=>{
+        const m=montarSemBanco(),w={eventoId:'EVENTO-68-1',tipo:'PAYMENT.CAPTURE.COMPLETED',
+            ordemId:'ORDEMTESTE',capturaId:'CAPTURATESTE',hash:Buffer.alloc(32,8)};
+        await m.service.reconciliarWebhook(w);await m.service.reconciliarWebhook(w);await m.reconciliar();
+        await m.service.reconciliarWebhook({...w,eventoId:'OUTRO-EVENTO-68-1',hash:Buffer.alloc(32,10)});
+        assert.equal(notificacoes(m).length,1);assert.equal(m.chamadas.reconciliar.length,1);
+        assert.equal(m.estado.ist_loja_pagamento_eventos.filter(e=>e.evento_id===w.eventoId).length,1);
+    });
+    await t.test('concorrencia simulada reserva uma execucao e nao duplica notificacao',async()=>{
+        const entrou=adiar(),liberar=adiar();
+        const m=montarSemBanco({responder:async(_a,r)=>{entrou.resolver();await liberar.promessa;return envelopeTeste(r());}});
+        const a=m.reconciliar();await entrou.promessa;
+        try{await assert.rejects(m.reconciliar(),codigo('OPERACAO_EM_ANDAMENTO'));}finally{liberar.resolver();}
+        await a;await m.reconciliar();assert.equal(notificacoes(m).length,1);
+    });
+    await t.test('pedido historico PAGO nao recebe backfill, nem por webhook',async()=>{
+        const m=montarSemBanco();m.pedido().estado='PAGO';m.pedido().pagamento_confirmado_em='2026-10-18T12:00:00.000Z';
+        m.pg().estado='CAPTURADO';m.pg().reserva_ativa=null;m.pg().capturado_centavos='19000';
+        m.pg().captura_externa_id='CAPTURATESTE';m.pg().capturado_em=m.pedido().pagamento_confirmado_em;
+        await m.reconciliar();
+        await m.service.reconciliarWebhook({eventoId:'HISTORICO-68-1',tipo:'PAYMENT.CAPTURE.COMPLETED',
+            ordemId:'ORDEMTESTE',capturaId:'CAPTURATESTE',hash:Buffer.alloc(32,9)});
+        assert.equal(notificacoes(m).length,0);assert.equal(m.chamadas.reconciliar.length,0);
+    });
+    for(const persistiu of [true,false])await t.test(`COMMIT incerto conserva atomicidade e nao duplica, persistiu=${persistiu}`,async()=>{
+        const m=montarSemBanco({commitIncerto:persistiu});
+        if(persistiu)await m.reconciliar();else await assert.rejects(m.reconciliar(),codigo('RESULTADO_DESCONHECIDO'));
+        assert.equal(notificacoes(m).length,persistiu?1:0);
+        await m.reconciliar();assert.equal(notificacoes(m).length,1);
     });
 });
 

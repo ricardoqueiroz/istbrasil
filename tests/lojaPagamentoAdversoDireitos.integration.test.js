@@ -185,7 +185,7 @@ test('D8-B3 suspensao atomica, concorrencia e fronteira HTTP D6/D7 em MariaDB de
     const http=async(c,hook=null)=>{
         const estado={hook,preparacoes:0};
         const app=express();app.use((req,res,next)=>als.run({tx:0},()=>next()));
-        app.use('/api/loja/downloads',criarLojaDownloadsRouter({db:c.db,env:{PRODUCTS_PATH:raiz},agora,
+        app.use('/api/loja/downloads',criarLojaDownloadsRouter({db:c.db,env:{PRODUCTS_LIVROS_PATH:raiz},agora,
             agoraMs:()=>agora().getTime(),contextoEsperado:contexto,obterConfiguracaoSessao:()=>config,
             sessaoService:criarLojaSessaoService({db:pool,agora}),
             prepararArquivo:async(...args)=>{

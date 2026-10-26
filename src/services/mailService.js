@@ -51,7 +51,7 @@ export async function enviarEmail({ to, subject, html, text, fromName, fromAddre
 
 // Transporte estrito e sem fallback, reservado a recuperacao. Nao altera o relay legado.
 // Criar o transporte nao conecta: nao chamar verify() ou sendMail() na inicializacao.
-export function criarEnvioRecuperacaoSmtp({ env = process.env, criarTransporte = nodemailer.createTransport } = {}) {
+export function criarEnvioRecuperacaoSmtp({ env = process.env, criarTransporte = nodemailer.createTransport, classificarNaoAceito = false } = {}) {
     const falhar = () => { throw new Error('CONFIGURACAO_SMTP_RECUPERACAO_INVALIDA'); };
     const host = env.SMTP_HOST, porta = env.SMTP_PORT, nome = env.MAIL_FROM_NAME, remetente = env.MAIL_FROM_ADDRESS;
     try { if (normalizarEmailComprador(remetente) !== remetente) falhar(); } catch { falhar(); }
@@ -82,7 +82,16 @@ export function criarEnvioRecuperacaoSmtp({ env = process.env, criarTransporte =
             const r = await enviarEmail({ to, subject, text, fromName: nome, fromAddress: remetente }, transporte);
             if (!Array.isArray(r?.accepted) || !r.accepted.includes(to) || r.rejected?.length || r.pending?.length) throw Error();
             // Nao devolver envelope, resposta do relay, messageId ou link ao chamador.
-        } catch { throw new Error('ENVIO_RECUPERACAO_INDISPONIVEL'); }
+        } catch(e) {
+            const falha=new Error('ENVIO_RECUPERACAO_INDISPONIVEL');
+            // Only definite failures before DATA acceptance can be retried.
+            if(classificarNaoAceito && (['EAUTH','EDNS'].includes(e?.code)
+                ||e?.command==='CONN'&&['ECONNECTION','ETIMEDOUT','ESOCKET'].includes(e?.code)
+                ||['AUTH','MAIL FROM','RCPT TO','DATA'].includes(e?.command)
+                    &&Number.isInteger(e?.responseCode)&&e.responseCode>=400&&e.responseCode<=599))
+                falha.notificacaoNaoEnviada=true;
+            throw falha;
+        }
     };
 }
 

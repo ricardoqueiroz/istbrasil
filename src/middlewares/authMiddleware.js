@@ -3,15 +3,20 @@ import jwt from 'jsonwebtoken';
 const COOKIE_NAME = process.env.COOKIE_NAME || 'ist_session';
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-only-insecure-secret';
 
-export const autenticarUsuario = (req, res, next) => {
-    const token = req.cookies?.[COOKIE_NAME];
+// Factory para composicoes com configuracao explicita. Export legado preservado.
+export const criarAutenticacaoUsuario = ({cookieNome=COOKIE_NAME, segredo=JWT_SECRET,
+    algoritmos, exigirExpiracao=false}={}) => (req, res, next) => {
+    const token = req.cookies?.[cookieNome];
 
     if (!token) {
         return res.status(401).json({ message: 'Não autenticado.' });
     }
 
     try {
-        const payload = jwt.verify(token, JWT_SECRET);
+        const payload = jwt.verify(token, segredo, algoritmos ? {algorithms:algoritmos} : undefined);
+        if (exigirExpiracao && (!Number.isSafeInteger(payload.exp) || payload.exp <= Date.now()/1000)) {
+            return res.status(401).json({ message: 'Não autenticado.' });
+        }
         const idUsuario = Number(payload.id_usuario);
         const idTipoUsuario = Number(payload.id_tipo_usuario);
 
@@ -29,3 +34,5 @@ export const autenticarUsuario = (req, res, next) => {
         return res.status(401).json({ message: 'Não autenticado.' });
     }
 };
+
+export const autenticarUsuario = criarAutenticacaoUsuario();

@@ -3,25 +3,39 @@ import { execFileSync } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { randomBytes, randomUUID } from 'node:crypto';
 import mysql from 'mysql2/promise';
+import {DIRETORIO_10339,validarManifestoNotificacoes10339,verificarObservadorNotificacoes} from './lojaNotificacoesFixture.js';
 
 // Exclusivo do executor WSL revisado. Nao importa dotenv/configuracao da aplicacao.
-export const criarBancoPagamentoIsolado = async t => {
+export const criarBancoPagamentoIsolado = async (t,opcoes={}) => {
+    assert(Object.keys(opcoes).every(k=>k==='financeiroOutbox'));
+    assert(opcoes.financeiroOutbox===undefined||typeof opcoes.financeiroOutbox==='boolean');
+    const financeiro=opcoes.financeiroOutbox===true;
     const caminho = process.env.IST_R2_10339_MANIFEST;
-    assert.equal(caminho, '/home/ist_user/.local/state/ist-r2-mariadb10339/manifest.json');
+    const diretorio=financeiro?DIRETORIO_10339:'/home/ist_user/.local/state/ist-r2-mariadb10339';
+    assert.equal(caminho, `${diretorio}/manifest.json`);
     const lerWSL = p => execFileSync('wsl.exe', ['-d', 'Ubuntu', '-u', 'ist_user', '--exec', 'cat', p],
         { encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
     const manifest = JSON.parse(lerWSL(caminho));
-    assert.equal(manifest.containerName, 'ist-r2-mariadb10339');
+    if(financeiro){
+        assert(!process.env.IST_LOJA_PAGAMENTOS_MARIADB_BIN);
+        assert.equal(process.env.IST_LOJA_NOTIFICACOES_MARIADB,'10.3.39');
+        // Read-only Docker inspection. Fixed resource names, never arguments from a manifest.
+        const inspecionar=(tipo,nome)=>JSON.parse(execFileSync('wsl.exe',['-d','Ubuntu','-u','root','--exec','env','-u','DOCKER_HOST','-u','DOCKER_CONTEXT',
+            'docker','--host','unix:///var/run/docker.sock',tipo,'inspect',nome],
+            {encoding:'utf8',windowsHide:true,stdio:['ignore','pipe','pipe']}))[0];
+        validarManifestoNotificacoes10339(manifest,inspecionar('container','ist-notificacoes-mariadb10339'),inspecionar('volume','ist-notificacoes-mariadb10339-data'));
+    }
+    assert.equal(manifest.containerName, financeiro?'ist-notificacoes-mariadb10339':'ist-r2-mariadb10339');
     assert.equal(manifest.imageDigest, 'sha256:a4b57b620852e26f2c306c79fd8a61e22c7cd6e55d0a55d5521854ed2c370102');
     assert.match(manifest.containerId, /^[0-9a-f]{64}$/);
     assert.match(manifest.runId, /^[0-9a-f-]{36}$/);
-    assert.equal(manifest.volume, 'ist-r2-mariadb10339-data');
+    assert.equal(manifest.volume, financeiro?'ist-notificacoes-mariadb10339-data':'ist-r2-mariadb10339-data');
     assert.equal(manifest.host, '127.0.0.1');
-    assert.equal(manifest.port, 13339);
+    if(!financeiro)assert.equal(manifest.port, 13339);
     assert.match(manifest.schema, /^ist_loja_67_3_[0-9a-f]{12}$/);
-    const password = lerWSL('/home/ist_user/.local/state/ist-r2-mariadb10339/root-password').trim();
+    const password = lerWSL(`${diretorio}/root-password`).trim();
     assert.match(password, /^[0-9a-f]{64}$/);
-    const config = { host: '127.0.0.1', port: 13339, user: 'root', password,
+    const config = { host: '127.0.0.1', port: manifest.port, user: 'root', password,
         supportBigNumbers: true, bigNumberStrings: true, dateStrings: true, connectTimeout: 1000 };
     let admin;
     for (let i = 0; i < 60; i++) {
@@ -47,7 +61,8 @@ export const criarBancoPagamentoIsolado = async t => {
         'Credencial incorreta nao foi rejeitada por autenticacao; interromper antes de SQL modificador.');
     } finally { await indevida?.end(); }
     t.diagnostic('Autenticacao efetiva: credencial correta aceita; incorreta rejeitada.');
-    t.diagnostic(`Identidade confirmada: ${identidade.versao}; externo 127.0.0.1:13339; schema ${manifest.schema}`);
+    t.diagnostic(`Identidade confirmada: ${identidade.versao}; externo 127.0.0.1:${manifest.port}; schema ${manifest.schema}`);
+    if(financeiro)await verificarObservadorNotificacoes(admin,t);
     // Nenhum SQL de criacao/carga antes de confirmar a identidade acima.
     const [[existente]] = await admin.execute('SELECT COUNT(*) AS n FROM information_schema.schemata WHERE schema_name=?', [manifest.schema]);
     assert.equal(Number(existente.n), 0, 'Schema ja existe; nao reaplicar nem reutilizar.');
@@ -60,6 +75,28 @@ export const criarBancoPagamentoIsolado = async t => {
     }
     const sql = await readFile(new URL('../../migrations/ist_loja_pagamentos_fundacao.sql', import.meta.url), 'utf8');
     await admin.query(sql.replace(/^DELIMITER[^\r\n]*$/gm, '').replace(/END\$\$\s*$/, 'END'));
+    if(financeiro){
+        const [[destino]]=await admin.query('SELECT DATABASE() banco,@@port porta,@@datadir datadir,@@hostname hostname,VERSION() versao');
+        assert.equal(destino.banco,manifest.schema);assert.notEqual(destino.banco,'istbrasil');
+        assert.equal(destino.hostname,identidade.hostname);assert.equal(destino.datadir,identidade.datadir);
+        assert.equal(Number(destino.porta),3306);assert.equal(destino.versao,identidade.versao);
+        await admin.query('SET @ist_loja_681_schema_esperado=?, @ist_loja_681_ddl_autorizado=?',[manifest.schema,'CRIAR_OUTBOX_68_1']);
+        const outbox=await readFile(new URL('../../migrations/ist_loja_notificacoes_fundacao.sql',import.meta.url),'utf8');
+        await admin.query(outbox.replace(/^DELIMITER[^\r\n]*$/gm,'').replace(/END\$\$\s*$/,'END'));
+        const pool=mysql.createPool({...config,database:manifest.schema,connectionLimit:8});
+        t.after(()=>pool.end());
+        const novaCompra=async(op={})=>{
+            const instante=Date.now(),data=ms=>new Date(ms).toISOString().slice(0,23).replace('T',' ');
+            const criado=data(instante-1000),sessaoExpira=data(instante+86400000-2000),pedidoExpira=data(instante+(op.expirado?-100:1800000));
+            const [s]=await admin.query('INSERT INTO ist_loja_sessoes(token_hash,criada_em,expira_em) VALUES(?,?,?)',[randomBytes(32),criado,sessaoExpira]);
+            const publicId=randomUUID();
+            const [p]=await admin.query(`INSERT INTO ist_loja_pedidos(public_id,sessao_id,comprador_email,estado,ambiente,moeda,total_centavos,
+                idempotencia_criacao,solicitacao_hash,criado_em,atualizado_em,expira_em) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
+            [publicId,s.insertId,'fixture@example.invalid',op.estado??'CRIADO',op.ambiente??'sandbox','BRL',19000,randomUUID(),randomBytes(32),criado,criado,pedidoExpira]);
+            return {sessao:{id:s.insertId},pedidoPublicId:publicId,pedidoId:p.insertId};
+        };
+        return {admin,pool,novaCompra,versao:identidade.versao,identidade:destino};
+    }
     const novaCompra = async (opcoes = {}) => {
         const criado = '2026-01-01 00:00:00', expira = '2026-01-02 00:00:00';
         const [s] = await admin.execute('INSERT INTO ist_loja_sessoes(token_hash,criada_em,expira_em) VALUES(?,?,?)',

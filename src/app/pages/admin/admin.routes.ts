@@ -10,6 +10,19 @@ export default [
         children: [
             { path: '', component: AdminDashboardComponent },
             {
+                path: 'loja/livros/novo', canActivate: [adminGuard],
+                loadComponent: () => import('./loja/livros/formulario-livro.component').then(m => m.FormularioLivroComponent)
+            },
+            {
+                path: 'loja/livros/:id/editar', canActivate: [adminGuard],
+                loadComponent: () => import('./loja/livros/formulario-livro.component').then(m => m.FormularioLivroComponent)
+            },
+            {
+                path: 'loja/livros',
+                canActivate: [adminGuard],
+                loadComponent: () => import('./loja/livros/listar-livros.component').then(m => m.ListarLivrosComponent)
+            },
+            {
                 path: 'eventos/:slug/avaliacoes',
                 canActivate: [adminGuard],
                 loadComponent: () => import('./eventos/avaliacoes/avaliacoes-admin.component').then((m) => m.AvaliacoesAdminComponent)

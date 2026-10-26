@@ -12,7 +12,7 @@ import {criarConfiguracaoArquivosLoja} from '../config/lojaArquivos.js';
 export const criarLojaDownloadsRouter=({db,env=process.env,agora,agoraMs,
     sessaoService=criarLojaSessaoService({db,agora}),obterConfiguracaoSessao=()=>carregarConfiguracaoLojaSessao(env),
     contextoEsperado,autorizacaoService,direitosService,prepararArquivo=prepararArquivoValidado,
-    configuracaoArquivos=criarConfiguracaoArquivosLoja({raizPrivada:env.PRODUCTS_PATH})}={})=>{
+    configuracaoArquivos=criarConfiguracaoArquivosLoja({raizPrivada:env.PRODUCTS_LIVROS_PATH})}={})=>{
     let servicos;
     const obterServicos=()=>{
         if(servicos)return servicos;

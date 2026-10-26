@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdtemp, readFile, realpath, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, realpath, rm, lstat } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
@@ -29,6 +29,7 @@ export const criarBancoPagamentoIsolado = async t => {
     primeiroHash.fill(0);
     const temp = await realpath(tmpdir());
     const datadir = await mkdtemp(join(temp, 'ist-loja-67-4-'));
+    const donoDiretorio=await lstat(datadir,{bigint:true});
     let processo, admin, pool, verificado = false;
     t.after(async () => {
         if (pool) await pool.end();
@@ -41,6 +42,10 @@ export const criarBancoPagamentoIsolado = async t => {
             await fim; clearTimeout(timer);
         }
         const alvo = await realpath(datadir);
+        assert.ok(!processo||processo.exitCode!==null||processo.signalCode!==null,'Processo proprio ainda ativo; preservar datadir.');
+        const atual=await lstat(datadir,{bigint:true});
+        assert.ok(atual.isDirectory()&&!atual.isSymbolicLink());
+        assert.equal(atual.dev,donoDiretorio.dev);assert.equal(atual.ino,donoDiretorio.ino);
         assert.equal(dirname(alvo).toLowerCase(), temp.toLowerCase());
         assert.equal(alvo.toLowerCase(), resolve(datadir).toLowerCase());
         assert.match(basename(alvo), /^ist-loja-67-4-[a-z0-9]+$/i);
@@ -108,6 +113,14 @@ export const criarBancoPagamentoIsolado = async t => {
     }
     const sql = await readFile(new URL('../../migrations/ist_loja_pagamentos_fundacao.sql', import.meta.url), 'utf8');
     await admin.query(sql.replace(/^DELIMITER[^\r\n]*$/gm, '').replace(/END\$\$\s*$/, 'END'));
+    const [[destino]]=await admin.query('SELECT DATABASE() banco,@@port porta,@@datadir datadir,@@hostname hostname,VERSION() versao');
+    assert.equal(destino.banco,banco);assert.notEqual(destino.banco,'istbrasil');
+    assert.equal(Number(destino.porta),port);assert.equal((await realpath(destino.datadir)).toLowerCase(),datadir.toLowerCase());
+    assert.match(destino.versao,/^13\.0\.2-MariaDB/);
+    await admin.query('SET @ist_loja_681_schema_esperado=?, @ist_loja_681_ddl_autorizado=?',[banco,'CRIAR_OUTBOX_68_1']);
+    const outbox=await readFile(new URL('../../migrations/ist_loja_notificacoes_fundacao.sql',import.meta.url),'utf8');
+    await admin.query(outbox.replace(/^DELIMITER[^\r\n]*$/gm,'').replace(/END\$\$\s*$/,'END'));
+    t.diagnostic(`OUTBOX_IDENTIDADE: ${destino.versao}; schema ${banco}; 127.0.0.1:${port}; hostname ${destino.hostname}; PID proprio ${processo.pid}; datadir exclusivo confirmado.`);
     pool = mysql.createPool({ ...config, database: banco, connectionLimit: 8 });
     const novaCompra = async (opcoes = {}) => {
         const agora = new Date(); const criado = new Date(agora.getTime() - 1000).toISOString().slice(0, 23).replace('T', ' ');
@@ -121,5 +134,5 @@ export const criarBancoPagamentoIsolado = async t => {
             randomUUID(), randomBytes(32), criado, criado, pedidoExpira]);
         return { sessao: { id: s.insertId }, pedidoPublicId: publicId, pedidoId: p.insertId };
     };
-    return { admin, pool, novaCompra, versao: identidade.versao };
+    return { admin, pool, novaCompra, versao: identidade.versao,identidade:destino };
 };

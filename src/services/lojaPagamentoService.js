@@ -1,5 +1,6 @@
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { pedidoPublico } from './lojaPedidoContratos.js';
+import {registrarConfirmacaoCompraNaConexao} from './lojaNotificacoesService.js';
 import { normalizarEventoAdversoPaypal } from './lojaPaypalEventoAdverso.js';
 import { criarLojaPagamentoAdversoService } from './lojaPagamentoAdversoService.js';
 import { criarLojaPagamentoAdversoWorker } from './lojaPagamentoAdversoWorker.js';
@@ -190,6 +191,7 @@ export const criarLojaPagamentoService = ({ db, adaptador, contexto, agora = () 
             await mudar(ctx, pg, 'CAPTURADO', { ordem_externa_id: r.ordemId, captura_externa_id: r.capturaId,
                 capturado_centavos: r.valorCentavos, capturado_em: r.capturadoEm, reserva_ativa: null, encerrado_em: ctx.instante });
             await atualizar(ctx, 'ist_loja_pedidos', ctx.pedido, { estado: 'PAGO', pagamento_confirmado_em: r.capturadoEm });
+            await registrarConfirmacaoCompraNaConexao(ctx.c,ctx.pedido,ctx.instante);
         } else if (['RECUSADO', 'CANCELADO', 'EXPIRADO'].includes(r.estado)) {
             // Somente o adaptador pode declarar desfecho definitivo sem efeito pendente.
             if (r.estado === 'RECUSADO' && (BigInt(pg.capturado_centavos) !== 0n || pg.capturado_em
@@ -475,7 +477,7 @@ export const criarLojaPagamentoService = ({ db, adaptador, contexto, agora = () 
             if (itens.reduce((total, item) => total + BigInt(item.subtotal_centavos), 0n) !== BigInt(ctx.pedido.total_centavos)) falhar('ERRO_INTERNO');
             const pg = [...ctx.pagamentos].reverse().find(p => p.provedor === contexto.provedor
                 && p.ambiente === contexto.ambiente && p.conta_recebedora === contexto.contaRecebedora);
-            return { pedido, pagamento: pg ? pagamentoPublico(pg, ctx.pedido) : null, ordemId: pg?.ordem_externa_id ?? null };
+            return { ambiente:ctx.pedido.ambiente,pedido, pagamento: pg ? pagamentoPublico(pg, ctx.pedido) : null, ordemId: pg?.ordem_externa_id ?? null };
         });
     };
     // Entrada interna: somente o processador de webhook apos verificar assinatura.

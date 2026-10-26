@@ -1,3 +1,4 @@
+import {armazenamentoLoja} from './src/config/lojaArmazenamentoInicial.js';
 import "dotenv/config";
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
@@ -16,7 +17,10 @@ import usuariosRoutes from './src/routes/usuarios.routes.js';
 import eventosRoutes from './src/routes/eventos.routes.js';
 import projetosRoutes from './src/routes/projetos.routes.js';
 import projetosDocumentosRoutes from './src/routes/projetosDocumentos.routes.js';
-import adminRoutes from './src/routes/admin.routes.js';
+import { criarAdminRouter } from './src/routes/admin.routes.js';
+import { criarLojaAdminRouter } from './src/routes/lojaAdmin.routes.js';
+import { criarEntregaCapasLivros } from './src/services/lojaCapaService.js';
+import {iniciarNotificacoesLoja} from './src/services/lojaNotificacoesAgendador.js';
 import juradoRoutes from './src/routes/jurado.routes.js';
 import { pool } from './src/config/db.js';
 import { iniciarRecuperacaoLoja, iniciarWorkerAdversoLoja, iniciarDescobertaLoja, comporFinanceiroLoja } from './src/services/lojaPagamentoAgendador.js';
@@ -38,12 +42,14 @@ process.on('unhandledRejection', (reason) => {
 });
 
 const app = express();
+app.use('/assets/images/livros', criarEntregaCapasLivros({configuracaoCapas:armazenamentoLoja.capas}));
+const arquivosLoja = armazenamentoLoja.arquivos;
 app.set('trust proxy', 'loopback');
 
 // Configurações
 app.use('/api/loja/downloads/recuperacao', criarLojaDownloadRecuperacaoRouter({ db: pool,
     adaptadorEmail: comporEmailRecuperacao({ avisar: codigo => console.warn(codigo) }) }));
-app.use('/api/loja/downloads', criarLojaDownloadsRouter({ db: pool }));
+app.use('/api/loja/downloads', criarLojaDownloadsRouter({ db: pool, configuracaoArquivos:arquivosLoja }));
 app.use(cors());
 app.use(cookieParser());
 let financeiroLoja;
@@ -55,8 +61,37 @@ app.use('/api/loja/pagamentos/paypal/webhook', criarLojaPaypalWebhookRouter({
 // Parser e limite da Loja antes dos parsers globais, inclusive para JSON invalido.
 app.use('/api/loja', lojaRoutes);
 app.use('/api/loja', tratarErroLoja);
-app.use(express.json());
-app.use(bodyParser.json());
+// Correspondencia pelo proprio Express: mesmas regras de metodo, caixa e barra final.
+// Escritas editoriais recebem validacao local depois de autenticacao/Origin/CSRF.
+const patchEditorialSemParserGlobal = Symbol('patchEditorialSemParserGlobal');
+app.post('/api/admin/loja/livros/:id/versoes-pdf/:versaoPublicId/publicar', (req, _res, next) => {
+    req[patchEditorialSemParserGlobal] = true;
+    next();
+});
+app.patch('/api/admin/loja/livros/:id', (req, _res, next) => {
+    req[patchEditorialSemParserGlobal] = true;
+    next();
+});
+app.post('/api/admin/loja/livros', (req, _res, next) => {
+    req[patchEditorialSemParserGlobal] = true;
+    next();
+});
+app.post('/api/admin/loja/livros/capa', (req, _res, next) => {
+    req[patchEditorialSemParserGlobal] = true;
+    next();
+});
+app.post('/api/admin/loja/livros/:id/pdf', (req, _res, next) => {
+    req[patchEditorialSemParserGlobal] = true;
+    next();
+});
+app.delete('/api/admin/loja/livros/:id', (req, _res, next) => {
+    req[patchEditorialSemParserGlobal] = true;
+    next();
+});
+const jsonGlobal = express.json();
+const bodyJsonGlobal = bodyParser.json();
+app.use((req, res, next) => req[patchEditorialSemParserGlobal] ? next() : jsonGlobal(req, res, next));
+app.use((req, res, next) => req[patchEditorialSemParserGlobal] ? next() : bodyJsonGlobal(req, res, next));
 app.use('/api', contactRoutes);
 
 
@@ -78,7 +113,7 @@ app.use('/api/obra', obraRoutes);
 app.use('/api/usuarios', usuariosRoutes);
 app.use('/api/eventos', eventosRoutes);
 app.use('/api/projetos', projetosRoutes);
-app.use('/api/admin', adminRoutes);
+app.use('/api/admin', criarAdminRouter({loja:criarLojaAdminRouter({db:pool,configuracaoArquivos:arquivosLoja,configuracaoCapas:armazenamentoLoja.capas})}));
 app.use('/api/jurado', juradoRoutes);
 
 // --- Arquivos Estáticos ---
@@ -100,10 +135,12 @@ const PORT = process.env.PORT || 3000;
 let recuperacaoLoja;
 let workerAdversoLoja;
 let descobertaLoja;
+let notificacoesLoja;
 const servidor = app.listen(PORT, () => {
     if (!encerrando) recuperacaoLoja = iniciarRecuperacaoLoja({ db: pool, obterFinanceiro: obterFinanceiroLoja });
     if (!encerrando) workerAdversoLoja = iniciarWorkerAdversoLoja({db:pool,obterFinanceiro:obterFinanceiroLoja});
     if (!encerrando) descobertaLoja = iniciarDescobertaLoja({db:pool,obterFinanceiro:obterFinanceiroLoja});
+    if (!encerrando) notificacoesLoja = iniciarNotificacoesLoja({db:pool});
     console.log(`Server running on port ${PORT}`);
 });
 
@@ -111,7 +148,7 @@ let encerrando = false;
 const encerrar = () => {
     if (encerrando) return;
     encerrando = true;
-    const recuperacaoEncerrada = Promise.all([recuperacaoLoja?.parar(),workerAdversoLoja?.parar(),descobertaLoja?.parar()]);
+    const recuperacaoEncerrada = Promise.all([recuperacaoLoja?.parar(),workerAdversoLoja?.parar(),descobertaLoja?.parar(),notificacoesLoja?.parar()]);
     servidor.close(() => {
         recuperacaoEncerrada.then(() => process.exit(0), () => process.exit(1));
     });

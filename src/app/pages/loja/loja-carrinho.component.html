@@ -4,13 +4,18 @@
         <section class="confirmacao" aria-labelledby="pedido-titulo" role="status">
             <h2 id="pedido-titulo">{{ checkout.estado()?.pedido?.publicId === pedido.publicId && checkout.estado()?.pagamento ? (checkout.confirmado() ? 'Pedido — pagamento confirmado.' : 'Pedido criado — pagamento em acompanhamento.') : 'Pedido criado — pagamento ainda não realizado.' }}</h2>
             <p>Identificador do pedido: <strong data-testid="pedido-id">{{ pedido.publicId }}</strong></p>
+            @if (checkout.estado()?.pedido?.publicId === pedido.publicId && checkout.estado()?.ambiente === 'sandbox') {
+                <p-message severity="warn">Homologação — PayPal Sandbox — sem cobrança real</p-message>
+            }
             <p>Situação: {{ checkout.confirmado() && checkout.estado()?.pedido?.publicId === pedido.publicId ? 'PAGO' : pedido.estado === 'CRIADO' || pedido.estado === 'AGUARDANDO_PAGAMENTO' ? 'Aguardando pagamento' : pedido.estado }}</p>
             <ul class="pedido-itens">@for (item of pedido.itens; track item.produtoId) {
                 <li><span>{{ item.titulo }} · Quantidade: {{ item.quantidade }}</span><strong>{{ preco(item.subtotalCentavos) }}</strong></li>
             }</ul>
             <p>Total definitivo: <strong class="preco" data-testid="pedido-total">{{ preco(pedido.totalCentavos) }}</strong></p>
             @if (pedidos.precoAlterado()) { <p-message severity="warn">O preço mudou desde a cotação. O total definitivo do pedido é o informado acima.</p-message> }
-            <p>A criação do pedido não confirma pagamento nem libera downloads.</p>
+            @if (checkout.confirmado() && checkout.estado()?.pedido?.publicId === pedido.publicId) {
+                <a pButton routerLink="/loja/biblioteca">Acessar minha biblioteca digital</a>
+            } @else { <p>A criação do pedido não confirma pagamento nem libera downloads.</p> }
             <a pButton routerLink="/loja" (click)="pedidos.continuarComprando()">Continuar comprando</a>
         </section>
     } @else {
@@ -44,9 +49,9 @@
     @if (!carrinho.vazio() || pedidos.pendente()) {
         <form class="pedido-form" (submit)="$event.preventDefault(); confirmarPedido()" [attr.aria-busy]="pedidos.processando()" aria-labelledby="criar-pedido-titulo">
             <h2 id="criar-pedido-titulo">Criar pedido</h2>
-            <label for="comprador-email">Seu e-mail</label>
+            <label for="comprador-email">E-mail real para confirmação da compra</label>
             <input pInputText id="comprador-email" type="email" autocomplete="email" maxlength="254" required [formControl]="email" [readOnly]="bloqueado()" [attr.aria-invalid]="email.touched && email.invalid" aria-describedby="email-ajuda" />
-            <p id="email-ajuda" class="discreto">Informe o e-mail do comprador. Criar o pedido não realiza pagamento.</p>
+            <p id="email-ajuda" class="discreto">Informe um endereço real e acessível. Ele será registrado no pedido, independentemente do e-mail da conta PayPal Sandbox. Criar o pedido não realiza pagamento.</p>
             @if (email.touched && email.invalid) { <p-message severity="warn">Informe um endereço de e-mail válido.</p-message> }
             @if (pedidos.pendente(); as tentativa) {
                 <p role="status">Existe uma tentativa pendente para {{ tentativa.entrada.compradorEmail }}, com os produtos {{ tentativa.entrada.produtoIds.join(', ') }}. A repetição usará exatamente essa seleção e o mesmo e-mail.</p>

@@ -7,6 +7,7 @@ import { randomUUID, createHash } from 'node:crypto';
 import { canonicalPaths, validateActive, validateJournal } from '../scripts/deploy/production-contract.mjs';
 import { inspectProduction } from '../scripts/deploy/production-inspect.mjs';
 import { activatePreparedRelease, rollbackRelease, publicationExitCode, publishNoReplace } from '../scripts/deploy/production-operation.mjs';
+import {prepararValidadorRelease} from './fixtures/lojaStorageRelease.js';
 
 const linux = { skip: process.platform !== 'linux' || process.getuid?.() === 0 ? 'Linux non-root required' : false };
 const SHA = 'a'.repeat(40), TREE = 'b'.repeat(40);
@@ -42,6 +43,7 @@ async function fixture(t) {
 
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'ist-prepared-operation-'));
     await fs.chmod(workspace, 0o700); t.after(() => fs.rm(workspace, { recursive: true, force: true }));
+    await write(`${paths.uploads}/livros/capa-existente.webp`, 'synthetic-cover-original');
     const preparationId = randomUUID(), candidate = `${workspace}/preparations/${preparationId}/release`;
     await write(`${candidate}/backend/server.js`, '// candidate server fixture\n');
     await write(`${candidate}/backend/package.json`, '{"name":"candidate-fixture"}'); await write(`${candidate}/backend/package-lock.json`, '{}');
@@ -49,6 +51,9 @@ async function fixture(t) {
     await write(`${candidate}/frontend/index.html`, '<title>candidate frontend</title>'); await write(`${candidate}/frontend/main.js`, 'candidate');
     const prepared = { commitSha: SHA, treeSha: TREE };
     const verifyPrepared = async input => { assert.equal(input.workspace, workspace); assert.equal(input.preparationId, preparationId); return prepared; };
+    await prepararValidadorRelease(paths.repo);await prepararValidadorRelease(`${candidate}/backend`);
+    await fs.mkdir(`${paths.private}/products/livros`,{recursive:true});
+    await fs.writeFile(paths.env,`PRODUCTS_LIVROS_PATH=${paths.private}/products/livros\nCAPAS_LIVROS_STORAGE_PATH=${paths.uploads}/livros\n`);
     const adapter = {
         current: { name: 'ist-api', cwd: paths.repo, script: `${paths.repo}/server.js`, commitSha: 'c'.repeat(40) }, switches: [], healthCalls: 0,
         async describe() { return { ...this.current }; },
@@ -82,6 +87,39 @@ function arrangeConcurrentDestination(t, f, content = null) {
     });
     return () => destination;
 }
+
+test('storage preflight refuses candidate without replacing the running PM2 process', linux, async t => {
+    const f=await fixture(t);
+    await fs.writeFile(`${f.candidate}/backend/src/config/lojaArmazenamento.js`,'export const CONTRATO_ARMAZENAMENTO={versao:0};');
+    await assert.rejects(activatePreparedRelease({base:f.base,workspace:f.workspace,preparationId:f.preparationId,adapter:f.adapter,verifyPrepared:f.verifyPrepared}));
+    assert.equal(f.adapter.switches.length,0);assert.equal(f.adapter.current.cwd,f.paths.repo);
+});
+test('rollback storage incompatibility refuses target before any PM2 switch', linux, async t => {
+    const f=await fixture(t);
+    const result=await activatePreparedRelease({base:f.base,workspace:f.workspace,preparationId:f.preparationId,adapter:f.adapter,verifyPrepared:f.verifyPrepared});
+    // Represent a correctly sealed historical backup whose declared storage contract is old.
+    const backup=`${f.paths.backups}/${result.backupId}`,source='export const CONTRATO_ARMAZENAMENTO={versao:0};';
+    await fs.writeFile(`${backup}/payload/backend/src/config/lojaArmazenamento.js`,source);
+    const manifest=JSON.parse(await fs.readFile(`${backup}/manifest.json`,'utf8'));
+    const entry=manifest.entries.find(e=>e.path==='backend/src/config/lojaArmazenamento.js');
+    entry.size=Buffer.byteLength(source);entry.sha256=hash(source);
+    const bytes=JSON.stringify(manifest);await fs.writeFile(`${backup}/manifest.json`,bytes);
+    const seal=JSON.parse(await fs.readFile(`${backup}/READY`,'utf8'));seal.manifestSha256=hash(bytes);
+    await fs.writeFile(`${backup}/READY`,JSON.stringify(seal));
+    const switches=f.adapter.switches.length;
+    await assert.rejects(rollbackRelease({base:f.base,backupId:result.backupId,adapter:f.adapter}),e=>e.code==='STORAGE_CONTRACT_INCOMPATIBLE');
+    assert.equal(f.adapter.switches.length,switches);
+    assert.equal(f.adapter.current.cwd,result.active.pm2.cwd);
+});
+test('persistent covers survive frontend replacement and explicit rollback without restoring stale uploads', linux, async t => {
+    const f = await fixture(t);
+    const result = await activatePreparedRelease({ base: f.base, workspace: f.workspace, preparationId: f.preparationId, adapter: f.adapter, verifyPrepared: f.verifyPrepared });
+    await write(`${f.paths.uploads}/livros/capa-enviada-depois.webp`, 'new-upload-after-deploy');
+    await rollbackRelease({ base: f.base, backupId: result.backupId, adapter: f.adapter });
+    assert.equal(await fs.readFile(`${f.paths.uploads}/livros/capa-existente.webp`, 'utf8'), 'synthetic-cover-original');
+    assert.equal(await fs.readFile(`${f.paths.uploads}/livros/capa-enviada-depois.webp`, 'utf8'), 'new-upload-after-deploy');
+    assert.equal(await fs.readFile(`${f.paths.html}/index.html`, 'utf8'), '<title>legacy frontend</title>');
+});
 
 test('successful activation backs up legacy runtime, switches backend and publishes index last', linux, async t => {
     const f = await fixture(t), persistent = await persistentSnapshot(f);

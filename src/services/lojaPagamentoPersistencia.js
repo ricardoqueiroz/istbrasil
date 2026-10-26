@@ -38,7 +38,7 @@ export const criarPersistenciaPagamento = ({ db, agora }) => {
                     pedidoId = p.pedido_id;
                 }
                 const campo = pedidoId ? 'id' : 'public_id';
-                const [[p]] = await c.query(`SELECT id, public_id, sessao_id, estado, ambiente, moeda,
+                const [[p]] = await c.query(`SELECT id, public_id, sessao_id, comprador_email, estado, ambiente, moeda,
                     CAST(total_centavos AS CHAR) AS total_centavos, versao,
                     ${datas(['criado_em', 'atualizado_em', 'expira_em', 'pagamento_confirmado_em'])}
                     FROM ist_loja_pedidos WHERE ${campo}=? AND sessao_id=? FOR UPDATE`,

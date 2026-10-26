@@ -1,4 +1,9 @@
 {
+  "/assets/images/livros/**": {
+    "target": "http://localhost:3000",
+    "secure": false,
+    "changeOrigin": true
+  },
   "/istbrasil.private/projetos": {
     "target": "http://localhost:3000",
     "secure": false,

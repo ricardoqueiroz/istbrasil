@@ -1,6 +1,7 @@
 // Phase 2.1: data contracts and read-only decisions. No operational authorization.
 import path from 'node:path';
 import { createHash } from 'node:crypto';
+import {BASE_IMPLANTACAO_IST,PHPMYADMIN_PUBLICO_IST,limitesArmazenamentoImplantacao} from '../../src/config/lojaImplantacao.js';
 
 export const VERSION = 1;
 export const RESERVE_BYTES = 10n * 1024n ** 3n;
@@ -15,16 +16,17 @@ const object = value => value !== null && typeof value === 'object' && !Array.is
 const keys = (value, required) => object(value) && Object.keys(value).sort().join('|') === [...required].sort().join('|');
 const within = (parent, child) => child.startsWith(`${parent}/`);
 
-export function canonicalPaths(base = '/var/www/istbrasil.org.br') {
+export function canonicalPaths(base = BASE_IMPLANTACAO_IST) {
     if (typeof base !== 'string' || !base.startsWith('/') || base.endsWith('/') || path.posix.normalize(base) !== base || /[\0\\\r\n]/.test(base)) throw new Error('INVALID_BASE');
     const repo = `${base}/backend-node/istbrasil`;
     const admin = `${base}/.deploy`;
-    return Object.freeze({ base, repo, html: `${base}/html`, uploads: `${base}/uploads`, backendPhp: `${base}/backend-php`,
+    const limites=limitesArmazenamentoImplantacao(base);
+    return Object.freeze({ base, repo, html: limites.raizesPublicas[0], uploads: `${base}/uploads`, backendPhp: limites.raizesPublicas[1],
         private: `${repo}/istbrasil.private`, env: `${repo}/.env`, envBackup: `${repo}/.env.backup`, envOld: `${repo}/.env_old`,
         admin, releases: `${admin}/releases`, backups: `${admin}/backups`, state: `${admin}/state`,
         active: `${admin}/state/active.json`, transactions: `${admin}/state/transactions`,
         lock: `${admin}/state/operation.lock`, flock: `${base}/.deploy.lock`, logs: `${admin}/logs`,
-        pm2Home: '/home/admin/.pm2', phpMyAdmin: '/usr/share/phpmyadmin' });
+        pm2Home: '/home/admin/.pm2', phpMyAdmin: PHPMYADMIN_PUBLICO_IST });
 }
 export const PATHS = canonicalPaths();
 

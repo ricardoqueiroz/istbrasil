@@ -37,7 +37,7 @@ async function cloneLocalGit(repo, workspace, targetSha) {
     catch (error) { throw Object.assign(fail('LOCAL_GIT_CLONE_FAILED'), { cause: error }); }
 }
 
-export async function prepareAndActivate({ base, repo, targetSha, adapter = createPm2Adapter(), allowRegistry = true,
+export async function prepareAndActivate({ base, repo, targetSha, adapter = createPm2Adapter({base}), allowRegistry = true,
     createWorkspace = createExportWorkspace, cloneRepository = cloneLocalGit, exporter = exportCommit,
     preparer = prepareRelease, activator = activatePreparedRelease }) {
     if (!validSha(targetSha) || path.resolve(repo) !== repo) throw fail('DEPLOY_ARGUMENT_INVALID');
@@ -57,7 +57,7 @@ export async function prepareAndActivate({ base, repo, targetSha, adapter = crea
     }
 }
 
-export async function executeRollback({ base, backupId, adapter = createPm2Adapter(), rollback = rollbackRelease }) {
+export async function executeRollback({ base, backupId, adapter = createPm2Adapter({base}), rollback = rollbackRelease }) {
     if (!validId(backupId)) throw fail('ROLLBACK_ARGUMENT_INVALID');
     const paths = canonicalPaths(base); await requireApproval(paths);
     return rollback({ base, backupId, adapter });

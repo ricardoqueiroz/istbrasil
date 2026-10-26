@@ -1,10 +1,14 @@
 # D6-B4-F1 — separação da raiz privada
 
+A composição do servidor agora valida os caminhos oficiais antes de listen;
+as fábricas continuam injetáveis para testes. Contrato vigente da Etapa 68.4:
+[loja-armazenamento-68-4.md](loja-armazenamento-68-4.md).
+
 ## Causa e correção
 
-O controller aceitava um PRODUCTS_PATH absoluto e a D6-B2 verificava integridade/confinamento, mas nenhum componente de composição verificava a sobreposição com diretórios públicos. O teste de auditoria manteve uma rota estática sintética funcional, sem sessão, servindo o mesmo PDF da raiz de downloads.
+O controller aceitava um PRODUCTS_LIVROS_PATH absoluto e a D6-B2 verificava integridade/confinamento, mas nenhum componente de composição verificava a sobreposição com diretórios públicos. O teste de auditoria manteve uma rota estática sintética funcional, sem sessão, servindo o mesmo PDF da raiz de downloads.
 
-A validação agora pertence a `src/config/lojaArquivos.js`. `criarConfiguracaoArquivosLoja({ raizPrivada, raizProjeto?, raizesPublicas? })` captura configuração confiável; não lê dotenv/cwd ou parâmetros HTTP. Por padrão, o router captura `env.PRODUCTS_PATH`. Pode receber uma instância compartilhada da configuração pela composição interna. A construção não acessa arquivos nem impede a inicialização da API quando a configuração está ausente; a utilização falha com CONFIGURACAO_INVALIDA e HTTP 503 sanitizado.
+A validação agora pertence a `src/config/lojaArquivos.js`. `criarConfiguracaoArquivosLoja({ raizPrivada, raizProjeto?, raizesPublicas? })` captura configuração confiável; não lê dotenv/cwd ou parâmetros HTTP. Por padrão, o router captura `env.PRODUCTS_LIVROS_PATH`. Pode receber uma instância compartilhada da configuração pela composição interna. A construção não acessa arquivos nem impede a inicialização da API quando a configuração está ausente; a utilização falha com CONFIGURACAO_INVALIDA e HTTP 503 sanitizado.
 
 O controller aguarda `obterRaizValidada()` antes da primeira autorização de arquivo e de qualquer abertura de PDF. Revalida a configuração após preparar o buffer e antes da autorização financeira final. Um erro não devolve caminho físico, hash ou bytes PDF.
 
@@ -31,7 +35,7 @@ Para raízes públicas existentes, resolve também os links conhecidos e compara
 
 ## Configuração única de publicação/download
 
-`const arquivos = criarConfiguracaoArquivosLoja({ raizPrivada: env.PRODUCTS_PATH, raizesPublicas: [...] })` deve ser a mesma instância usada em `criarLojaDownloadsRouter({ ..., configuracaoArquivos: arquivos })` e em `arquivos.criarPublicacao({ db })`. Não há segundo parâmetro de raiz na composição de publicação; overrides são rejeitados. A composição só chama as fábricas e métodos existentes, sem alterar publicação, autorização, preparação, SQL, direitos ou finanças.
+`const arquivos = criarConfiguracaoArquivosLoja({ raizPrivada: env.PRODUCTS_LIVROS_PATH, raizesPublicas: [...] })` deve ser a mesma instância usada em `criarLojaDownloadsRouter({ ..., configuracaoArquivos: arquivos })` e em `arquivos.criarPublicacao({ db })`. Não há segundo parâmetro de raiz na composição de publicação; overrides são rejeitados. A composição só chama as fábricas e métodos existentes, sem alterar publicação, autorização, preparação, SQL, direitos ou finanças.
 
 Isso garante correspondência dentro desta composição; não impede um código interno autorizado de chamar diretamente a fábrica antiga com configuração diferente. Essa chamada não deve ser usada na composição operacional. A ausência anterior de publicação operacional não foi resolvida com um novo endpoint, nem foi inferida a raiz a partir de PDFs reais.
 

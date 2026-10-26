@@ -1,6 +1,7 @@
-import { pool as db } from '../config/db.js';
+import { pool as poolPadrao } from '../config/db.js';
 
-export const autorizarTiposUsuario = (...tiposPermitidos) => async (req, res, next) => {
+export const criarAutorizacaoTiposUsuario = ({db=poolPadrao,
+    registrarErro=error=>console.error('Erro ao autorizar tipo de usuário:',error)}={}) => (...tiposPermitidos) => async (req, res, next) => {
     const idUsuario = req.usuario?.id_usuario;
 
     if (!Number.isInteger(idUsuario) || idUsuario <= 0) {
@@ -23,7 +24,9 @@ export const autorizarTiposUsuario = (...tiposPermitidos) => async (req, res, ne
 
         return next();
     } catch (error) {
-        console.error('Erro ao autorizar tipo de usuário:', error);
+        registrarErro(error);
         return res.status(500).json({ message: 'Não foi possível validar a autorização.' });
     }
 };
+
+export const autorizarTiposUsuario = criarAutorizacaoTiposUsuario();

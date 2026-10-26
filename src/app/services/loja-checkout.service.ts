@@ -9,7 +9,7 @@ export interface CheckoutPagamento {
     publicId: string; pedidoPublicId: string; estado: string; pedidoEstado: LojaPedido['estado'];
     moeda: 'BRL'; valorCentavos: number; pagamentoConfirmadoEm: string | null;
 }
-export interface CheckoutEstado { pedido: LojaPedido; pagamento: CheckoutPagamento | null; ordemId: string | null; }
+export interface CheckoutEstado { ambiente: 'sandbox' | 'live'; pedido: LojaPedido; pagamento: CheckoutPagamento | null; ordemId: string | null; }
 interface TentativaCheckout { pedidoPublicId: string; criacao: string; captura: string; expiraSessao: string; }
 interface SessaoPayPal { start(opcoes: { presentationMode: 'popup' }, ordem: Promise<{ orderId: string }>): Promise<void>; }
 export interface SdkCheckout {
@@ -53,7 +53,9 @@ export class LojaCheckoutService {
     readonly pedidoSalvo = signal<string | null>(null);
     readonly confirmado = computed(() => {
         const pg = this.estado()?.pagamento;
-        return pg?.estado === 'CAPTURADO' && pg.pedidoEstado === 'PAGO' && !!pg.pagamentoConfirmadoEm;
+        const e=this.estado();
+        return e?.ambiente==='sandbox' && e.pedido.estado==='PAGO' && pg?.pedidoPublicId===e.pedido.publicId
+            && pg?.estado === 'CAPTURADO' && pg.pedidoEstado === 'PAGO' && !!pg.pagamentoConfirmadoEm;
     });
     private armazenamentoInvalido = false;
 
@@ -89,6 +91,7 @@ export class LojaCheckoutService {
             PEDIDO_NAO_ENCONTRADO: 'Pedido indisponivel nesta sessao de compra.',
             PEDIDO_EXPIRADO: 'O prazo do pedido expirou. Verifique o resultado antes de criar outro.',
             APROVACAO_PENDENTE: 'A aprovacao ainda nao foi confirmada pelo PayPal.',
+            CONFIGURACAO_INVALIDA: 'Ambiente de pagamento inconsistente ou indisponível. Não inicie outra tentativa.',
             CONFLITO_IDEMPOTENCIA: 'Existe conflito com uma tentativa anterior. Consulte o estado e procure o atendimento.',
             INELEGIVEL: 'Pagamento PayPal indisponivel para este navegador ou conta.'
         };
@@ -108,7 +111,9 @@ export class LojaCheckoutService {
             }
             await this.atualizar();
             const config = await this.post<{ ambiente: string; clientId: string }>('configuracao', {});
-            if (config.ambiente !== 'sandbox') throw new Error('CONFIGURACAO_INVALIDA');
+            if (config.ambiente !== 'sandbox' || this.estado()?.ambiente!==config.ambiente) {
+                this.estado.set(null);this.sdk=null;throw new Error('CONFIGURACAO_INVALIDA');
+            }
             const sdk = await this.carregarSdk();
             this.sdk = await sdk.createInstance({ clientId: config.clientId, components: ['paypal-payments'], pageType: 'checkout' });
             if (!(await this.sdk.findEligibleMethods({ currencyCode: 'BRL' })).isEligible('paypal')) throw new Error('INELEGIVEL');
@@ -117,7 +122,14 @@ export class LojaCheckoutService {
     }
     private async atualizar(): Promise<void> {
         if (!this.tentativa) throw new Error();
-        this.estado.set(await this.post<CheckoutEstado>('estado', { pedidoPublicId: this.tentativa.pedidoPublicId }));
+        this.receberEstado(await this.post<CheckoutEstado>('estado', { pedidoPublicId: this.tentativa.pedidoPublicId }));
+    }
+    private receberEstado(e: CheckoutEstado): void {
+        if(e?.ambiente!=='sandbox'||e.pedido?.publicId!==this.tentativa?.pedidoPublicId
+            ||(e.pagamento&&e.pagamento.pedidoPublicId!==e.pedido.publicId)) {
+            this.estado.set(null);this.pronto.set(false);this.sdk=null;throw new Error('CONFIGURACAO_INVALIDA');
+        }
+        this.estado.set(e);
     }
     async consultar(): Promise<void> {
         if (this.ocupado() || !this.tentativa || this.armazenamentoInvalido) return;
@@ -166,7 +178,7 @@ export class LojaCheckoutService {
             await this.atualizar();
             let atual = this.estado()!;
             if (!atual.pagamento) atual = await this.post<CheckoutEstado>('iniciar', { pedidoPublicId: tentativa.pedidoPublicId }, tentativa.criacao);
-            this.estado.set(atual);
+            this.receberEstado(atual);
             if (!atual.ordemId || !['AGUARDANDO_APROVACAO', 'APROVADO'].includes(atual.pagamento?.estado ?? '')) throw new Error('TENTATIVA_ATIVA');
             ordemEsperada = atual.ordemId; return { orderId: ordemEsperada };
         });

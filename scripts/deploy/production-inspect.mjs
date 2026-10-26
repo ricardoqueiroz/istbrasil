@@ -188,7 +188,7 @@ export async function inspectProcesses(paths, identity, lock) {
         for (const item of (await fs.readFile(`/proc/${pid}/environ`)).toString('utf8').split('\0')) {
             const position = item.indexOf('=');
             const name = item.slice(0, position);
-            if (['name', 'pm_cwd', 'pm_exec_path', 'PM2_HOME', 'PRODUCTS_PATH', 'DOTENV_CONFIG_PATH', 'DOTENV_CONFIG_OVERRIDE', 'DOTENV_KEY'].includes(name)) selected[name] = item.slice(position + 1);
+            if (['name', 'pm_cwd', 'pm_exec_path', 'PM2_HOME', 'PRODUCTS_LIVROS_PATH', 'CAPAS_LIVROS_STORAGE_PATH', 'DOTENV_CONFIG_PATH', 'DOTENV_CONFIG_OVERRIDE', 'DOTENV_KEY'].includes(name)) selected[name] = item.slice(position + 1);
         }
         if (selected.name !== 'ist-api' || selected.pm_cwd !== api.cwd || selected.pm_exec_path !== `${api.cwd}/server.js` || selected.PM2_HOME !== undefined && selected.PM2_HOME !== paths.pm2Home) { result.unknown = true; return result; }
         let parent = pid, linked = false;

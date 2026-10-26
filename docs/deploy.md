@@ -192,9 +192,9 @@ Somente estes vínculos de runtime são aprovados, sem criá-los:
 
 Links relativos internos de node_modules são uma categoria separada: destino declarado e realpath precisam permanecer dentro do próprio node_modules e não podem ser dangling. Não são permitidos vínculos extras para `.env.backup`, `.env_old`, uploads ou backend-php. Arquivos protegidos não são copiados para payload. Links aprovados são lidos como links; conteúdo de configs/privados não é lido.
 
-`server.js` e `db.js` carregam dotenv/config, cujo padrão depende de cwd; overrides e ambiente já definido podem mudar a origem efetiva. Caminhos estáticos de livros/documentos e `profilePhotoService.js` usam localização dos módulos, exigindo o vínculo privado ao mudar para releases. `bookController.js` usa `PRODUCTS_PATH`, com default `/var/www/istbrasil_private/products/livros/`, distinto da árvore estática; valor relativo dependeria de cwd. Não há autorização para escolher outro destino ou reescrever essa variável.
+Na Etapa 68.4, os caminhos de livros são carregados de modo explícito do .env persistente por `lojaArmazenamentoInicial.js` e validados antes de HTTP listen. Somente PRODUCTS_LIVROS_PATH e CAPAS_LIVROS_STORAGE_PATH são oficiais: valores absolutos obrigatórios, sem fallback ou override do PM2. A inicialização não prepara diretórios. `bookController.js` não lê essas variáveis. Configurações não relacionadas continuam usando dotenv/config. Ver sequência e compatibilidade de rollback em [loja-armazenamento-68-4.md](loja-armazenamento-68-4.md).
 
-O coletor não importa a aplicação, não lê `.env` e não trata `/proc/environ` como prova do ambiente efetivo após dotenv. Seleciona internamente campos de identidade PM2; nunca retorna/imprime ambiente completo. A confirmação da origem efetiva de dotenv/PRODUCTS_PATH continua pendente e gera `EFFECTIVE_RUNTIME_PATHS_NOT_PROVEN`/INCONCLUSIVE no coletor real. Os testes que comprovam classificação CONSISTENT usam evidência fictícia explícita, sem simular validação da configuração real.
+O coletor não importa a aplicação, não lê `.env` e não trata `/proc/environ` como prova do ambiente efetivo após dotenv. Seleciona internamente campos de identidade PM2; nunca retorna/imprime ambiente completo. A confirmação da origem efetiva de dotenv/PRODUCTS_LIVROS_PATH continua pendente e gera `EFFECTIVE_RUNTIME_PATHS_NOT_PROVEN`/INCONCLUSIVE no coletor real. Os testes que comprovam classificação CONSISTENT usam evidência fictícia explícita, sem simular validação da configuração real.
 
 ### Estados e capacidade
 
@@ -237,7 +237,7 @@ Para Linux isolado, usar a imagem/digest e isolamento descritos na Fase 1, acres
 
 ### Próximas fases dependem de aprovação
 
-Permanecem pendentes: proveniência Git independente e build, origem efetiva de dotenv/PRODUCTS_PATH, custos medidos da operação, execução PM2 real como admin, módulos nativos bcrypt/sharp em Linux, compatibilidade funcional entre frontend/backend de gerações diferentes, health checks operacionais, recuperação comprovada após reinício/perda de energia, retenção, publicação/ativação e homologação Ubuntu 20.04. Decisões sobre esses pontos devem ser aprovadas antes de integrar um executor. Nenhum módulo novo adapta ou amplia os caminhos aceitos pela Fase 1.
+Permanecem pendentes: proveniência Git independente e build, origem efetiva de dotenv/PRODUCTS_LIVROS_PATH, custos medidos da operação, execução PM2 real como admin, módulos nativos bcrypt/sharp em Linux, compatibilidade funcional entre frontend/backend de gerações diferentes, health checks operacionais, recuperação comprovada após reinício/perda de energia, retenção, publicação/ativação e homologação Ubuntu 20.04. Decisões sobre esses pontos devem ser aprovadas antes de integrar um executor. Nenhum módulo novo adapta ou amplia os caminhos aceitos pela Fase 1.
 
 Traps de deploy.sh somente registram estágio e abortam. Não fazem rollback. O journal isolado não é integrado ao deploy; sua adoção em produção exige revisão e testes adicionais. Não alegar zero downtime. Não haverá SQL/migrations nem reload Nginx automático.
 

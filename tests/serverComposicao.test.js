@@ -2,8 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
+import {prepararArmazenamentoSintetico} from './fixtures/lojaArmazenamentoSintetico.js';
 
-test('server compoe rotas atuais sem legado, portas, banco ou chamadas externas', async () => {
+test('server compoe rotas atuais sem legado, portas, banco ou chamadas externas', async t => {
+    const armazenamento=await prepararArmazenamentoSintetico(t);
     const fonte = await readFile(new URL('../server.js', import.meta.url), 'utf8');
     assert.doesNotMatch(fonte, /paypalController|paypal\.routes|ist_orders|paypalClient|@paypal\/paypal-server-sdk/);
     const script = `
@@ -14,6 +16,14 @@ test('server compoe rotas atuais sem legado, portas, banco ou chamadas externas'
         import { pool } from './src/config/db.js';
         let tentativasBanco=0, tentativasHttp=0, escutasSimuladas=0;
         const caminhos=[];
+        const admin = (await import('./src/routes/admin.routes.js')).default;
+        const loja = admin.stack.find(l=>l.handle?.stack?.some(r=>r.route?.path==='/livros'));
+        assert.ok(loja,'Router administrativo da Loja registrado');
+        assert.deepEqual(loja.handle.stack.filter(l=>l.route).map(l=>[l.route.path,Object.keys(l.route.methods)]),
+            [['/livros',['get']],['/livros/:id',['get']],['/livros',['post']],['/livros/capa',['post']],
+                ['/livros/:id',['delete']],['/livros/:id/pdf',['post']],['/livros/:id',['patch']],
+                ['/livros/:id/versoes-pdf/:versaoPublicId/publicar',['post']],
+                ['/produtos',['get']],['/produtos/:id',['get']],['/categorias',['get']]]);
         for(const metodo of ['getConnection','query','execute']) pool[metodo]=()=>{
             tentativasBanco++;throw Error('ACESSO_BANCO_PROIBIDO_NO_TESTE');
         };
@@ -41,13 +51,14 @@ test('server compoe rotas atuais sem legado, portas, banco ou chamadas externas'
     `;
     const saida = execFileSync(process.execPath, ['--input-type=module'], {
         cwd: new URL('..', import.meta.url), input: script, encoding: 'utf8', timeout: 20000,
-        windowsHide: true, env: { ...process.env, NODE_ENV: 'test', IST_LOJA_RECUPERACAO_ATIVA: 'false' },
+        windowsHide: true, env: { ...process.env, DOTENV_CONFIG_PATH:armazenamento.arquivo,NODE_ENV: 'test', IST_LOJA_RECUPERACAO_ATIVA: 'false' },
         stdio: ['pipe', 'pipe', 'pipe']
     });
     assert.equal(saida, 'COMPOSICAO_VALIDADA');
 });
 
-test('URLs comerciais antigas retornam 404 para GET e HEAD sem banco ou arquivos', () => {
+test('URLs comerciais antigas retornam 404 para GET e HEAD sem banco ou arquivos', async t => {
+    const armazenamento=await prepararArmazenamentoSintetico(t);
     const script = `
         import assert from 'node:assert/strict';
         import express from 'express';
@@ -106,7 +117,7 @@ test('URLs comerciais antigas retornam 404 para GET e HEAD sem banco ou arquivos
     `;
     const saida = execFileSync(process.execPath, ['--input-type=module'], {
         cwd: new URL('..', import.meta.url), input: script, encoding: 'utf8', timeout: 20000,
-        windowsHide: true, env: { ...process.env, NODE_ENV: 'test', IST_LOJA_RECUPERACAO_ATIVA: 'false' },
+        windowsHide: true, env: { ...process.env,DOTENV_CONFIG_PATH:armazenamento.arquivo, NODE_ENV: 'test', IST_LOJA_RECUPERACAO_ATIVA: 'false' },
         stdio: ['pipe', 'pipe', 'pipe']
     });
     assert.equal(saida, 'BLOQUEIO_VALIDADO');

@@ -68,7 +68,7 @@ test('D7.1-B3 autoridades COMPRA/RECUPERACAO com SQL e PDFs sinteticos reais',{
             res.once('finish',()=>assert.equal(porRequisicao.getStore()?.tx??0,0));next();
         }));
         app.use('/api/loja/downloads/recuperacao',criarLojaDownloadRecuperacaoRouter({db,service:recuperacao,obterConfiguracao:()=>config,agora}));
-        app.use('/api/loja/downloads',criarLojaDownloadsRouter({db,env:{PRODUCTS_PATH:raiz},agora,agoraMs:()=>estado.n,
+        app.use('/api/loja/downloads',criarLojaDownloadsRouter({db,env:{PRODUCTS_LIVROS_PATH:raiz},agora,agoraMs:()=>estado.n,
             contextoEsperado:contextoDireitos,sessaoService,obterConfiguracaoSessao:()=>config,
             prepararArquivo:async(...args)=>{
                 assert.equal(porRequisicao.getStore().tx,0,'nenhuma transacao desta requisicao durante preparacao');

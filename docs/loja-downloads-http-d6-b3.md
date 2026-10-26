@@ -1,12 +1,16 @@
 # D6-B3 — HTTP protegido de e-books
 
+A validação adiada descrita nesta fase foi complementada pela Etapa 68.4:
+o servidor agora valida armazenamento antes de listen. Contrato vigente em
+[loja-armazenamento-68-4.md](loja-armazenamento-68-4.md).
+
 ## Composição e configuração
 
 O router `/api/loja/downloads` é montado antes do CORS global em `server.js`, com o pool compartilhado. Não cria pool, timer ou consulta na importação/inicialização. Compõe os serviços homologados de sessão, autorização D6-B1 e transições D5.2-B3; a preparação utiliza D6-B2 sem alterar suas regras.
 
-Configuração confiável existente: `LOJA_ORIGENS_PERMITIDAS`, `LOJA_CSRF_SECRET`, política de cookie de `carregarConfiguracaoLojaSessao`, `LOJA_AMBIENTE`, `IST_LOJA_PAYPAL_ENV`, `IST_LOJA_PAYPAL_CONTA_RECEBEDORA` e `PRODUCTS_PATH`. O contexto financeiro é fixado na composição e não é aceito do corpo/query/headers. A composição operacional preserva a restrição atual a Sandbox, ambiente do pedido correspondente e Merchant ID válido. Não exige nem instancia adaptador OAuth/PayPal para downloads. Ausência/incompatibilidade retorna erro sanitizado e não derruba a API.
+Configuração confiável existente: `LOJA_ORIGENS_PERMITIDAS`, `LOJA_CSRF_SECRET`, política de cookie de `carregarConfiguracaoLojaSessao`, `LOJA_AMBIENTE`, `IST_LOJA_PAYPAL_ENV`, `IST_LOJA_PAYPAL_CONTA_RECEBEDORA` e `PRODUCTS_LIVROS_PATH`. O contexto financeiro é fixado na composição e não é aceito do corpo/query/headers. A composição operacional preserva a restrição atual a Sandbox, ambiente do pedido correspondente e Merchant ID válido. Não exige nem instancia adaptador OAuth/PayPal para downloads. Ausência/incompatibilidade retorna erro sanitizado e não derruba a API.
 
-`PRODUCTS_PATH` é capturado pela configuração compartilhada `criarConfiguracaoArquivosLoja`, em `src/config/lojaArquivos.js`. Exige diretório absoluto existente, sem links na cadeia privada, e valida separação canônica dos diretórios públicos conhecidos antes de abrir o PDF e novamente após a preparação. Não há fallback, alteração de `.env`, movimentação de arquivos ou configuração automática de produção. A configuração operacional real não foi exercitada sobre PDFs comerciais.
+`PRODUCTS_LIVROS_PATH` é capturado pela configuração compartilhada `criarConfiguracaoArquivosLoja`, em `src/config/lojaArquivos.js`. Exige diretório absoluto existente, sem links na cadeia privada, e valida separação canônica dos diretórios públicos conhecidos antes de abrir o PDF e novamente após a preparação. Não há fallback, alteração de `.env`, movimentação de arquivos ou configuração automática de produção. A configuração operacional real não foi exercitada sobre PDFs comerciais.
 
 A mesma instância deve ser injetada no router pelo parâmetro interno `configuracaoArquivos` e usada em `configuracaoArquivos.criarPublicacao({ db, agora?, maxBytes? })`. Esta composição chama o serviço de publicação existente sem modificar suas regras e não aceita `raizPrivada` como override. A publicação também valida a raiz antes de cada operação. A fábrica antiga permanece intacta para seus consumidores internos; quem compõe o fluxo deve usar esta configuração única, não construir uma segunda configuração independente. Não foi criado endpoint administrativo de publicação.
 

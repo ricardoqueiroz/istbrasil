@@ -9,6 +9,7 @@ describe('Checkout da Loja', () => {
     let http: HttpTestingController, service: LojaCheckoutService, dados: Map<string, string>;
     let expira: string, aprovar: boolean, callbacks: any, inicio: jasmine.Spy, carregar: jasmine.Spy;
     const dto = (estado?: string): CheckoutEstado => ({
+        ambiente:'sandbox',
         pedido: { publicId: id, estado: estado === 'CAPTURADO' ? 'PAGO' : 'CRIADO', versao: 1, moeda: 'BRL', totalCentavos: 19000,
             criadoEm: '2026-10-18T12:00:00.000Z', expiraEm: '2099-10-18T12:30:00.000Z', itens: [] },
         pagamento: estado ? { publicId: pgId, pedidoPublicId: id, estado, pedidoEstado: estado === 'CAPTURADO' ? 'PAGO' : 'AGUARDANDO_PAGAMENTO',
@@ -51,6 +52,18 @@ describe('Checkout da Loja', () => {
         r.flush(dto('AGUARDANDO_APROVACAO')); await micro(); return { p };
     };
     it('nao carrega SDK nem inicia HTTP ao ser importado ou instanciado', () => { expect(carregar).not.toHaveBeenCalled(); expect(service.ocupado()).toBeFalse(); });
+    it('rejeita estado Live sem carregar SDK ou apresentar confirmacao Sandbox', async () => {
+        const p = service.preparar(id); await sessao();
+        http.expectOne('/api/loja/checkout/estado').flush({ ...dto('CAPTURADO'), ambiente: 'live' }); await p;
+        expect(service.estado()).toBeNull(); expect(service.confirmado()).toBeFalse();
+        expect(carregar).not.toHaveBeenCalled(); http.expectNone('/api/loja/checkout/configuracao');
+    });
+    it('rejeita configuracao divergente do ambiente persistido', async () => {
+        const p = service.preparar(id); await sessao();
+        http.expectOne('/api/loja/checkout/estado').flush(dto()); await micro();
+        http.expectOne('/api/loja/checkout/configuracao').flush({ ambiente: 'live', clientId: 'public-id' }); await p;
+        expect(service.estado()).toBeNull(); expect(service.pronto()).toBeFalse(); expect(carregar).not.toHaveBeenCalled();
+    });
     it('prepara sem criar ordem, guarda apenas UUIDs e validade da sessao', async () => {
         await preparar(); expect(service.pronto()).toBeTrue();
         const salvo = JSON.parse(dados.get(CHECKOUT_STORAGE_KEY)!);
@@ -62,7 +75,9 @@ describe('Checkout da Loja', () => {
         await preparar(); const { p } = await iniciar();
         const r = http.expectOne('/api/loja/checkout/capturar');
         expect(r.request.body).toEqual({ pagamentoPublicId: pgId });
-        r.flush(dto(estado).pagamento); await micro(); http.expectOne('/api/loja/checkout/estado').flush(dto(estado)); await p;
+        expect(service.confirmado()).toBeFalse();
+        r.flush(dto(estado).pagamento); await micro(); expect(service.confirmado()).toBeFalse();
+        http.expectOne('/api/loja/checkout/estado').flush(dto(estado)); await p;
         expect(service.estado()?.pagamento?.estado).toBe(estado); expect(service.estado()?.pagamento?.valorCentavos).toBe(19000);
     });
     it('duplo clique nao inicia segundo fluxo', async () => {

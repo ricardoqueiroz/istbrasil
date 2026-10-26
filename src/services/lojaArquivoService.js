@@ -179,6 +179,7 @@ export const criarLojaArquivoService = ({ db, raizPrivada, agora = () => new Dat
                 const rows = await versoesBloqueadas(c, produtoId);
                 const repetido = await lerIdentidade(c, rows);
                 if (repetido) return repetido;
+                if (rows.some(r => r.estado === 'RASCUNHO')) falhar('ADMIN_RASCUNHO_EXISTENTE');
                 if (rows.some(r => r.arquivo_logico_id !== arquivoLogicoId)) falhar('CONFLITO_IDENTIDADE_LOGICA');
                 const [caminhos] = await c.execute('SELECT produto_id,tamanho_bytes,sha256,mime FROM ist_loja_arquivo_versoes WHERE LOWER(caminho_relativo)=LOWER(?)', [caminhoRelativo]);
                 if (caminhos.some(r => r.produto_id === produtoId || !mesmoConteudo(r, arq))) falhar('CAMINHO_REUTILIZADO');
