@@ -62,6 +62,10 @@ export function criarEnvioRecuperacaoSmtp({ env = process.env, criarTransporte =
         || typeof remetente !== 'string' || remetente.length > 254
         || !/^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?\.[A-Za-z]{2,}$/.test(remetente)
         || typeof nome !== 'string' || !nome.trim() || nome.length > 100 || /[\x00-\x1f\x7f]/.test(nome)) falhar();
+
+    // SMTP_USER, SMTP_PASS
+    // modo==login → usuário e senha obrigatórios
+    // modo==relay → usuário e senha ausente
     const modo = env.IST_LOJA_RECUPERACAO_SMTP_AUTENTICACAO;
     let auth;
     if (modo === 'login') {

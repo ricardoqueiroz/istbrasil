@@ -29,7 +29,7 @@ const listarEventos = async (req, res) => {
                 destaque,
                 criado_em
             FROM ist_eventos
-            WHERE status != 'Rascunho'
+            WHERE status != 'Rascunho' AND status != 'Cancelado'
             ORDER BY destaque DESC, data_inicio DESC
         `;
 
@@ -59,7 +59,7 @@ const obterEventoPorSlug = async (req, res) => {
     try {
         // 1. Busca os dados principais do evento
         const [eventos] = await db.query(
-            'SELECT * FROM ist_eventos WHERE slug = ? AND status != "Rascunho"',
+            'SELECT * FROM ist_eventos WHERE slug = ? AND status != "Rascunho" AND status != "Cancelado"',
             [slug]
         );
 
