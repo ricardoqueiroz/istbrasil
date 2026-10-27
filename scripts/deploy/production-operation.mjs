@@ -5,8 +5,8 @@ import { createHash, randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
-import { canonicalPaths, releasePaths, validateActive, validateBackupManifest, validateBackupSeal, validateJournal, validateLock, validateManifest, sha256 } from './production-contract.mjs';
-import { verifyPreparedRelease } from './release-prepare.mjs';
+import { canonicalPaths, releasePaths, validId, validateActive, validateBackupManifest, validateBackupSeal, validateJournal, validateLock, validateManifest, sha256 } from './production-contract.mjs';
+import { verifyPreparedRelease, verifyPersistentPreparation, materializePersistentPreparation } from './release-prepare.mjs';
 import {verificarArmazenamentoRelease,antesDeAtivar} from './storage-preflight.mjs';
 
 const execute = promisify(execFile);
@@ -22,6 +22,7 @@ async function exists(filename) { try { await fs.lstat(filename); return true; }
 async function privateDirectory(filename) {
     const stat = await fs.lstat(filename);
     if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== process.getuid() || stat.mode & 0o022) throw fail('UNSAFE_OPERATION_DIRECTORY');
+    return stat;
 }
 async function ensureDirectory(filename) {
     await fs.mkdir(filename, { recursive: true, mode: 0o700 });
@@ -243,6 +244,20 @@ async function installCandidate(paths, workspace, preparationId, prepared) {
     return { releaseId, release, manifest, manifestSha256: sha256(bytes) };
 }
 
+async function finalizePersistentCandidate(paths, materialized) {
+    const { preparationId, release, manifest: prepared } = materialized;
+    if (release.root !== releasePaths(paths, preparationId).root || (await fs.readdir(release.root)).sort().join('|') !== 'backend|frontend')
+        throw fail('MATERIALIZED_PREPARATION_INVALID');
+    await fs.symlink(paths.env, `${release.backend}/.env`); await fs.symlink(paths.private, `${release.backend}/istbrasil.private`);
+    const entries = await inventory(release.backend, 'backend'); await inventory(release.frontend, 'frontend', entries);
+    const manifest = { version: 1, releaseId: preparationId, declaredCommitSha: prepared.commitSha,
+        gitProvenance: prepared.sourceType === 'package' ? null : { commitSha: prepared.commitSha, treeSha: prepared.treeSha, verifiedAt: now() },
+        runtime: { platform: process.platform, arch: process.arch, node: process.versions.node, abi: process.versions.modules }, entries };
+    if (!validateManifest(manifest, paths)) throw fail('RELEASE_MANIFEST_INVALID');
+    const bytes = Buffer.from(JSON.stringify(manifest)); await writeDurable(release.manifest, bytes); await syncDirectory(release.root);
+    return { releaseId: preparationId, release, manifest, manifestSha256: sha256(bytes) };
+}
+
 async function publishFrontend(paths, source) {
     await clearPublished(paths.html); await copyTree(source, paths.html, { indexLast: true });
     const index = await fs.readFile(`${paths.html}/index.html`);
@@ -346,6 +361,64 @@ async function operation({ base, operation, workspace, preparationId, backupId, 
     } finally { await releaseLock(retain); }
 }
 
+async function persistentOperation({ base, preparationId, adapter, verifyPersistent = verifyPersistentPreparation,
+    materialize = materializePersistentPreparation, preflight = verificarArmazenamentoRelease, createSnapshot = snapshotCurrent }) {
+    if (process.platform !== 'linux' || process.getuid?.() === 0) throw fail('LINUX_NON_ROOT_REQUIRED');
+    if (!validId(preparationId)) throw fail('ACTIVATION_ARGUMENT_INVALID');
+    const paths = canonicalPaths(base); await prepareInfrastructure(paths);
+    const transactionId = randomUUID(), releaseLock = await acquire(paths, 'deploy', transactionId);
+    let retain = false, recoverySnapshot, activePublished = false, activationStarted = false, active, activeBytes, journal;
+    let candidateIdentity, installed;
+    try {
+        active = await readActive(paths); activeBytes = active ? await fs.readFile(paths.active) : null;
+        const generation = (active?.generation || 0) + 1;
+        journal = { version: 1, transactionId, operation: 'deploy', generation, releaseId: preparationId,
+            events: [{ phase: 'started', at: now() }] };
+        if (active?.backend.releaseId === preparationId || active?.frontend.releaseId === preparationId) throw fail('PREPARATION_ALREADY_ACTIVE');
+        await verifyPersistent({ paths, preparationId });
+        const materialized = await materialize({ paths, preparationId });
+        candidateIdentity = await privateDirectory(materialized.release.root);
+        installed = await finalizePersistentCandidate(paths, materialized);
+        await verifyPersistent({ paths, preparationId });
+        await preflight({ backend: installed.release.backend, arquivoEnv: paths.env, base: paths.base });
+
+        const runtime = await adapter.describe(), expectedBackend = active ? releasePaths(paths, active.backend.releaseId).backend : paths.repo;
+        if (runtime.name !== PM2_NAME || runtime.cwd !== expectedBackend || runtime.script !== `${expectedBackend}/server.js`
+            || typeof runtime.commitSha !== 'string' || !/^[a-f0-9]{40}$/.test(runtime.commitSha)) throw fail('CURRENT_RUNTIME_DIVERGENT');
+        await verificarArmazenamentoRelease({ backend: runtime.cwd, arquivoEnv: paths.env, base: paths.base });
+        recoverySnapshot = await createSnapshot(paths, transactionId, active, runtime);
+        await phase(paths, journal, 'prepared'); activationStarted = true;
+        await adapter.switchTo({ name: PM2_NAME, cwd: installed.release.backend, script: `${installed.release.backend}/server.js` });
+        await phase(paths, journal, 'backend_activated');
+        const indexSha256 = await publishFrontend(paths, installed.release.frontend);
+        await phase(paths, journal, 'frontend_published'); await adapter.health(); await phase(paths, journal, 'health_verified');
+        const next = { version: 1, generation, transactionId, previousGeneration: active?.generation || null, confirmedAt: now(),
+            backend: { kind: 'release', releaseId: preparationId, commitSha: installed.manifest.declaredCommitSha, manifestSha256: installed.manifestSha256 },
+            frontend: { releaseId: preparationId, manifestSha256: installed.manifestSha256, indexSha256 },
+            pm2: { name: PM2_NAME, user: 'admin', home: paths.pm2Home, cwd: installed.release.backend,
+                script: `${installed.release.backend}/server.js`, node: '20.19.6' } };
+        if (!validateActive(next, paths)) throw fail('ACTIVE_STATE_INVALID');
+        await writeAtomic(paths.active, JSON.stringify(next)); activePublished = true; await phase(paths, journal, 'confirmed');
+        return { active: next, backupId: recoverySnapshot.backupId, transactionId };
+    } catch (error) {
+        let rollbackError;
+        if (error.rollbackError) retain = true;
+        if (recoverySnapshot && activationStarted) try { await restoreSnapshot(paths, recoverySnapshot, adapter); }
+        catch (failure) { rollbackError = failure; retain = true; }
+        if (activePublished) try { if (activeBytes) await writeAtomic(paths.active, activeBytes); else await fs.unlink(paths.active); }
+        catch (failure) { rollbackError ||= failure; retain = true; }
+        if (journal && journal.events.at(-1).phase !== 'confirmed') try { await phase(paths, journal, 'failed'); }
+        catch (failure) { rollbackError ||= failure; retain = true; }
+        if (candidateIdentity && !activationStarted && !retain) try {
+            const current = await privateDirectory(releasePaths(paths, preparationId).root);
+            if (current.dev !== candidateIdentity.dev || current.ino !== candidateIdentity.ino) throw fail('CANDIDATE_CLEANUP_UNSAFE');
+            await fs.rm(releasePaths(paths, preparationId).root, { recursive: true, force: false }); await syncDirectory(paths.releases);
+        } catch (failure) { rollbackError ||= failure; retain = true; }
+        if (rollbackError) { try { Object.defineProperty(error, 'rollbackError', { value: rollbackError }); } catch { /* original wins */ } }
+        throw error;
+    } finally { await releaseLock(retain); }
+}
+
 async function loadBackup(paths, backupId, transactionId, active, runtime) {
     const root = `${paths.backups}/${backupId}`, manifestBytes = await fs.readFile(`${root}/manifest.json`), manifest = JSON.parse(manifestBytes);
     const seal = JSON.parse(await fs.readFile(`${root}/READY`, 'utf8'));
@@ -368,4 +441,7 @@ async function installBackupAsRelease(paths, snapshot) {
 }
 
 export const activatePreparedRelease = input => operation({ ...input, operation: 'deploy' });
+export const activatePersistentRelease = input => persistentOperation(input);
 export const rollbackRelease = input => operation({ ...input, operation: 'rollback' });
+export const materializePersistentCandidate = ({ base, preparationId, materialize = materializePersistentPreparation }) =>
+    materialize({ paths: canonicalPaths(base), preparationId });

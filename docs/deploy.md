@@ -350,6 +350,41 @@ Os testes usam árvores fictícias e cobrem sucesso, falha de ativação do back
 
 `deploy.sh --deploy` usa exclusivamente o SHA completo da referência local `origin/main`, já verificada como avanço rápido de `HEAD`. A cópia Git é local, sem hardlinks e com configuração controlada; não há fetch implícito. Instalação e build ocorrem no workspace temporário privado. Em sucesso, a saída informa `transactionId`, `backupId`, `releaseId` e geração. Em falha recuperável, o módulo tenta restaurar PM2 e frontend. Se a recuperação ou a confirmação do estado falhar, mantém o lock transacional e informa que é necessária recuperação manual.
 
+### Preparação e ativação separadas
+
+O fluxo recomendado prepara a candidata sem alterar PM2, frontend ativo, `active.json`, banco ou Nginx. A preparação Git usa a referência local já existente `origin/main`, sem `fetch` ou `pull`, e exige avanço rápido em relação à origem Git comprovada da release ativa:
+
+```bash
+bash deploy.sh --prepare git
+```
+
+Para um pacote previamente produzido e validado, informe caminho absoluto canônico e SHA-256 em hexadecimal minúsculo. Esse modo não consulta metadados Git da fonte:
+
+```bash
+bash deploy.sh --prepare package /srv/ist-releases/release.tar 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+```
+
+Em sucesso, a saída JSON contém `preparationId`, origem e integridade. Inspecione e guarde esse UUID. A ativação ocorre separadamente, exige o marcador de aprovação, os locks e todas as verificações operacionais existentes:
+
+```bash
+bash deploy.sh --activate 12345678-1234-1234-1234-123456789abc
+bash deploy.sh --check
+```
+
+O fluxo combinado continua disponível temporariamente como legado:
+
+```bash
+bash deploy.sh --deploy
+```
+
+O rollback permanece explícito e usa o `backupId` retornado por uma ativação concluída:
+
+```bash
+bash deploy.sh --rollback 12345678-1234-1234-1234-123456789abc
+```
+
+Erros `PREPARATION_*` indicam falha anterior à ativação e não alteram o runtime ativo. `ACTIVE_GIT_BASELINE_UNPROVEN` exige revisão manual da proveniência antes de preparar via Git. `OPERATION_LOCK_EXISTS` ou `manualRecoveryRequired: true` exigem preservar lock, journal e evidências; não repita a operação automaticamente. Erros de argumento, UUID, caminho ou hash são recusados antes da delegação ao runner.
+
 Ao capturar o runtime atual, o snapshot remove somente os bits de escrita para grupo/outros dos arquivos regulares na cópia (`modo & ~0022`). Bits de leitura e execução são preservados; diretórios e links seguem a política existente. A origem em execução não recebe `chmod` nem mudança de propriedade. Essa normalização é exclusiva do backup do runtime e não flexibiliza o manifesto nem corrige releases candidatas inseguras.
 
 O rollback exige o UUID explícito de um backup selado: `bash deploy.sh --rollback <backupId>`. Ele valida novamente manifesto, SHA-256 e payload, cria uma nova release imutável, restaura PM2 e frontend e registra uma nova geração. `.env`, `.env.backup`, `.env_old`, `istbrasil.private`, uploads, backend-php, banco e `html/istdbadmin` permanecem fora da substituição.

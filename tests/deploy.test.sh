@@ -53,6 +53,7 @@ case "$name" in
    %g) [[ $SCENARIO == wrong-group ]] && echo 2000 || echo 1000 ;;
    %a) case "$SCENARIO:$*" in
     perm640:*|backup640:*.env.backup) echo 640 ;;
+    prepare-*-success:*/.deploy) echo 700 ;;
     perm644:*) echo 644 ;; perm660:*) echo 660 ;; perm400:*) echo 400 ;; perm4600:*) echo 4600 ;;
     private-executable:*new.pdf) echo 700 ;; *) echo 600 ;;
    esac ;;
@@ -85,6 +86,9 @@ case "$name" in
  node)
   if [[ $* == *deployment-runner.mjs* ]]; then
    case "$SCENARIO" in
+    prepare-git-success) echo '{"status":"SUCCESS","operation":"prepare","preparationId":"12345678-1234-1234-1234-123456789abc","source":{"type":"git"},"integrity":{"manifestSha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","entries":2}}'; exit 0 ;;
+    prepare-package-success) echo '{"status":"SUCCESS","operation":"prepare","preparationId":"12345678-1234-1234-1234-123456789abc","source":{"type":"package"},"integrity":{"manifestSha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","entries":2}}'; exit 0 ;;
+    activate-success) echo '{"status":"SUCCESS","operation":"activate","transactionId":"fixture","backupId":"fixture","releaseId":"12345678-1234-1234-1234-123456789abc","generation":2}'; exit 0 ;;
     operation-success) echo '{"status":"SUCCESS","operation":"deploy","transactionId":"fixture","backupId":"fixture","releaseId":"fixture","generation":1}'; exit 0 ;;
     operation-failure) echo '{"status":"FAILED","code":"ACTIVATION_FAILED","manualRecoveryRequired":false,"workspaceRetained":true}' >&2; exit 2 ;;
     operation-manual) echo '{"status":"FAILED","code":"OPERATION_LOCK_EXISTS","manualRecoveryRequired":true,"workspaceRetained":false}' >&2; exit 3 ;;
@@ -166,9 +170,15 @@ name.pdf"
  [[ $scenario != pm2-pid-no-lf ]] || printf '111' > "$FIXTURE/pm2/pm2.pid"
  : > "$FIXTURE/pm2/rpc.sock"
  : > "$FIXTURE/.deploy.lock"
- if [[ $scenario == operation-* ]]; then
+ mkdir -p "$FIXTURE/.deploy" "$FIXTURE/backend-node/istbrasil/scripts/deploy"
+ : > "$FIXTURE/backend-node/istbrasil/scripts/deploy/deployment-runner.mjs"
+ if [[ $scenario == operation-* || $scenario == activate-success ]]; then
   mkdir -p "$FIXTURE/.deploy/state"
   printf 'IST_DEPLOY_PRODUCTION_APPROVED_V1\n' > "$FIXTURE/.deploy/state/PRODUCTION_APPROVED"
+ fi
+ if [[ $scenario == prepare-package-success ]]; then
+  printf package > "$FIXTURE/release.tar"
+  operation="--prepare package $FIXTURE/release.tar bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
  fi
  # Test-only socket adapter; production still requires a Unix socket.
  sed -e "s|^BASE=.*|BASE='$FIXTURE'|" \
@@ -177,7 +187,8 @@ name.pdf"
   -e 's/-S $EXPECTED_PM2_HOME\/rpc.sock/-f $EXPECTED_PM2_HOME\/rpc.sock/' \
   "$SOURCE/deploy.sh" > "$FIXTURE/script.sh"
  local result=0
- PATH="$TMP/bin:$PATH" bash "$FIXTURE/script.sh" "$operation" > "$FIXTURE/output" 2>&1 || result=$?
+ read -r -a operation_args <<< "$operation"
+ PATH="$TMP/bin:$PATH" bash "$FIXTURE/script.sh" "${operation_args[@]}" > "$FIXTURE/output" 2>&1 || result=$?
  if [[ $expected == pass ]]; then
   if [[ $result != 0 ]]; then cat "$FIXTURE/output"; echo "Unexpected failure: $scenario" >&2; return 1; fi
  else
@@ -191,7 +202,7 @@ name.pdf"
   cmp "$FIXTURE/backend-node/istbrasil/.env" "$FIXTURE/backend-node/istbrasil/.env.backup"
  fi
  ! grep -Eq '^(pm2|rsync|curl) |npm (ci|install|run)|git .* (fetch|merge|pull|reset)' "$CALLS"
- if [[ $operation == --check ]]; then ! grep -q '^flock ' "$CALLS"; fi
+ if [[ ${operation_args[0]} == --check || ${operation_args[0]} == --prepare ]]; then ! grep -q '^flock ' "$CALLS"; fi
  case "$scenario" in
   root) grep -q 'Root refused' "$FIXTURE/output" ;;
   wrong-user) grep -q 'must be admin' "$FIXTURE/output" ;;
@@ -225,6 +236,13 @@ name.pdf"
   operation-invalid)
    grep -q 'raw output suppressed' "$FIXTURE/output"
    ! grep -q 'PRIVATE_PATH' "$FIXTURE/output" ;;
+  prepare-git-success|prepare-package-success)
+   grep -q '"operation":"prepare"' "$FIXTURE/output"
+   grep -q 'prepare completed successfully' "$FIXTURE/output"
+   ! grep -Eq '^(pm2|flock|rsync|curl|ss|ps) ' "$CALLS" ;;
+  activate-success)
+   grep -q '"operation":"activate"' "$FIXTURE/output"
+   grep -q 'activate completed successfully' "$FIXTURE/output" ;;
  esac
  COUNT=$((COUNT+1)); printf 'PASS %s (%s)\n' "$scenario" "$operation"
 }
@@ -238,6 +256,9 @@ run_case operation-success --deploy pass
 run_case operation-failure --deploy fail
 run_case operation-manual --deploy fail
 run_case operation-invalid --deploy fail
+run_case prepare-git-success '--prepare git' pass
+run_case prepare-package-success '--prepare package placeholder placeholder' pass
+run_case activate-success '--activate 12345678-1234-1234-1234-123456789abc' pass
 run_case rollback --rollback fail
 for scenario in perm640 backup640 quoted-private private-pdf ignored-generated root-node-unrelated port-duplicate; do run_case "$scenario" --check pass; done
 for scenario in wrong-owner wrong-group shared-group shared-primary missing-nss-admin root-node-empty perm644 perm660 perm400 perm4600 extended-acl acl-inaccessible tracked-env ignored-unknown newline-unknown private-executable private-script private-symlink unignored-generated git-enumeration-error pm2-owner daemon-stale api-unrelated api-hidden root-node-pm2 root-node-hidden port-owner port-hidden port-partly-hidden; do run_case "$scenario" --check fail; done

@@ -100,13 +100,29 @@ test('canonical paths keep original repo/public/persistent locations', () => {
     assert.equal(p.html, '/var/www/istbrasil.org.br/html');
     assert.equal(p.private, `${p.repo}/istbrasil.private`);
     assert.equal(p.active, `${p.base}/.deploy/state/active.json`);
+    assert.equal(p.preparations, `${p.base}/.deploy/preparations`);
     assert.equal(p.envOld, `${p.repo}/.env_old`);
     assert.equal(contract.RESERVE_BYTES, 10737418240n);
 });
 for (const value of ['/', '/tmp/../etc', '/tmp/', '/tmp\\other', '/tmp\nother', 'relative']) test(`reject unsafe base ${JSON.stringify(value)}`, () => assert.throws(() => contract.canonicalPaths(value)));
 test('release IDs and relative traversal cannot escape canonical roots', () => {
     assert.throws(() => contract.releasePaths(contract.PATHS, '../outside'));
+    assert.throws(() => contract.preparationPaths(contract.PATHS, '../outside'));
     for (const name of ['backend/../.env', '/backend/server.js', 'backend//x', 'backend/x:y', 'backend/x\\y', 'frontend/./index.html']) assert.equal(contract.relativeEntry(name), false);
+});
+test('persistent preparation manifest distinguishes Git and package claims', () => {
+    const preparationId = randomUUID(), entries = [
+        { path: 'backend', type: 'directory', mode: 0o700 }, { path: 'backend/server.js', type: 'file', mode: 0o600, size: 1, sha256: 'b'.repeat(64) },
+        { path: 'backend/package.json', type: 'file', mode: 0o600, size: 1, sha256: 'b'.repeat(64) }, { path: 'backend/package-lock.json', type: 'file', mode: 0o600, size: 1, sha256: 'b'.repeat(64) },
+        { path: 'frontend', type: 'directory', mode: 0o700 }, { path: 'frontend/index.html', type: 'file', mode: 0o600, size: 1, sha256: 'b'.repeat(64) },
+    ];
+    const common = { version: 1, format: 'ist-prepared-inactive-v1', status: 'PREPARED_INACTIVE', preparationId, commitSha: SHA, treeSha: 'c'.repeat(40),
+        node: 'v20.19.6', npm: '11.7.0', modulesAbi: process.versions.modules, platform: 'linux', architecture: process.arch,
+        commands: { install: ['npm', 'ci', '--include=dev', '--strict-peer-deps'], build: ['npm', 'run', 'build', '--', '--configuration', 'production'], nativeProbe: ['node', '-e', "require('bcrypt'); require('sharp')"] }, entries };
+    assert.equal(contract.validatePreparedManifest({ ...common, exportId: randomUUID() }), true);
+    assert.equal(contract.validatePreparedManifest({ ...common, sourceType: 'package', packageId: randomUUID(), packageSha256: 'd'.repeat(64), releaseVersion: 'release-1' }), true);
+    assert.equal(contract.validatePreparedManifest({ ...common, sourceType: 'package', packageId: randomUUID(), packageSha256: 'd'.repeat(64), releaseVersion: 'release-1', exportId: randomUUID() }), false);
+    assert.equal(contract.validatePreparedSeal({ version: 1, preparationId, manifestSha256: 'e'.repeat(64) }), true);
 });
 test('only two runtime bindings and internal relative package links are approved', () => {
     const p = contract.PATHS, r = contract.releasePaths(p, randomUUID());
@@ -334,6 +350,9 @@ test('production contract is integrated only through the gated deployment entryp
     assert.ok(deploy.includes('production-contract.mjs')); assert.ok(!deploy.includes('production-inspect.mjs'));
     assert.match(deploy, /PRODUCTION_APPROVED/); assert.match(deploy, /Rollback unavailable/);
     assert.match(deploy, /deployment-runner\.mjs/);
+    assert.match(deploy, /--prepare git/); assert.match(deploy, /--prepare package/); assert.match(deploy, /--activate/);
+    assert.match(deploy, /run_runner prepare-git/); assert.match(deploy, /run_runner prepare-package/); assert.match(deploy, /run_runner activate/);
+    assert.doesNotMatch(deploy, /git\s+(?:-[^\s]+\s+)*fetch/);
     for (const name of ['production-contract.mjs', 'production-inspect.mjs']) {
         const source = await fs.readFile(new URL(`../scripts/deploy/${name}`, import.meta.url), 'utf8');
         assert.ok(!/^import .*['"].*(?:server\.js|db\.js|backup\.mjs|state\.mjs)['"]/m.test(source));

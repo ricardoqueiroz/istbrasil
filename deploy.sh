@@ -11,22 +11,95 @@ STAGE=arguments
 log() { printf '[IST deploy] %s\n' "$*"; }
 fail() { log "ERROR [$STAGE]: $*" >&2; exit 1; }
 trap 'printf "[IST deploy] ERROR [%s]: interrupted; sensitive details omitted.\n" "$STAGE" >&2' ERR
-[[ $# -ge 1 && $# -le 2 ]] || fail 'Usage: deploy.sh --check | --deploy | --rollback BACKUP_UUID'
+[[ $# -ge 1 && $# -le 4 ]] || fail 'Usage: deploy.sh --check | --prepare git | --prepare package ABSOLUTE_TAR SHA256 | --activate PREPARATION_UUID | --deploy | --rollback BACKUP_UUID'
 MODE=$1
-case "$MODE" in --check|--deploy|--rollback) ;; *) fail 'Unknown operation.' ;; esac
+case "$MODE" in --check|--prepare|--activate|--deploy|--rollback) ;; *) fail 'Unknown operation.' ;; esac
 [[ $MODE != --check || $# == 1 ]] || fail '--check does not accept arguments.'
 [[ $MODE != --deploy || $# == 1 ]] || fail '--deploy does not accept arguments.'
 [[ $MODE != --rollback || $# == 2 ]] || fail 'Rollback unavailable: explicit backup UUID required.'
+[[ $MODE != --activate || $# == 2 ]] || fail 'Activation unavailable: explicit preparation UUID required.'
+if [[ $MODE == --activate ]]; then
+    [[ $2 =~ ^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$ ]] || fail 'Activation unavailable: invalid preparation UUID.'
+fi
+if [[ $MODE == --prepare ]]; then
+    [[ ${2:-} == git && $# == 2 || ${2:-} == package && $# == 4 ]] || fail 'Prepare requires git or package ABSOLUTE_TAR SHA256.'
+fi
 STAGE=identity
 ADMIN_UID=$(id -u)
 ADMIN_GID=$(id -g)
 [[ $ADMIN_UID != 0 ]] || fail 'Root refused; never use sudo pm2.'
 [[ $(id -un) == admin ]] || fail 'Operational user must be admin.'
-[[ -z ${PM2_HOME:-} || $PM2_HOME == "$EXPECTED_PM2_HOME" ]] || fail 'Unexpected PM2_HOME.'
+[[ $MODE == --prepare || -z ${PM2_HOME:-} || $PM2_HOME == "$EXPECTED_PM2_HOME" ]] || fail 'Unexpected PM2_HOME.'
 STAGE=tools
-for tool in git node npm pm2 flock rsync curl ss df realpath stat ps awk grep cut sort getent getfacl; do
+TOOLS=(node npm df realpath stat awk)
+if [[ $MODE != --activate && ( $MODE != --prepare || ${2:-} == git ) ]]; then TOOLS+=(git); fi
+if [[ $MODE != --prepare ]]; then TOOLS+=(pm2 flock rsync curl ss ps cut grep sort getent getfacl); fi
+for tool in "${TOOLS[@]}"; do
     command -v "$tool" >/dev/null 2>&1 || fail "Missing tool: $tool"
 done
+run_runner() {
+    local status output expected_manual sanitized
+    if output=$(node "$REPO/scripts/deploy/deployment-runner.mjs" "$@" 2>&1); then status=0; else status=$?; fi
+    if (( status != 0 )); then
+        expected_manual=false; (( status == 3 )) && expected_manual=true
+        if sanitized=$(EXPECTED_MANUAL="$expected_manual" node -e '
+const fs=require("node:fs");
+try { const value=JSON.parse(fs.readFileSync(0,"utf8").trim()), keys=Object.keys(value).sort();
+const allowed=["code","manualRecoveryRequired","status","workspaceRetained"];
+if(JSON.stringify(keys)!==JSON.stringify(allowed)||value.status!=="FAILED"||typeof value.code!=="string"||!/^[A-Z][A-Z0-9_]{1,63}$/.test(value.code)
+||typeof value.manualRecoveryRequired!=="boolean"||typeof value.workspaceRetained!=="boolean"
+||value.manualRecoveryRequired!==(process.env.EXPECTED_MANUAL==="true"))process.exit(2);
+process.stdout.write(JSON.stringify(value)); } catch { process.exit(2); }
+' <<< "$output"); then printf '%s\n' "$sanitized" >&2; else fail 'Executor returned invalid sanitized diagnostics; raw output suppressed.'; fi
+        (( status == 3 )) && fail 'Operation failed; manual recovery required. Inspect operation.lock and transaction journal.'
+        [[ ${1:-} == prepare-* ]] && fail 'Preparation failed safely; active runtime was not changed.'
+        fail 'Operation failed safely; runtime recovery was attempted when required.'
+    fi
+    printf '%s\n' "$output"
+}
+
+if [[ $MODE == --prepare ]]; then
+    STAGE=prepare
+    for dir in "$BASE" "$REPO" "$BASE/.deploy"; do
+        [[ -d $dir && ! -L $dir && $(realpath -e -- "$dir") == "$dir" ]] || fail 'Preparation path missing, linked or non-canonical.'
+    done
+    [[ $(stat -c %u -- "$BASE/.deploy") == "$ADMIN_UID" && $(stat -c %g -- "$BASE/.deploy") == "$ADMIN_GID"
+       && $(stat -c %a -- "$BASE/.deploy") == 700 ]] || fail 'Preparation storage must belong exclusively to admin with mode 0700.'
+    [[ -f $REPO/scripts/deploy/deployment-runner.mjs && ! -L $REPO/scripts/deploy/deployment-runner.mjs ]] || fail 'Deployment runner unavailable.'
+    AVAILABLE=$(df -Pk -- "$BASE" | awk 'END {print $4}')
+    [[ $AVAILABLE =~ ^[0-9]+$ ]] || fail 'Cannot measure space.'
+    (( AVAILABLE >= 10485760 )) || fail 'Less than 10 GiB available.'
+    if [[ $2 == package ]]; then
+        PACKAGE_PATH=$3; PACKAGE_SHA=$4
+        [[ $PACKAGE_PATH == /* && -f $PACKAGE_PATH && ! -L $PACKAGE_PATH ]] || fail 'Package must be an absolute regular path without symlinks.'
+        [[ $(realpath -e -- "$PACKAGE_PATH") == "$PACKAGE_PATH" ]] || fail 'Package path must be canonical.'
+        [[ $PACKAGE_SHA =~ ^[a-f0-9]{64}$ ]] || fail 'Package SHA-256 is invalid.'
+        run_runner prepare-package "$PACKAGE_PATH" "$PACKAGE_SHA"
+    else
+        [[ $(git -C "$REPO" rev-parse --show-toplevel) == "$REPO" && $(git -C "$REPO" branch --show-current) == main ]] || fail 'Git preparation requires the canonical main repository.'
+        git -C "$REPO" diff --quiet || fail 'Tracked changes in working tree.'
+        git -C "$REPO" diff --cached --quiet || fail 'Staged changes.'
+        TARGET=$(git -C "$REPO" rev-parse --verify refs/remotes/origin/main)
+        BASELINE=$(git -C "$REPO" rev-parse --verify HEAD)
+        if [[ -e $BASE/.deploy/state/active.json ]]; then
+            BASELINE=$(node --input-type=module - "$BASE" "$REPO/scripts/deploy/production-contract.mjs" <<'GITBASE'
+import fs from 'node:fs';
+const [base,modulePath]=process.argv.slice(2), c=await import('file://'+modulePath), paths=c.canonicalPaths(base);
+const active=JSON.parse(fs.readFileSync(paths.active,'utf8'));
+if(!c.validateActive(active,paths))process.exit(2);
+const release=c.releasePaths(paths,active.backend.releaseId), bytes=fs.readFileSync(release.manifest), manifest=JSON.parse(bytes);
+if(!c.validateManifest(manifest,paths)||c.sha256(bytes)!==active.backend.manifestSha256||manifest.gitProvenance===null
+||manifest.declaredCommitSha!==active.backend.commitSha||manifest.gitProvenance.commitSha!==active.backend.commitSha)process.exit(3);
+process.stdout.write(active.backend.commitSha);
+GITBASE
+            ) || fail 'ACTIVE_GIT_BASELINE_UNPROVEN'
+        fi
+        git -C "$REPO" merge-base --is-ancestor "$BASELINE" "$TARGET" || fail 'Cached target is not fast-forward from the active Git baseline.'
+        run_runner prepare-git "$TARGET"
+    fi
+    log 'prepare completed successfully; activation requires a separate explicit command.'
+    exit 0
+fi
 STAGE=paths
 for dir in "$BASE" "$REPO" "$PUBLIC" "$BASE/uploads" "$REPO/istbrasil.private"; do
     [[ -d $dir && ! -L $dir ]] || fail 'Required directory missing or replaced by symlink.'
@@ -67,38 +140,40 @@ for file in "$REPO/.env.backup" "$REPO/.env_old"; do
         fail 'Extended legacy configuration ACL requires manual review.'
     fi
 done
-STAGE=git
-[[ $(git -C "$REPO" rev-parse --show-toplevel) == "$REPO" ]] || fail 'Unexpected Git root.'
-[[ $(git -C "$REPO" branch --show-current) == main ]] || fail 'Branch must be main.'
-git -C "$REPO" diff --quiet || fail 'Tracked changes in working tree.'
-git -C "$REPO" diff --cached --quiet || fail 'Staged changes.'
-# NUL stream preserves spaces, newlines and quoted filenames. pipefail propagates Git errors.
-git -C "$REPO" ls-files --others -z | while IFS= read -r -d '' file; do
-    case "$file" in
-        .env|.env.backup|.env_old) ;;
-        node_modules/*|dist/*|.angular/cache/*)
-            git -C "$REPO" check-ignore -q -- "$file" || fail 'Generated artifact is not ignored; manual review required.' ;;
-        istbrasil.private/*)
-            case "$file" in
-                *.pdf|*.png|*.jpg|*.jpeg|*.webp|*.gif|*.mp4|*.webm|*.mp3|*.wav|*.ogg|*.m4a) ;;
-                *) fail 'Unknown private file type; manual review required.' ;;
-            esac
-            [[ -f $REPO/$file && ! -L $REPO/$file ]] || fail 'Private data is not a regular file.'
-            [[ $(realpath -e -- "$REPO/$file") == "$REPO/$file" ]] || fail 'Private data path contains a symlink.'
-            data_mode=$(stat -c %a -- "$REPO/$file")
-            (( (8#$data_mode & 0111) == 0 )) || fail 'Executable private file requires manual review.' ;;
-        *) fail 'Untracked file outside explicit allowlist; manual review required.' ;;
-    esac
-done
-for config in .env .env.backup .env_old; do
-    if git -C "$REPO" ls-files --error-unmatch -- "$config" >/dev/null 2>&1; then
-        fail 'Sensitive configuration is tracked by Git.'
-    fi
-done
-PREVIOUS=$(git -C "$REPO" rev-parse --verify HEAD)
-TARGET=$(git -C "$REPO" rev-parse --verify origin/main)
-git -C "$REPO" merge-base --is-ancestor "$PREVIOUS" "$TARGET" || fail 'Cached target is not fast-forward.'
-log "Current commit: $PREVIOUS; cached origin/main: $TARGET (no fetch)."
+if [[ $MODE != --activate ]]; then
+    STAGE=git
+    [[ $(git -C "$REPO" rev-parse --show-toplevel) == "$REPO" ]] || fail 'Unexpected Git root.'
+    [[ $(git -C "$REPO" branch --show-current) == main ]] || fail 'Branch must be main.'
+    git -C "$REPO" diff --quiet || fail 'Tracked changes in working tree.'
+    git -C "$REPO" diff --cached --quiet || fail 'Staged changes.'
+    # NUL stream preserves spaces, newlines and quoted filenames. pipefail propagates Git errors.
+    git -C "$REPO" ls-files --others -z | while IFS= read -r -d '' file; do
+        case "$file" in
+            .env|.env.backup|.env_old) ;;
+            node_modules/*|dist/*|.angular/cache/*)
+                git -C "$REPO" check-ignore -q -- "$file" || fail 'Generated artifact is not ignored; manual review required.' ;;
+            istbrasil.private/*)
+                case "$file" in
+                    *.pdf|*.png|*.jpg|*.jpeg|*.webp|*.gif|*.mp4|*.webm|*.mp3|*.wav|*.ogg|*.m4a) ;;
+                    *) fail 'Unknown private file type; manual review required.' ;;
+                esac
+                [[ -f $REPO/$file && ! -L $REPO/$file ]] || fail 'Private data is not a regular file.'
+                [[ $(realpath -e -- "$REPO/$file") == "$REPO/$file" ]] || fail 'Private data path contains a symlink.'
+                data_mode=$(stat -c %a -- "$REPO/$file")
+                (( (8#$data_mode & 0111) == 0 )) || fail 'Executable private file requires manual review.' ;;
+            *) fail 'Untracked file outside explicit allowlist; manual review required.' ;;
+        esac
+    done
+    for config in .env .env.backup .env_old; do
+        if git -C "$REPO" ls-files --error-unmatch -- "$config" >/dev/null 2>&1; then
+            fail 'Sensitive configuration is tracked by Git.'
+        fi
+    done
+    PREVIOUS=$(git -C "$REPO" rev-parse --verify HEAD)
+    TARGET=$(git -C "$REPO" rev-parse --verify origin/main)
+    git -C "$REPO" merge-base --is-ancestor "$PREVIOUS" "$TARGET" || fail 'Cached target is not fast-forward.'
+    log "Current commit: $PREVIOUS; cached origin/main: $TARGET (no fetch)."
+fi
 STAGE=space
 AVAILABLE=$(df -Pk -- "$BASE" | awk 'END {print $4}')
 [[ $AVAILABLE =~ ^[0-9]+$ ]] || fail 'Cannot measure space.'
@@ -252,6 +327,10 @@ if [[ $MODE == --rollback ]]; then
     ROLLBACK_ID=$2
     [[ $ROLLBACK_ID =~ ^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$ ]] || fail 'Rollback unavailable: invalid backup UUID.'
 fi
+if [[ $MODE == --activate ]]; then
+    PREPARATION_ID=$2
+    [[ $PREPARATION_ID =~ ^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$ ]] || fail 'Activation unavailable: invalid preparation UUID.'
+fi
 APPROVAL="$BASE/.deploy/state/PRODUCTION_APPROVED"
 [[ -f $APPROVAL && ! -L $APPROVAL && $(stat -c %u -- "$APPROVAL") == "$ADMIN_UID" && $(stat -c %a -- "$APPROVAL") == 600
    && $(< "$APPROVAL") == IST_DEPLOY_PRODUCTION_APPROVED_V1 ]] || {
@@ -260,35 +339,10 @@ APPROVAL="$BASE/.deploy/state/PRODUCTION_APPROVED"
 }
 STAGE=operation
 if [[ $MODE == --deploy ]]; then
-    if OPERATION_OUTPUT=$(node "$REPO/scripts/deploy/deployment-runner.mjs" deploy "$TARGET" 2>&1); then OPERATION_STATUS=0; else OPERATION_STATUS=$?; fi
+    run_runner deploy "$TARGET"
+elif [[ $MODE == --activate ]]; then
+    run_runner activate "$PREPARATION_ID"
 else
-    if OPERATION_OUTPUT=$(node "$REPO/scripts/deploy/deployment-runner.mjs" rollback "$ROLLBACK_ID" 2>&1); then OPERATION_STATUS=0; else OPERATION_STATUS=$?; fi
+    run_runner rollback "$ROLLBACK_ID"
 fi
-if (( OPERATION_STATUS != 0 )); then
-    EXPECTED_MANUAL=false
-    (( OPERATION_STATUS == 3 )) && EXPECTED_MANUAL=true
-    if SANITIZED_OPERATION_ERROR=$(EXPECTED_MANUAL="$EXPECTED_MANUAL" node -e '
-const fs=require("node:fs");
-try {
-    const input=fs.readFileSync(0,"utf8").trim();
-    const value=JSON.parse(input), keys=Object.keys(value).sort();
-    const allowed=["code","manualRecoveryRequired","status","workspaceRetained"];
-    if (JSON.stringify(keys)!==JSON.stringify(allowed)
-        || value.status!=="FAILED"
-        || typeof value.code!=="string" || !/^[A-Z][A-Z0-9_]{1,63}$/.test(value.code)
-        || typeof value.manualRecoveryRequired!=="boolean"
-        || typeof value.workspaceRetained!=="boolean"
-        || value.manualRecoveryRequired!==(process.env.EXPECTED_MANUAL==="true")) process.exit(2);
-    process.stdout.write(JSON.stringify({status:value.status,code:value.code,
-        manualRecoveryRequired:value.manualRecoveryRequired,workspaceRetained:value.workspaceRetained}));
-} catch { process.exit(2); }
-' <<< "$OPERATION_OUTPUT"); then
-        printf '%s\n' "$SANITIZED_OPERATION_ERROR" >&2
-    else
-        fail 'Executor returned invalid sanitized diagnostics; raw output suppressed.'
-    fi
-    if (( OPERATION_STATUS == 3 )); then fail 'Operation failed; manual recovery required. Inspect operation.lock and transaction journal.'; fi
-    fail 'Operation failed safely; runtime rollback was attempted.'
-fi
-log "$OPERATION_OUTPUT"
 log "${MODE#--} completed successfully."

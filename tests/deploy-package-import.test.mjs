@@ -6,7 +6,8 @@ import { createHash } from 'node:crypto';
 import * as tar from 'tar';
 import { createExportWorkspace } from '../scripts/deploy/git-export.mjs';
 import { importPackage, verifyPackage } from '../scripts/deploy/package-import.mjs';
-import { prepareRelease, verifyPreparedRelease } from '../scripts/deploy/release-prepare.mjs';
+import { prepareRelease, verifyPreparedRelease, publishPersistentPreparation, verifyPersistentPreparation } from '../scripts/deploy/release-prepare.mjs';
+import { canonicalPaths } from '../scripts/deploy/production-contract.mjs';
 
 const linux = { skip: process.platform !== 'linux' || process.getuid?.() === 0 ? 'Linux non-root workspace required' : false };
 const digest = value => createHash('sha256').update(value).digest('hex');
@@ -89,6 +90,11 @@ test('valid package imports, verifies and prepares without a git directory', lin
     assert.equal(prepared.manifest.sourceType, 'package');
     assert.equal(prepared.manifest.releaseVersion, 'fixture-1');
     assert.equal((await verifyPreparedRelease({ workspace: f.workspace, preparationId: prepared.manifest.preparationId })).commitSha, COMMIT);
+    const paths = canonicalPaths(`${f.workspace}/persistent`); await fs.mkdir(paths.admin, { recursive: true, mode: 0o700 }); await fs.chmod(paths.admin, 0o700);
+    await publishPersistentPreparation({ workspace: f.workspace, preparationId: prepared.manifest.preparationId, paths });
+    await fs.rm(`${f.workspace}/preparations/${prepared.manifest.preparationId}`, { recursive: true });
+    const persistent = await verifyPersistentPreparation({ paths, preparationId: prepared.manifest.preparationId });
+    assert.equal(persistent.sourceType, 'package'); assert.equal(persistent.packageSha256, f.expectedSha256);
     await assert.rejects(fs.lstat(`${f.workspace}/repository/.git`), { code: 'ENOENT' });
 });
 

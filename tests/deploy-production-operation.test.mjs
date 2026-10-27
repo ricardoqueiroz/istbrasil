@@ -4,9 +4,9 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
-import { canonicalPaths, validateActive, validateJournal } from '../scripts/deploy/production-contract.mjs';
+import { canonicalPaths, validateActive, validateJournal, validatePreparedManifest } from '../scripts/deploy/production-contract.mjs';
 import { inspectProduction } from '../scripts/deploy/production-inspect.mjs';
-import { activatePreparedRelease, rollbackRelease, publicationExitCode, publishNoReplace } from '../scripts/deploy/production-operation.mjs';
+import { activatePreparedRelease, activatePersistentRelease, rollbackRelease, publicationExitCode, publishNoReplace, materializePersistentCandidate } from '../scripts/deploy/production-operation.mjs';
 import {prepararValidadorRelease} from './fixtures/lojaStorageRelease.js';
 
 const linux = { skip: process.platform !== 'linux' || process.getuid?.() === 0 ? 'Linux non-root required' : false };
@@ -67,6 +67,42 @@ async function persistentSnapshot(f) {
     return { env: await fs.readFile(f.paths.env, 'utf8'), envBackup: await fs.readFile(f.paths.envBackup, 'utf8'),
         private: await snapshot(f.paths.private), uploads: await snapshot(f.paths.uploads), php: await snapshot(f.paths.backendPhp) };
 }
+
+async function preparedInventory(root) {
+    const entries = [];
+    const visit = async (directory, relative = '') => {
+        for (const name of (await fs.readdir(directory)).sort()) {
+            const current = relative ? `${relative}/${name}` : name, filename = `${root}/${current}`, stat = await fs.lstat(filename);
+            if (stat.isDirectory() && !stat.isSymbolicLink()) { entries.push({ path: current, type: 'directory', mode: stat.mode & 0o777 }); await visit(filename, current); }
+            else if (stat.isFile() && !stat.isSymbolicLink()) entries.push({ path: current, type: 'file', mode: stat.mode & 0o777,
+                size: stat.size, sha256: hash(await fs.readFile(filename)) });
+            else if (stat.isSymbolicLink()) entries.push({ path: current, type: 'symlink', target: await fs.readlink(filename) });
+            else throw new Error('fixture inventory type');
+        }
+    };
+    await visit(root); return entries;
+}
+
+async function publishPersistentFixture(f, sourceType = 'git') {
+    const root = `${f.paths.preparations}/${f.preparationId}`, release = `${root}/release`;
+    await fs.mkdir(release, { recursive: true, mode: 0o700 }); await fs.chmod(f.paths.admin, 0o700); await fs.chmod(f.paths.preparations, 0o700);
+    await fs.cp(`${f.candidate}/backend`, `${release}/backend`, { recursive: true });
+    await fs.cp(`${f.candidate}/frontend`, `${release}/frontend`, { recursive: true });
+    const common = { version: 1, format: 'ist-prepared-inactive-v1', status: 'PREPARED_INACTIVE', preparationId: f.preparationId,
+        commitSha: SHA, treeSha: TREE, node: 'v20.19.6', npm: '11.7.0', modulesAbi: process.versions.modules,
+        platform: 'linux', architecture: process.arch, commands: { install: ['npm', 'ci', '--include=dev', '--strict-peer-deps'],
+            build: ['npm', 'run', 'build', '--', '--configuration', 'production'], nativeProbe: ['node', '-e', "require('bcrypt'); require('sharp')"] },
+        entries: await preparedInventory(release) };
+    const manifest = sourceType === 'package'
+        ? { ...common, sourceType: 'package', packageId: randomUUID(), packageSha256: 'd'.repeat(64), releaseVersion: 'release-27-11-b' }
+        : { ...common, exportId: randomUUID() };
+    assert.equal(validatePreparedManifest(manifest), true, 'synthetic persistent manifest must satisfy the production contract');
+    const bytes = Buffer.from(JSON.stringify(manifest));
+    await fs.writeFile(`${root}/manifest.json`, bytes, { mode: 0o600 });
+    await fs.writeFile(`${root}/PREPARED_INACTIVE.json`, JSON.stringify({ version: 1, preparationId: f.preparationId,
+        manifestSha256: hash(bytes) }), { mode: 0o600 });
+    return { root, release, manifest };
+}
 async function assertNoPreparedSnapshot(f) {
     assert.deepEqual(await fs.readdir(f.paths.backups), []);
     assert.ok(!(await fs.readdir(f.paths.admin)).some(name => name.startsWith('.snapshot-')));
@@ -74,6 +110,99 @@ async function assertNoPreparedSnapshot(f) {
     assert.equal(await fs.readFile(`${f.paths.html}/index.html`, 'utf8'), '<title>legacy frontend</title>');
     assert.equal(await fs.readFile(`${f.paths.repo}/server.js`, 'utf8'), '// legacy server fixture\n');
 }
+
+test('persistent candidate entry resolves canonical paths without snapshot or activation', linux, async t => {
+    const f = await fixture(t); let received;
+    const expected = { preparationId: f.preparationId, materialized: true };
+    const result = await materializePersistentCandidate({ base: f.base, preparationId: f.preparationId,
+        materialize: async input => { received = input; return expected; } });
+    assert.equal(result, expected);
+    assert.equal(received.preparationId, f.preparationId); assert.deepEqual(received.paths, canonicalPaths(f.base));
+    assert.equal(f.adapter.switches.length, 0); assert.equal(f.adapter.healthCalls, 0);
+    assert.equal(await fs.readFile(`${f.paths.html}/index.html`, 'utf8'), '<title>legacy frontend</title>');
+    assert.equal(await fs.readFile(`${f.paths.repo}/server.js`, 'utf8'), '// legacy server fixture\n');
+    await assert.rejects(fs.lstat(f.paths.active), { code: 'ENOENT' });
+});
+
+for (const sourceType of ['git', 'package']) test(`persistent ${sourceType} activation confirms preparationId as releaseId`, linux, async t => {
+    const f = await fixture(t), source = await publishPersistentFixture(f, sourceType);
+    const result = await activatePersistentRelease({ base: f.base, preparationId: f.preparationId, adapter: f.adapter });
+    assert.equal(result.active.backend.releaseId, f.preparationId); assert.equal(result.active.frontend.releaseId, f.preparationId);
+    const releaseManifest = JSON.parse(await fs.readFile(`${f.paths.releases}/${f.preparationId}/manifest.json`, 'utf8'));
+    assert.equal(releaseManifest.releaseId, f.preparationId);
+    assert.equal(sourceType === 'package' ? releaseManifest.gitProvenance === null : releaseManifest.gitProvenance?.commitSha === SHA, true);
+    assert.ok(await fs.lstat(source.root));
+    assert.deepEqual(JSON.parse(await fs.readFile(f.paths.active, 'utf8')), result.active);
+    const envelope = JSON.parse(await fs.readFile(`${f.paths.transactions}/${result.transactionId}.json`, 'utf8'));
+    assert.equal(validateJournal(envelope), true); assert.equal(envelope.record.releaseId, f.preparationId);
+    assert.equal(envelope.record.events.at(-1).phase, 'confirmed');
+    await assert.rejects(activatePersistentRelease({ base: f.base, preparationId: f.preparationId, adapter: f.adapter }),
+        { code: 'PREPARATION_ALREADY_ACTIVE' });
+});
+
+test('persistent activation validates and materializes under lock before preflight and snapshot', linux, async t => {
+    const f = await fixture(t); await publishPersistentFixture(f);
+    const calls = [], verify = async input => { calls.push('verify'); assert.ok(await fs.lstat(f.paths.lock));
+        const { verifyPersistentPreparation } = await import('../scripts/deploy/release-prepare.mjs'); return verifyPersistentPreparation(input); };
+    const { materializePersistentPreparation } = await import('../scripts/deploy/release-prepare.mjs');
+    const materialize = async input => { calls.push('materialize'); return materializePersistentPreparation(input); };
+    const preflight = async () => { calls.push('preflight'); };
+    const createSnapshot = async () => { calls.push('snapshot'); throw Object.assign(new Error('fixture stop'), { code: 'FIXTURE_STOP' }); };
+    await assert.rejects(activatePersistentRelease({ base: f.base, preparationId: f.preparationId, adapter: f.adapter,
+        verifyPersistent: verify, materialize, preflight, createSnapshot }), { code: 'FIXTURE_STOP' });
+    assert.deepEqual(calls, ['verify', 'materialize', 'verify', 'preflight', 'snapshot']);
+    assert.equal(f.adapter.switches.length, 0); assert.equal(await fs.readFile(`${f.paths.html}/index.html`, 'utf8'), '<title>legacy frontend</title>');
+    await assert.rejects(fs.lstat(`${f.paths.releases}/${f.preparationId}`), { code: 'ENOENT' });
+});
+
+test('persistent activation rejects missing, adulterated and already promoted preparations before snapshot', linux, async t => {
+    await t.test('missing', async t => {
+        const f = await fixture(t); let snapshot = false;
+        await assert.rejects(activatePersistentRelease({ base: f.base, preparationId: f.preparationId, adapter: f.adapter,
+            createSnapshot: async () => { snapshot = true; } }), { code: 'ENOENT' }); assert.equal(snapshot, false);
+    });
+    await t.test('adulterated', async t => {
+        const f = await fixture(t), source = await publishPersistentFixture(f); let snapshot = false;
+        await fs.writeFile(`${source.release}/frontend/index.html`, 'adulterated');
+        await assert.rejects(activatePersistentRelease({ base: f.base, preparationId: f.preparationId, adapter: f.adapter,
+            createSnapshot: async () => { snapshot = true; } }), { code: 'PERSISTENT_PREPARATION_INTEGRITY_FAILED' }); assert.equal(snapshot, false);
+    });
+    await t.test('already promoted', async t => {
+        const f = await fixture(t); await publishPersistentFixture(f); await fs.mkdir(`${f.paths.releases}/${f.preparationId}`, { recursive: true, mode: 0o700 });
+        await assert.rejects(activatePersistentRelease({ base: f.base, preparationId: f.preparationId, adapter: f.adapter }),
+            { code: 'PERSISTENT_RELEASE_EXISTS' });
+    });
+});
+
+test('operation lock serializes persistent activations before authoritative verification', linux, async t => {
+    const f = await fixture(t); await publishPersistentFixture(f);
+    let entered; const enteredPromise = new Promise(resolve => { entered = resolve; });
+    let release; const gate = new Promise(resolve => { release = resolve; });
+    const first = activatePersistentRelease({ base: f.base, preparationId: f.preparationId, adapter: f.adapter,
+        verifyPersistent: async () => { entered(); await gate; throw Object.assign(new Error('fixture stop'), { code: 'FIXTURE_STOP' }); } });
+    await enteredPromise;
+    await assert.rejects(activatePersistentRelease({ base: f.base, preparationId: f.preparationId, adapter: f.adapter }),
+        { code: 'OPERATION_LOCK_EXISTS' });
+    release(); await assert.rejects(first, { code: 'FIXTURE_STOP' });
+});
+
+test('persistent PM2 failure restores runtime and preserves the potentially active candidate', linux, async t => {
+    const f = await fixture(t); await publishPersistentFixture(f); const originalSwitch = f.adapter.switchTo.bind(f.adapter); let calls = 0;
+    f.adapter.switchTo = async target => { if (++calls === 1) throw Object.assign(new Error('fixture PM2 failure'), { code: 'PM2_SWITCH_FAILED' }); return originalSwitch(target); };
+    await assert.rejects(activatePersistentRelease({ base: f.base, preparationId: f.preparationId, adapter: f.adapter }), { code: 'PM2_SWITCH_FAILED' });
+    assert.equal(f.adapter.current.cwd, f.paths.repo); assert.ok(await fs.lstat(`${f.paths.releases}/${f.preparationId}`));
+    await assert.rejects(fs.lstat(f.paths.active), { code: 'ENOENT' }); await assert.rejects(fs.lstat(f.paths.lock), { code: 'ENOENT' });
+});
+
+test('uncertain persistent recovery retains lock, journal and candidate evidence', linux, async t => {
+    const f = await fixture(t); await publishPersistentFixture(f);
+    f.adapter.switchTo = async () => { throw Object.assign(new Error('fixture PM2 failure'), { code: 'PM2_SWITCH_FAILED' }); };
+    await assert.rejects(activatePersistentRelease({ base: f.base, preparationId: f.preparationId, adapter: f.adapter }), error => {
+        assert.equal(error.code, 'PM2_SWITCH_FAILED'); assert.equal(error.rollbackError?.code, 'PM2_SWITCH_FAILED'); return true;
+    });
+    assert.ok(await fs.lstat(f.paths.lock)); assert.ok(await fs.lstat(`${f.paths.releases}/${f.preparationId}`));
+    assert.equal((await fs.readdir(f.paths.transactions)).length, 1);
+});
 function arrangeConcurrentDestination(t, f, content = null) {
     const original = fs.lstat; let destination;
     t.mock.method(fs, 'lstat', async (filename, ...args) => {

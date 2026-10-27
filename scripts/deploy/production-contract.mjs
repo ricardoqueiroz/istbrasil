@@ -23,7 +23,7 @@ export function canonicalPaths(base = BASE_IMPLANTACAO_IST) {
     const limites=limitesArmazenamentoImplantacao(base);
     return Object.freeze({ base, repo, html: limites.raizesPublicas[0], uploads: `${base}/uploads`, backendPhp: limites.raizesPublicas[1],
         private: `${repo}/istbrasil.private`, env: `${repo}/.env`, envBackup: `${repo}/.env.backup`, envOld: `${repo}/.env_old`,
-        admin, releases: `${admin}/releases`, backups: `${admin}/backups`, state: `${admin}/state`,
+        admin, releases: `${admin}/releases`, preparations: `${admin}/preparations`, backups: `${admin}/backups`, state: `${admin}/state`,
         active: `${admin}/state/active.json`, transactions: `${admin}/state/transactions`,
         lock: `${admin}/state/operation.lock`, flock: `${base}/.deploy.lock`, logs: `${admin}/logs`,
         pm2Home: '/home/admin/.pm2', phpMyAdmin: PHPMYADMIN_PUBLICO_IST });
@@ -34,6 +34,52 @@ export function releasePaths(paths, id) {
     if (!validId(id)) throw new Error('INVALID_RELEASE_ID');
     const root = `${paths.releases}/${id}`;
     return Object.freeze({ root, backend: `${root}/backend`, frontend: `${root}/frontend`, manifest: `${root}/manifest.json` });
+}
+
+export function preparationPaths(paths, id) {
+    if (!validId(id)) throw new Error('INVALID_PREPARATION_ID');
+    const root = `${paths.preparations}/${id}`;
+    return Object.freeze({ root, release: `${root}/release`, backend: `${root}/release/backend`, frontend: `${root}/release/frontend`,
+        manifest: `${root}/manifest.json`, seal: `${root}/PREPARED_INACTIVE.json` });
+}
+
+export function validatePreparedManifest(value) {
+    const common = ['version', 'format', 'status', 'preparationId', 'commitSha', 'treeSha', 'node', 'npm', 'modulesAbi', 'platform', 'architecture', 'commands', 'entries'];
+    const git = [...common, 'exportId'], packaged = [...common, 'sourceType', 'packageId', 'packageSha256', 'releaseVersion'];
+    const packageSource = value?.sourceType === 'package';
+    if (!keys(value, packageSource ? packaged : git) || value.version !== 1 || value.format !== 'ist-prepared-inactive-v1'
+        || value.status !== 'PREPARED_INACTIVE' || !validId(value.preparationId) || !validSha(value.commitSha) || !validSha(value.treeSha)
+        || value.node !== 'v20.19.6' || value.platform !== 'linux' || !['x64', 'arm64'].includes(value.architecture)
+        || typeof value.modulesAbi !== 'string' || !/^\d+$/.test(value.modulesAbi) || typeof value.npm !== 'string'
+        || !/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(value.npm)) return false;
+    if (packageSource ? !validId(value.packageId) || !validDigest(value.packageSha256) || typeof value.releaseVersion !== 'string'
+        || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(value.releaseVersion) : !validId(value.exportId)) return false;
+    if (!keys(value.commands, ['install', 'build', 'nativeProbe'])
+        || JSON.stringify(value.commands.install) !== JSON.stringify(['npm', 'ci', '--include=dev', '--strict-peer-deps'])
+        || JSON.stringify(value.commands.build) !== JSON.stringify(['npm', 'run', 'build', '--', '--configuration', 'production'])
+        || JSON.stringify(value.commands.nativeProbe) !== JSON.stringify(['node', '-e', "require('bcrypt'); require('sharp')"])) return false;
+    if (!Array.isArray(value.entries) || value.entries.length === 0 || value.entries.length > 500000) return false;
+    const seen = new Map();
+    for (const entry of value.entries) {
+        const fields = entry?.type === 'file' ? ['path', 'type', 'mode', 'size', 'sha256'] : entry?.type === 'directory' ? ['path', 'type', 'mode'] : ['path', 'type', 'target'];
+        if (!keys(entry, fields) || !['file', 'directory', 'symlink'].includes(entry.type) || !relativeEntry(entry.path) || seen.has(entry.path)) return false;
+        if (entry.type !== 'symlink' && (!integer(entry.mode) || entry.mode > 0o777 || entry.mode & 0o022)) return false;
+        if (entry.type === 'file' && (!integer(entry.size) || !validDigest(entry.sha256))) return false;
+        if (entry.type === 'symlink' && (typeof entry.target !== 'string' || !entry.target || path.posix.isAbsolute(entry.target) || /[\0\\\r\n]/.test(entry.target))) return false;
+        if (protectedEntry(entry.path)) return false;
+        seen.set(entry.path, entry);
+    }
+    for (const entry of seen.values()) {
+        const parent = path.posix.dirname(entry.path);
+        if (parent !== '.' && seen.get(parent)?.type !== 'directory') return false;
+    }
+    return ['backend', 'frontend'].every(name => seen.get(name)?.type === 'directory')
+        && ['backend/server.js', 'backend/package.json', 'backend/package-lock.json', 'frontend/index.html'].every(name => seen.get(name)?.type === 'file');
+}
+
+export function validatePreparedSeal(value) {
+    return keys(value, ['version', 'preparationId', 'manifestSha256']) && value.version === 1
+        && validId(value.preparationId) && validDigest(value.manifestSha256);
 }
 
 export function relativeEntry(value) {
