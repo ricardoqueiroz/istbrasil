@@ -5,6 +5,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { requireExportWorkspace, verifyExport, safeGitPath } from './git-export.mjs';
+import { verifyPackage } from './package-import.mjs';
 
 const execFileAsync = promisify(execFile);
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
@@ -95,11 +96,25 @@ async function requireEssential(release) {
     }
 }
 
-export async function prepareRelease({ workspace, exportId, allowRegistry = false, runner = defaultRunner }) {
+async function resolveSource(workspace, exportId, packageId) {
+    if (Boolean(exportId) === Boolean(packageId)) throw fail('PREPARATION_ARGUMENT_INVALID');
+    if (exportId) {
+        if (!UUID.test(exportId)) throw fail('PREPARATION_ARGUMENT_INVALID');
+        const record = await verifyExport({ workspace, exportId });
+        return { record, directory: `${workspace}/exports/${exportId}/source`, reference: { exportId } };
+    }
+    if (!UUID.test(packageId)) throw fail('PREPARATION_ARGUMENT_INVALID');
+    const record = await verifyPackage({ workspace, packageId });
+    return { record, directory: `${workspace}/packages/${packageId}/source`, reference: {
+        sourceType: 'package', packageId, packageSha256: record.packageSha256, releaseVersion: record.releaseVersion,
+    } };
+}
+
+export async function prepareRelease({ workspace, exportId, packageId, allowRegistry = false, runner = defaultRunner }) {
     await requireExportWorkspace(workspace);
-    if (!UUID.test(exportId) || typeof runner !== 'function') throw fail('PREPARATION_ARGUMENT_INVALID');
+    if (typeof runner !== 'function') throw fail('PREPARATION_ARGUMENT_INVALID');
     if (process.version !== 'v20.19.6') throw fail('NODE_VERSION_UNSUPPORTED');
-    const record = await verifyExport({ workspace, exportId });
+    const source = await resolveSource(workspace, exportId, packageId), record = source.record;
     const releaseLock = await acquireLock(workspace);
     const preparationId = randomUUID(), root = `${workspace}/preparations`, destination = `${root}/${preparationId}`;
     let completed = false;
@@ -109,7 +124,7 @@ export async function prepareRelease({ workspace, exportId, allowRegistry = fals
         await fs.mkdir(destination, { mode: 0o700 });
         const release = `${destination}/release`, backend = `${release}/backend`;
         await fs.mkdir(release, { mode: 0o700 });
-        await copyExport(record, `${workspace}/exports/${exportId}/source`, backend);
+        await copyExport(record, source.directory, backend);
         const packageJson = JSON.parse(await fs.readFile(`${backend}/package.json`, 'utf8'));
         for (const name of ['preinstall', 'install', 'postinstall', 'prepare']) if (packageJson.scripts?.[name]) throw fail('APPLICATION_LIFECYCLE_SCRIPT_UNAPPROVED');
         const env = cleanEnvironment(workspace, allowRegistry);
@@ -125,7 +140,7 @@ export async function prepareRelease({ workspace, exportId, allowRegistry = fals
         await fs.rm(`${backend}/dist`, { recursive: true, force: true });
         await requireEssential(release);
         const entries = await inventory(release);
-        const manifest = { version: 1, format: FORMAT, status: 'PREPARED_INACTIVE', preparationId, exportId,
+        const manifest = { version: 1, format: FORMAT, status: 'PREPARED_INACTIVE', preparationId, ...source.reference,
             commitSha: record.commitSha, treeSha: record.treeSha, node: process.version, npm: npmVersion, modulesAbi: process.versions.modules,
             platform: process.platform, architecture: process.arch, commands: {
                 install: ['npm', 'ci', '--include=dev', '--strict-peer-deps'], build: ['npm', 'run', 'build', '--', '--configuration', 'production'],
@@ -156,8 +171,11 @@ export async function verifyPreparedRelease({ workspace, preparationId }) {
     const seal = JSON.parse(await fs.readFile(`${destination}/PREPARED_INACTIVE.json`, 'utf8'));
     if (manifest.format !== FORMAT || manifest.status !== 'PREPARED_INACTIVE' || manifest.preparationId !== preparationId
         || seal.preparationId !== preparationId || seal.manifestSha256 !== digest(bytes)) throw fail('PREPARATION_RECORD_INVALID');
-    const source = await verifyExport({ workspace, exportId: manifest.exportId });
+    const source = manifest.sourceType === 'package'
+        ? await verifyPackage({ workspace, packageId: manifest.packageId })
+        : await verifyExport({ workspace, exportId: manifest.exportId });
     if (manifest.commitSha !== source.commitSha || manifest.treeSha !== source.treeSha || manifest.node !== 'v20.19.6'
+        || manifest.sourceType === 'package' && (manifest.packageSha256 !== source.packageSha256 || manifest.releaseVersion !== source.releaseVersion)
         || manifest.modulesAbi !== process.versions.modules || manifest.platform !== 'linux' || !/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(manifest.npm)) throw fail('PREPARATION_RECORD_INVALID');
     await requireEssential(release);
     if (JSON.stringify(await inventory(release)) !== JSON.stringify(manifest.entries)) throw fail('PREPARATION_INTEGRITY_FAILED');
