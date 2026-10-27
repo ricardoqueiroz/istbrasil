@@ -5,6 +5,9 @@ const ativos=new WeakMap();
 export const iniciarNotificacoesLoja=({db,env=process.env,agendar=setInterval,cancelar=clearInterval,
     criarEnvio=criarEnvioRecuperacaoSmtp,criarProcessador=criarProcessadorNotificacoes,registrar=m=>console.warn(m)}={})=>{
     const log=c=>{try{registrar(c);}catch{}};
+    const resumoVazio=r=>r&&typeof r==='object'
+        &&['reservadas','enviadas','falhas','incertas','semReserva'].every(k=>r[k]===0)
+        &&Object.keys(r).length===5;
     const inativo=()=>({ativo:false,parar:async()=>{}});
     if(env.IST_LOJA_NOTIFICACOES_ATIVAS!=='true'||env.NODE_ENV==='test')return inativo();
     if(ativos.has(db))return ativos.get(db);
@@ -18,7 +21,7 @@ export const iniciarNotificacoesLoja=({db,env=process.env,agendar=setInterval,ca
             if(encerrado||emCurso)return;
             controle=new AbortController();
             emCurso=Promise.resolve().then(()=>worker.processar({limite:10,signal:controle.signal}))
-                .then(r=>log('NOTIFICACOES_RESUMO '+JSON.stringify(r)))
+                .then(r=>{if(!resumoVazio(r))log('NOTIFICACOES_RESUMO '+JSON.stringify(r));})
                 .catch(()=>log('NOTIFICACOES_CICLO_INDISPONIVEL')).finally(()=>{emCurso=null;});
         };
         timer=agendar(ciclo,60000);timer?.unref?.();

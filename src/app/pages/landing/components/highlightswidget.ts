@@ -57,6 +57,7 @@ import { RouterModule } from '@angular/router';
                 <-- Grupo musical -->
 
                 <!-- Festival de Violões -->
+                <!-- Não mostrar o banner do festival de violões por enquanto, pois o evento está cancelado
                 <a [routerLink]="['/eventos/ii-festival-de-violoes-sebastiao-tapajos']" class="no-underline">
                     <div class="grid grid-cols-12 gap-4 mb-10 p-6 md:p-10 items-center bg-surface-0 dark:bg-surface-900 shadow-lg rounded-3xl border border-surface-200 dark:border-surface-700">
                         <div class="col-span-12 lg:col-span-8 text-left">
@@ -78,6 +79,7 @@ import { RouterModule } from '@angular/router';
                         </div>
                     </div>
                 </a>
+                -->
             </div>
         </div>
     `

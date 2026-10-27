@@ -30,7 +30,8 @@ test('sem execucao imediata, fontes sequenciais, sem sobreposicao e encerramento
     let liberar;m.service.descobrirEventosAdversos=x=>{m.chamadas.push(x);return new Promise(r=>liberar=r);};
     m.tick();await flush();m.tick();assert.equal(m.chamadas.length,1);
     const fim=m.c.parar();assert.strictEqual(m.c.parar(),fim);liberar({estado:'SEM_TRABALHO'});
-    await fim;assert.equal(m.chamadas.length,1);assert.equal(m.cancelados,1);assert(m.timers.every(t=>t.cancelado));
+    await fim;assert.equal(m.chamadas.length,1);assert.deepEqual(m.logs,[]);
+    assert.equal(m.cancelados,1);assert(m.timers.every(t=>t.cancelado));
 });
 test('deadline aborta e parar nao depende indefinidamente de fonte travada',async()=>{
     const m=montar();m.service.descobrirEventosAdversos=x=>{m.chamadas.push(x);return new Promise(()=>{});};

@@ -54,6 +54,11 @@ export const iniciarWorkerAdversoLoja=({db,env=process.env,obterFinanceiro,
     agendar=setInterval,cancelar=clearInterval,limitar=setTimeout,deslimitar=clearTimeout,
     registrar=m=>console.warn(m)}={})=>{
     const log=m=>{try{registrar(m);}catch{}};
+    const diagnosticoVazio=d=>d&&typeof d==='object'
+        &&['pendentes','processando','reservasVencidas','reagendados','esgotados','revisao'].every(k=>d[k]===0)
+        &&d.erros&&typeof d.erros==='object'&&!Array.isArray(d.erros)&&Object.keys(d.erros).length===0
+        &&d.ultimosErros&&typeof d.ultimosErros==='object'&&!Array.isArray(d.ultimosErros)&&Object.keys(d.ultimosErros).length===0
+        &&Object.keys(d).length===8;
     if(env.IST_LOJA_ADVERSOS_ATIVA!=='true'||env.NODE_ENV==='test')return {ativo:false,parar:async()=>{}};
     let timer,emCurso=null,encerrado=false,controle,prazo,parada;
     try{
@@ -67,7 +72,7 @@ export const iniciarWorkerAdversoLoja=({db,env=process.env,obterFinanceiro,
                     if(resultados?.some(r=>r.codigo==='D9_AUTENTICACAO'))log('[Loja adversos] Alerta: contexto suspenso por autenticacao/permissao; revisao operacional necessaria.');
                     if(!controle.signal.aborted){const d=await service.diagnosticarEventosAdversos();
                         // Somente contadores e codigos fechados produzidos pelo worker.
-                        log('[Loja adversos] '+JSON.stringify(d));}
+                        if(!diagnosticoVazio(d))log('[Loja adversos] '+JSON.stringify(d));}
                 }).catch(()=>log('[Loja adversos] Falha tecnica; consultar diagnostico interno.'))
                 .finally(()=>{deslimitar(prazo);prazo=null;emCurso=null;});
         };

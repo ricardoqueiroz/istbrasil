@@ -5,7 +5,8 @@ import {criarLojaPagamentoAdversoWorker} from '../src/services/lojaPagamentoAdve
 const flush=()=>new Promise(r=>setImmediate(r));
 const montar=(extras={})=>{
     let tick,cancelados=0,criadas=0;const limites=[],logs=[],chamadas=[];
-    const service={processarEventosAdversos:async x=>{chamadas.push(x);},diagnosticarEventosAdversos:async()=>({pendentes:0})};
+    const service={processarEventosAdversos:async x=>{chamadas.push(x);},diagnosticarEventosAdversos:async()=>({
+        pendentes:0,processando:0,reservasVencidas:0,reagendados:0,esgotados:0,revisao:0,erros:{},ultimosErros:{}})};
     const r=iniciarWorkerAdversoLoja({env:{IST_LOJA_ADVERSOS_ATIVA:'true'},
         obterFinanceiro:()=>{criadas++;return {service};},
         agendar:(fn,ms)=>{assert.equal(ms,60000);tick=fn;return {unref(){}};},cancelar:()=>cancelados++,
@@ -26,6 +27,12 @@ test('ativacao explicita, lote 10, sem execucao imediata ou ciclos sobrepostos',
     m.tick();await flush();m.tick();assert.equal(m.chamadas.length,1);assert.equal(m.chamadas[0].limite,10);
     const fim=m.r.parar();assert.strictEqual(m.r.parar(),fim);m.tick();liberar();await fim;
     assert.equal(m.cancelados,1);assert(m.limites.every(x=>x.cancelado));
+});
+test('diagnostico totalmente zerado e silencioso, mas pendencias continuam registradas',async()=>{
+    const m=montar();m.tick();await flush();assert.deepEqual(m.logs,[]);
+    m.service.diagnosticarEventosAdversos=async()=>({pendentes:1,processando:0,reservasVencidas:0,reagendados:0,
+        esgotados:0,revisao:0,erros:{},ultimosErros:{}});
+    m.tick();await flush();assert.equal(m.logs.length,1);assert.match(m.logs[0],/"pendentes":1/);await m.r.parar();
 });
 test('excecao nao encerra API nem vaza mensagem e proximo ciclo e permitido',async()=>{
     const m=montar();m.service.processarEventosAdversos=async()=>{throw Error('SEGREDO-PESSOAL');};

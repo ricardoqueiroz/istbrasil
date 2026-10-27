@@ -72,3 +72,14 @@ test('68.2 agendador unico por pool, lote limitado, sem ciclo imediato e parada 
     ciclo();await Promise.resolve();ciclo();assert.equal(chamadas,1);
     const parada=h.parar();assert(signal.aborted);liberar();await parada;await h.parar();assert.equal(cancelamentos,1);
 });
+
+test('resumo zerado e silencioso, mas qualquer contador positivo continua registrado',async()=>{
+    const config={NODE_ENV:'production',LOJA_AMBIENTE:'sandbox',IST_LOJA_PAYPAL_ENV:'sandbox',IST_LOJA_NOTIFICACOES_ATIVAS:'true'};
+    const logs=[],resultados=[{reservadas:0,enviadas:0,falhas:0,incertas:0,semReserva:0},
+        {reservadas:1,enviadas:1,falhas:0,incertas:0,semReserva:0}];let ciclo;
+    const h=iniciarNotificacoesLoja({db:{},env:config,registrar:m=>logs.push(m),criarEnvio:()=>()=>{},
+        criarProcessador:()=>({processar:async()=>resultados.shift()}),agendar:fn=>{ciclo=fn;return 7;},cancelar:()=>{}});
+    ciclo();await new Promise(r=>setImmediate(r));assert.deepEqual(logs,[]);
+    ciclo();await new Promise(r=>setImmediate(r));assert.equal(logs.length,1);assert.match(logs[0],/"reservadas":1/);
+    await h.parar();
+});

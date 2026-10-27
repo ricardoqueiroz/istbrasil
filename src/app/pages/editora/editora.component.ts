@@ -4,6 +4,7 @@ import { DataViewModule } from 'primeng/dataview';
 import { ButtonModule } from 'primeng/button';
 import { TagModule } from 'primeng/tag';
 import { SelectButtonModule } from 'primeng/selectbutton';
+import { AccordionModule } from 'primeng/accordion';
 import { FormsModule } from '@angular/forms';
 import { RouterModule } from '@angular/router';
 import { HttpClientModule } from '@angular/common/http'; // Importante para o Service funcionar no Standalone
@@ -20,6 +21,7 @@ import { FooterWidget } from 'src/app/shared/footer';
     ButtonModule, 
     TagModule,
     SelectButtonModule,
+    AccordionModule,
     FormsModule,
     RouterModule,
     HttpClientModule,

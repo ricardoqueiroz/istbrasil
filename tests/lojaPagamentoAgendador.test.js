@@ -38,6 +38,7 @@ test('compoe uma instancia com pool e contexto confiaveis e agenda sem execucao 
     assert.deepEqual(m.chamadas[1][1].contexto, { provedor: 'paypal', ambiente: 'sandbox', contaRecebedora: ambiente.IST_LOJA_PAYPAL_CONTA_RECEBEDORA });
     m.tick(); await flush(); m.tick(); await flush();
     assert.deepEqual(m.chamadas.filter(c => c[0] === 'ciclo'), [['ciclo', { limite: 10 }], ['ciclo', { limite: 10 }]]);
+    assert.deepEqual(m.logs, []);
     await m.controle.parar(); assert.equal(m.cancelamentos, 1);
 });
 test('impede sobreposicao e encerramento aguarda ciclo sem permitir novos disparos', async () => {
