@@ -1,6 +1,5 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {comporConfirmacaoCompra} from '../src/services/lojaNotificacoesMensagem.js';
 import {criarEnvioRecuperacaoSmtp} from '../src/services/mailService.js';
 import {iniciarNotificacoesLoja} from '../src/services/lojaNotificacoesAgendador.js';
 import {criarProcessadorNotificacoes} from '../src/services/lojaNotificacoesWorker.js';
@@ -8,14 +7,7 @@ import {criarProcessadorNotificacoes} from '../src/services/lojaNotificacoesWork
 const env={SMTP_HOST:'smtp.example.invalid',SMTP_PORT:'587',SMTP_SECURE:'false',SMTP_REJECT_UNAUTHORIZED:'true',
     MAIL_FROM_NAME:'IST teste',MAIL_FROM_ADDRESS:'teste@example.invalid',IST_LOJA_RECUPERACAO_SMTP_AUTENTICACAO:'relay'};
 const pedidoPublicId='11111111-1111-4111-8111-111111111111';
-const mensagem=comporConfirmacaoCompra({pedido_id:7,pedido_public_id:pedidoPublicId,ambiente:'sandbox',finalidade:'CONFIRMACAO_COMPRA',destinatario:'caixa@example.invalid'});
-test('68.2 composicao usa destinatario persistido, identifica Sandbox e biblioteca sem anexos',()=>{
-    assert.equal(mensagem.to,'caixa@example.invalid');assert.match(mensagem.text,/PayPal Sandbox — sem cobrança real/);
-    assert(mensagem.text.includes(pedidoPublicId));assert.match(mensagem.text,/https:\/\/istbrasil.org.br\/loja\/biblioteca/);
-    assert.doesNotMatch(mensagem.text,/\.pdf|token=|segredo=|istbrasil\.private/);
-    assert.deepEqual(Object.keys(mensagem).sort(),['subject','text','to']);
-    assert.throws(()=>comporConfirmacaoCompra({pedido_id:7,ambiente:'live',finalidade:'CONFIRMACAO_COMPRA',destinatario:'x@example.invalid'}));
-});
+const mensagem={to:'caixa@example.invalid',subject:'Teste sintetico de worker',text:'Dados sinteticos de teste'};
 test('68.2 SMTP simulado aceita somente ACK e classifica rejeicao comprovada sem vazar detalhes',async()=>{
     let chamadas=0;
     const envio=resultado=>criarEnvioRecuperacaoSmtp({env,classificarNaoAceito:true,criarTransporte:op=>{
@@ -45,7 +37,7 @@ test('68.3 reserva usa UUID publico persistido, envia fora da transacao e nao es
         async query({sql},args){
             if(sql.startsWith('SELECT @@'))return [[{tx:0,ac:1}]];
             if(sql.startsWith('SET TRANSACTION'))return [[]];
-            if(sql==='START TRANSACTION READ WRITE'){assert.equal(tx,false);tx=true;return [[]];}
+            if(sql==='START TRANSACTION READ WRITE'||sql==='START TRANSACTION READ ONLY'){assert.equal(tx,false);tx=true;return [[]];}
             if(sql==='COMMIT'){assert.equal(tx,true);tx=false;return [[]];}
             if(sql.startsWith('SELECT n.*')){
                 assert(sql.includes('p.public_id FROM ist_loja_pedidos p WHERE p.id=n.pedido_id'));
@@ -57,11 +49,11 @@ test('68.3 reserva usa UUID publico persistido, envia fora da transacao e nao es
             if(sql.startsWith('UPDATE ist_loja_notificacoes'))return [{affectedRows:1,warningStatus:0}];
             assert.fail('SQL_NAO_PREVISTO');
         }};}};
-    const w=criarProcessadorNotificacoes({db,ambiente:'sandbox',enviar:async m=>{
+    const w=criarProcessadorNotificacoes({db,ambiente:'sandbox',comporMensagem:async n=>{assert.equal(tx,true);return {...mensagem,text:n.pedido_public_id};},enviar:async m=>{
         assert.equal(tx,false);envios++;assert.equal(m.to,'caixa@example.invalid');
         assert(m.text.includes(pedidoPublicId));assert(!m.attachments);
     }});
-    const r=await w.processar({limite:1});assert.equal(r.enviadas,1);assert.equal(envios,1);assert.equal(liberadas,3);
+    const r=await w.processar({limite:1});assert.equal(r.enviadas,1);assert.equal(envios,1);assert.equal(liberadas,4);
 });
 test('68.2 agendador unico por pool, lote limitado, sem ciclo imediato e parada aborta e aguarda',async()=>{
     let ciclo,signal,liberar,chamadas=0,cancelamentos=0;

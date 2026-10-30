@@ -1,7 +1,17 @@
 // Fonte única dos placeholders permitidos por chave de modelo. Sem tabela no banco.
 export const CHAVE_RECUPERACAO_BIBLIOTECA_CODIGO = 'recuperacao_biblioteca_codigo';
 export const ASSUNTO_RECUPERACAO_BIBLIOTECA_CODIGO = 'IST — Código de acesso à sua biblioteca digital';
+export const CHAVE_CONFIRMACAO_COMPRA = 'confirmacao_compra';
 export const EMAIL_PLACEHOLDERS = Object.freeze({
+    [CHAVE_CONFIRMACAO_COMPRA]: Object.freeze(Object.fromEntries([
+        ['saudacao','Saudação neutra'], ['comprador_email','E-mail persistido da compra'],
+        ['pedido_public_id','Código público necessário à recuperação'], ['pedido_estado','Estado pago do pedido'],
+        ['data_compra','Data do pedido'], ['data_pagamento','Data da confirmação'],
+        ['pagamento_referencia','Referência pública do pagamento'], ['pagamento_estado','Situação da captura e provedor'],
+        ['ambiente','Identificação do ambiente'], ['itens_compra','Produtos, descrições, quantidades e valores históricos'],
+        ['total','Total da compra'], ['moeda','Moeda da compra'], ['link_biblioteca','Biblioteca digital'],
+        ['link_recuperacao','Recuperação por e-mail e pedido']
+    ].map(([nome,descricao])=>[nome,Object.freeze({tipo:nome.startsWith('link_')?'url':'texto',obrigatorio:true,descricao})]))),
     [CHAVE_RECUPERACAO_BIBLIOTECA_CODIGO]: Object.freeze({
         pedido_public_id: Object.freeze({ tipo: 'texto', obrigatorio: true, descricao: 'Identificador público do pedido' }),
         codigo: Object.freeze({ tipo: 'texto', obrigatorio: true, descricao: 'Código de acesso fornecido pelo backend' }),

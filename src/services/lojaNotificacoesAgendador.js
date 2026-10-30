@@ -16,7 +16,7 @@ export const iniciarNotificacoesLoja=({db,env=process.env,agendar=setInterval,ca
         if(!['production','development'].includes(env.NODE_ENV)||env.LOJA_AMBIENTE!=='sandbox'
             ||env.IST_LOJA_PAYPAL_ENV!=='sandbox')throw Error();
         const enviar=criarEnvio({env,classificarNaoAceito:true});
-        const worker=criarProcessador({db,enviar,ambiente:'sandbox'});
+        const worker=criarProcessador({db,enviar,ambiente:'sandbox',origemPublica:env.IST_LOJA_RECUPERACAO_ORIGEM_PUBLICA});
         const ciclo=()=>{
             if(encerrado||emCurso)return;
             controle=new AbortController();

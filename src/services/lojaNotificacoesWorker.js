@@ -1,13 +1,15 @@
 import {randomBytes} from 'node:crypto';
-import {comporConfirmacaoCompra} from './lojaNotificacoesMensagem.js';
+import {criarCompositorConfirmacaoCompra} from './lojaNotificacoesMensagem.js';
 
 const erro=()=>Error('NOTIFICACOES_INDISPONIVEIS');
 const data=ms=>new Date(ms).toISOString().slice(0,23).replace('T',' ');
-export const criarProcessadorNotificacoes=({db,enviar,ambiente,agora=Date.now,timeoutMs=20000,reservaMs=60000}={})=>{
+export const criarProcessadorNotificacoes=({db,enviar,ambiente,agora=Date.now,timeoutMs=20000,reservaMs=60000,origemPublica,comporMensagem}={})=>{
     if(!db?.getConnection||typeof enviar!=='function'||ambiente!=='sandbox'||typeof agora!=='function'
         ||!Number.isInteger(timeoutMs)||timeoutMs<1||timeoutMs>30000
         ||!Number.isInteger(reservaMs)||reservaMs<timeoutMs+1000||reservaMs>300000)throw erro();
-    const transacao=async fn=>{
+    const compor=comporMensagem??criarCompositorConfirmacaoCompra({origemPublica,ambiente});
+    if(typeof compor!=='function')throw erro();
+    const transacao=async(fn,somenteLeitura=false)=>{
         let c,iniciada=false,commit=false,timer,expirou=false;
         const query=(sql,args)=>c.query({sql,timeout:5000},args);
         try{
@@ -18,8 +20,8 @@ export const criarProcessadorNotificacoes=({db,enviar,ambiente,agora=Date.now,ti
             finally{clearTimeout(timer);}
             const [[s]]=await query('SELECT @@in_transaction tx,@@autocommit ac');
             if(Number(s.tx)!==0||Number(s.ac)!==1)throw erro();
-            await query('SET TRANSACTION ISOLATION LEVEL READ COMMITTED');
-            await query('START TRANSACTION READ WRITE');iniciada=true;
+            await query(somenteLeitura?'SET TRANSACTION ISOLATION LEVEL REPEATABLE READ':'SET TRANSACTION ISOLATION LEVEL READ COMMITTED');
+            await query(somenteLeitura?'START TRANSACTION READ ONLY':'START TRANSACTION READ WRITE');iniciada=true;
             const r=await fn({query});commit=true;await query('COMMIT');return r;
         }catch{
             if(c){if(commit||!iniciada){c.destroy();c=null;}else try{await query('ROLLBACK');}catch{c.destroy();c=null;}}
@@ -68,7 +70,7 @@ export const criarProcessadorNotificacoes=({db,enviar,ambiente,agora=Date.now,ti
             if(n.expirada){resumo.incertas++;continue;}
             resumo.reservadas++;
             let estado='INCERTO',codigo='SMTP_INDETERMINADO',mensagem;
-            try{mensagem=comporConfirmacaoCompra(n);}catch{estado='FALHA';codigo='MENSAGEM_INVALIDA';}
+            try{mensagem=await transacao(c=>compor(n,c),true);}catch{estado='FALHA';codigo='MENSAGEM_INVALIDA';}
             if(mensagem){
                 if(!await possui(n)){resumo.semReserva++;continue;}
                 if(signal?.aborted){estado='FALHA';codigo='CANCELADO_ANTES_ENVIO';}

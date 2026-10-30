@@ -1,5 +1,5 @@
 import sanitizeHtml from 'sanitize-html';
-import { obterCatalogo, CHAVE_RECUPERACAO_BIBLIOTECA_CODIGO } from '../config/emailPlaceholders.js';
+import { obterCatalogo, CHAVE_RECUPERACAO_BIBLIOTECA_CODIGO, CHAVE_CONFIRMACAO_COMPRA } from '../config/emailPlaceholders.js';
 import { sanitizeEmailHtml } from './emailHtmlSanitizer.js';
 
 const REGEX_PLACEHOLDER = /\{\{\s*([a-z][a-z0-9_]*)\s*\}\}/g;
@@ -7,6 +7,7 @@ const REGEX_HREF = /(href\s*=\s*")([^"]*)(")/gi;
 const CHAVES_PROIBIDAS = new Set(['__proto__', 'constructor', 'prototype']);
 const LIMITE_URL = 2048;
 const LIMITE_VALOR = 5000;
+const LIMITE_ITENS_RECIBO = 200000;
 const SEPARADOR_ASSINATURA = '<div style="margin-top: 24px"></div>';
 // Composicao pura nao importa pool/configuracao; carregadores mantem o banco padrao.
 const obterBanco = async (banco) => banco ?? (await import('../config/db.js')).pool;
@@ -82,7 +83,7 @@ const substituirNoHref = (html, catalogo, variaveis) =>
         return abertura + escaparHtml(validarUrl(nome, variaveis[nome])) + fechamento;
     });
 
-const substituirNoConteudo = (html, catalogo, variaveis) =>
+const substituirNoConteudo = (html, catalogo, variaveis, recibo = false) =>
     html.replace(REGEX_PLACEHOLDER, (trecho, nome) => {
         if (catalogo[nome]?.tipo === 'url') {
             throw new EmailComposicaoError(
@@ -91,7 +92,9 @@ const substituirNoConteudo = (html, catalogo, variaveis) =>
                 { nome }
             );
         }
-        return escaparHtml(variaveis[nome]);
+        const texto = escaparHtml(variaveis[nome]);
+        // Unica expansao especial: texto de itens escapado, nunca HTML fornecido.
+        return recibo && nome === 'itens_compra' ? texto.replace(/\r\n?|\n/g, '<br>') : texto;
     });
 
 const substituirNoAssunto = (assunto, catalogo, variaveis) =>
@@ -153,7 +156,7 @@ const validarContratoRecuperacao = (modelo, html, assunto, catalogo) => {
     }
 };
 
-const validarVariaveis = (variaveis) => {
+const validarVariaveis = (variaveis, recibo = false) => {
     if (!variaveis || typeof variaveis !== 'object' || Array.isArray(variaveis)) {
         throw new EmailComposicaoError('VARIAVEL_INVALIDA', 'As variáveis devem ser um objeto simples.');
     }
@@ -167,7 +170,7 @@ const validarVariaveis = (variaveis) => {
         if (typeof valor !== 'string') {
             throw new EmailComposicaoError('VARIAVEL_INVALIDA', `O valor de "${nome}" deve ser texto.`, { nome });
         }
-        if (valor.length > LIMITE_VALOR) {
+        if (valor.length > (recibo && nome === 'itens_compra' ? LIMITE_ITENS_RECIBO : LIMITE_VALOR)) {
             throw new EmailComposicaoError('VARIAVEL_INVALIDA', `O valor de "${nome}" excede o tamanho permitido.`, { nome });
         }
         seguras[nome] = valor;
@@ -208,7 +211,20 @@ export const comporEmail = ({ modelo, assinatura = null, variaveis = {}, permiti
         );
     }
 
-    const fornecidas = validarVariaveis(variaveis);
+    const recibo = modelo.chave === CHAVE_CONFIRMACAO_COMPRA;
+    if (recibo) {
+        const corpo = extrairPlaceholders(htmlModelo);
+        const visiveis = extrairPlaceholders(sanitizeHtml(htmlModelo, { allowedTags: [], allowedAttributes: {} }));
+        if (/\{\{|\}\}/.test((htmlModelo + assuntoModelo).replace(REGEX_PLACEHOLDER, '')))
+            throw new EmailComposicaoError('MODELO_RECIBO_INVALIDO', 'Marcador inválido no recibo.');
+        if (Object.keys(catalogo).some(nome => !corpo.has(nome) || (catalogo[nome].tipo === 'texto' && !visiveis.has(nome))))
+            throw new EmailComposicaoError('PLACEHOLDER_OBRIGATORIO_NO_MODELO', 'O recibo exige todos os placeholders no corpo.');
+        if (!assuntoModelo.trim() || /[\r\n\x00-\x1f\x7f]/.test(assuntoModelo))
+            throw new EmailComposicaoError('ASSUNTO_RECIBO_INVALIDO', 'Assunto inválido.');
+        if (!assinatura?.ativo || !sanitizeHtml(String(assinatura.conteudoHtml || ''), { allowedTags: [], allowedAttributes: {} }).trim())
+            throw new EmailComposicaoError('ASSINATURA_RECIBO_INVALIDA', 'O recibo exige assinatura administrativa ativa.');
+    }
+    const fornecidas = validarVariaveis(variaveis, recibo);
     const ausentes = [...usados].filter((nome) => !Object.prototype.hasOwnProperty.call(fornecidas, nome));
     if (ausentes.length) {
         throw new EmailComposicaoError(
@@ -228,19 +244,19 @@ export const comporEmail = ({ modelo, assinatura = null, variaveis = {}, permiti
     }
 
     const recuperacaoCodigo = modelo.chave === CHAVE_RECUPERACAO_BIBLIOTECA_CODIGO;
-    if (recuperacaoCodigo && Object.values(fornecidas).some(valor => !valor.trim())) {
+    if ((recuperacaoCodigo || recibo) && Object.values(fornecidas).some(valor => !valor.trim())) {
         throw new EmailComposicaoError('VARIAVEL_INVALIDA', 'Os placeholders obrigatórios precisam de valores não vazios.');
     }
     const assunto = substituirNoAssunto(assuntoModelo, catalogo, fornecidas);
     if (recuperacaoCodigo && assunto.includes(fornecidas.codigo)) {
         throw new EmailComposicaoError('ASSUNTO_RECUPERACAO_INVALIDO', 'O assunto não pode conter o código de acesso.');
     }
-    let html = substituirNoConteudo(substituirNoHref(htmlModelo, catalogo, fornecidas), catalogo, fornecidas);
+    let html = substituirNoConteudo(substituirNoHref(htmlModelo, catalogo, fornecidas), catalogo, fornecidas, recibo);
 
     if (assinatura) {
         if (assinatura.ativo) {
             const htmlAssinatura = sanitizeEmailHtml(String(assinatura.conteudoHtml || ''));
-            if (recuperacaoCodigo && /\{\{|\}\}/.test(htmlAssinatura)) {
+            if ((recuperacaoCodigo || recibo) && /\{\{|\}\}/.test(htmlAssinatura)) {
                 throw new EmailComposicaoError('PLACEHOLDER_NA_ASSINATURA', 'Os placeholders devem estar no modelo, não na assinatura.');
             }
             html += SEPARADOR_ASSINATURA + htmlAssinatura;
@@ -254,7 +270,7 @@ export const comporEmail = ({ modelo, assinatura = null, variaveis = {}, permiti
         throw new EmailComposicaoError('CONTEUDO_FINAL_VAZIO', 'O conteúdo final ficou vazio após a sanitização.');
     }
 
-    return { assunto, html, text: gerarTexto(html, recuperacaoCodigo), avisos };
+    return { assunto, html, text: gerarTexto(html, recuperacaoCodigo || recibo), avisos };
 };
 
 const mapearModelo = (linha) => ({

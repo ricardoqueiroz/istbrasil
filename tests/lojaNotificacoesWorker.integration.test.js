@@ -20,7 +20,7 @@ test('68.2 worker SQL real isolado com SMTP exclusivamente simulado',{timeout:12
         return compra;
     };
     const linha=async()=>(await admin.query('SELECT * FROM ist_loja_notificacoes'))[0][0];
-    const worker=enviar=>criarProcessadorNotificacoes({db:pool,enviar,ambiente:'sandbox',agora:()=>agora,timeoutMs:30,reservaMs:2000});
+    const worker=enviar=>criarProcessadorNotificacoes({db:pool,enviar,ambiente:'sandbox',comporMensagem:async n=>({to:n.destinatario,subject:'Fixture de worker',text:n.pedido_public_id}),agora:()=>agora,timeoutMs:30,reservaMs:2000});
     const snapshot=async()=>{
         const resultado=[];for(const tabela of ['ist_loja_pedidos','ist_loja_pagamentos','ist_loja_pagamento_operacoes','ist_loja_pagamento_eventos'])
             resultado.push((await admin.query(`SELECT * FROM ${tabela} ORDER BY id`))[0]);
