@@ -20,7 +20,7 @@ import { FooterWidget } from 'src/app/shared/footer';
             <div id="home" class="landing-wrapper overflow-hidden">
                 <app-topbar [showMenuButton]="false" />
                 <hero-widget />
-                <!-- Não mostrar o banner do festival de violões por enquanto, pois o evento está cancelado
+                <!-- banner do festival de violões -->
                 <section class="mx-6 my-8 md:mx-20" aria-labelledby="festival-cta-title">
                     <a routerLink="/eventos/ii-festival-de-violoes-sebastiao-tapajos" class="mx-auto block w-full max-w-[800px] overflow-hidden rounded-3xl border border-emerald-200 bg-emerald-50 text-center shadow-sm transition hover:-translate-y-0.5 hover:border-emerald-400 hover:shadow-md focus:outline-none focus:ring-2 focus:ring-emerald-500">
                         <img src="/assets/images/eventos/festival-violoes-banner.jpg" alt="II Festival de Violões Sebastião Tapajós" class="block h-auto w-full" />
@@ -30,7 +30,7 @@ import { FooterWidget } from 'src/app/shared/footer';
                         </div>
                     </a>
                 </section>
-                -->
+                <!-- banner do festival de violões -->
                 <features-widget />
                 <highlights-widget />
                 <pricing-widget />
