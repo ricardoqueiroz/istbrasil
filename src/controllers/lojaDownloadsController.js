@@ -32,11 +32,13 @@ export const criarLojaDownloadsController = ({db,obterServicos,prepararArquivo,o
     };
     return {
         listar:async(req,res)=>{
-            if(Object.keys(req.query).some(k=>!['limite','apos'].includes(k)))throw erroDownload('SOLICITACAO_INVALIDA');
+            if(Object.keys(req.query).some(k=>!['limite','apos','pedidoPublicId'].includes(k)))throw erroDownload('SOLICITACAO_INVALIDA');
             const limite=req.query.limite===undefined?20:Number(req.query.limite),apos=req.query.apos??null;
             if((req.query.limite!==undefined&&!/^[1-9]\d?$/.test(req.query.limite))||!Number.isInteger(limite)||limite>50||typeof apos!=='string'&&apos!==null)throw erroDownload('SOLICITACAO_INVALIDA');
             try{if(apos!==null)uuidPagamento(apos);}catch{throw erroDownload('SOLICITACAO_INVALIDA');}
-            responderDownload(res,200,await obterServicos().autorizacao.listarDireitosDaSessao(res.locals.tokenDownload,{limite,apos}));
+            const pedidoPublicId=req.query.pedidoPublicId??null;
+            try{if(pedidoPublicId!==null)uuidPagamento(pedidoPublicId);}catch{throw erroDownload('SOLICITACAO_INVALIDA');}
+            responderDownload(res,200,await obterServicos().autorizacao.listarDireitosDaSessao(res.locals.tokenDownload,{limite,apos,pedidoPublicId}));
         },
         reavaliar:async(req,res)=>{
             semQuery(req);const id=identificador(req);

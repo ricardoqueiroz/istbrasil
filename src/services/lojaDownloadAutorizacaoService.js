@@ -82,17 +82,18 @@ export const criarLojaDownloadAutorizacaoService=({db,contextoEsperado,agora=()=
             }
         }
     };
-    const listarDireitosDaSessao=async(token,{limite=20,apos=null}={})=>{
+    const listarDireitosDaSessao=async(token,{limite=20,apos=null,pedidoPublicId=null}={})=>{
         if(!Number.isInteger(limite)||limite<1||limite>50)falhar('ENTRADA_INVALIDA');
         if(apos!==null)apos=uuid(apos);
+        if(pedidoPublicId!==null)pedidoPublicId=uuid(pedidoPublicId);
         return comTransacao(token,async(c,s)=>{
             const q=consulta(s);
-            const [rows]=await c.query(`SELECT d.public_id,d.estado,i.titulo_snapshot ${q.vinculo}
-                WHERE ${q.filtro} AND (? IS NULL OR d.public_id>?)
-                ORDER BY d.public_id LIMIT ?`,[...q.params,apos,apos,limite+1]);
+            const [rows]=await c.query(`SELECT d.public_id,d.estado,i.titulo_snapshot,p.public_id pedido_public_id,i.produto_id,i.posicao ${q.vinculo}
+                WHERE ${q.filtro} AND (? IS NULL OR p.public_id=?) AND (? IS NULL OR d.public_id>?)
+                ORDER BY d.public_id LIMIT ?`,[...q.params,pedidoPublicId,pedidoPublicId,apos,apos,limite+1]);
             const pagina=rows.slice(0,limite);
             return {direitos:pagina.map(d=>({publicId:d.public_id,titulo:sanitizeHtml(d.titulo_snapshot,{allowedTags:[],allowedAttributes:{}}),
-                estado:d.estado,podeSolicitarArquivo:d.estado==='ATIVO'})),proximoCursor:rows.length>limite?pagina.at(-1).public_id:null};
+                estado:d.estado,podeSolicitarArquivo:d.estado==='ATIVO',pedidoPublicId:d.pedido_public_id,produtoId:d.produto_id,itemPosicao:d.posicao})),proximoCursor:rows.length>limite?pagina.at(-1).public_id:null};
         });
     };
     const localizarDireitoDaSessao=async(token,publicId)=>{

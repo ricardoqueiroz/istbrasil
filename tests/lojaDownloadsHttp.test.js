@@ -1,4 +1,5 @@
 import test from 'node:test';
+import {criarLojaDownloadsController} from '../src/controllers/lojaDownloadsController.js';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {writeFile,unlink,open} from 'node:fs/promises';
@@ -150,4 +151,17 @@ test('quatro preparacoes HTTP globais entre sessoes, quinta recusada e liberacao
     const rs=[f.enviar(),f.enviar(),g.enviar(),g.enviar()];
     try{await atingiu;await seguro(await h.enviar(),429);}finally{liberar();}
     for(const r of await Promise.all(rs))assert.equal(r.status,200);assert.equal((await h.enviar()).status,200);
+});
+
+
+test('B2 controller aceita filtro publico sem servidor e preserva ausencia do filtro',async()=>{
+    const id=randomUUID(),chamadas=[];
+    const c=criarLojaDownloadsController({obterServicos:()=>({autorizacao:{async listarDireitosDaSessao(token,opcoes){chamadas.push({token,opcoes});return {direitos:[],proximoCursor:null};}}})});
+    const res={req:{method:'GET'},locals:{tokenDownload:'sessao-validada'},removeHeader(){},status(){return this;},type(){return this;},end(v){this.body=JSON.parse(v);}};
+    await c.listar({query:{pedidoPublicId:id,limite:'50'}},res);
+    assert.deepEqual(chamadas[0],{token:'sessao-validada',opcoes:{limite:50,apos:null,pedidoPublicId:id}});
+    await c.listar({query:{}},res);assert.equal(chamadas[1].opcoes.pedidoPublicId,null);
+    for(const v of ['invalido',['a','b'],{}])await assert.rejects(c.listar({query:{pedidoPublicId:v}},res),{codigo:'SOLICITACAO_INVALIDA'});
+    await assert.rejects(c.listar({query:{pedidoId:'1'}},res),{codigo:'SOLICITACAO_INVALIDA'});
+    assert.equal(chamadas.length,2);
 });

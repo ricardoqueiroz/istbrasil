@@ -5,25 +5,80 @@
             <h2 id="pedido-titulo">{{ checkout.estado()?.pedido?.publicId === pedido.publicId && checkout.estado()?.pagamento ? (checkout.confirmado() ? 'Pedido — pagamento confirmado.' : 'Pedido criado — pagamento em acompanhamento.') : 'Pedido criado — pagamento ainda não realizado.' }}</h2>
             <p>Identificador do pedido: <strong data-testid="pedido-id">{{ pedido.publicId }}</strong></p>
             @if (checkout.estado()?.pedido?.publicId === pedido.publicId && checkout.estado()?.ambiente === 'sandbox') {
-                <p-message severity="warn">Homologação — PayPal Sandbox — sem cobrança real</p-message>
+                <p-message class="block my-3" severity="warn">Homologação — PayPal Sandbox — sem cobrança real</p-message>
             }
             <p>Situação: {{ checkout.confirmado() && checkout.estado()?.pedido?.publicId === pedido.publicId ? 'PAGO' : pedido.estado === 'CRIADO' || pedido.estado === 'AGUARDANDO_PAGAMENTO' ? 'Aguardando pagamento' : pedido.estado }}</p>
             <ul class="pedido-itens">@for (item of pedido.itens; track item.produtoId) {
                 <li><span>{{ item.titulo }} · Quantidade: {{ item.quantidade }}</span><strong>{{ preco(item.subtotalCentavos) }}</strong></li>
             }</ul>
             <p>Total definitivo: <strong class="preco" data-testid="pedido-total">{{ preco(pedido.totalCentavos) }}</strong></p>
-            @if (pedidos.precoAlterado()) { <p-message severity="warn">O preço mudou desde a cotação. O total definitivo do pedido é o informado acima.</p-message> }
-            @if (checkout.confirmado() && checkout.estado()?.pedido?.publicId === pedido.publicId) {
-                <a pButton routerLink="/loja/biblioteca">Acessar minha biblioteca digital</a>
+            @if (pedidos.precoAlterado()) { <p-message class="block my-3" severity="warn">O preço mudou desde a cotação. O total definitivo do pedido é o informado acima.</p-message> }
+            @if (checkout.bibliotecaLiberada() && checkout.estado()?.pedido?.publicId === pedido.publicId) {
+                <a pButton routerLink="/loja/biblioteca" class="biblioteca-acao">
+                    <i pButtonIcon class="pi pi-book" aria-hidden="true"></i>
+                    <span pButtonLabel>Acessar minha biblioteca digital</span>
+                </a>
             } @else { <p>A criação do pedido não confirma pagamento nem libera downloads.</p> }
+            @if (!etapaPagamento()) {
+                <form class="pedido-form" (submit)="$event.preventDefault(); confirmarPedido()" aria-labelledby="revisar-pedido-titulo">
+                    <h2 id="revisar-pedido-titulo">Criar pedido — pedido já confirmado</h2>
+                    @if (pedidos.emailConfirmado()) {
+                        <label for="email-confirmado">E-mail registrado no pedido</label>
+                        <input pInputText id="email-confirmado" type="email" [value]="pedidos.emailConfirmado()" readonly />
+                    } @else { <p>O e-mail registrado no pedido anterior foi preservado.</p> }
+                    <p>A seleção e o e-mail deste pedido estão preservados e não podem ser alterados. Avançar não cria outro pedido.</p>
+                    <p-button type="submit" label="Avançar para pagamento" />
+                </form>
+            } @else {
+                <p-button label="Voltar" [outlined]="true" [disabled]="checkout.ocupado()" (onClick)="etapaPagamento.set(false)" />
+            }
             <a pButton routerLink="/loja" (click)="pedidos.continuarComprando()">Continuar comprando</a>
         </section>
     } @else {
+    @if (checkout.pedidoSalvo()) {
+        <section aria-label="Continuidade do pedido" [attr.aria-busy]="checkout.verificandoAnterior()">
+            <p>Existe um pedido anterior nesta sessão: {{ checkout.pedidoSalvo() }}.</p>
+            @if (checkout.verificandoAnterior()) { <p role="status">Consultando o pedido anterior…</p> }
+            @if (checkout.erro(); as erro) { <p-message class="block my-3" severity="warn">{{ erro }}</p-message> }
+            @if (anterior(); as e) {
+                @if (anteriorPago()) {
+                    <p role="status" class="conclusao-pedido">A compra anterior foi concluída. Para uma nova compra, confirme explicitamente a criação de outro pedido.</p>
+                } @else if (retomavel()) {
+                    <p>O pedido anterior corresponde à cotação atual. Retomar não cria outro pedido nem inicia pagamento.</p>
+                } @else {
+                    <p-message class="block my-3" severity="warn">Não é possível retomar este pedido com segurança. Estado: {{ e.pagamento?.estado ?? e.pedido.estado }}. {{ equivalente() ? 'O resultado exige verificação antes de outro pagamento.' : 'Os itens ou valores diferem da cotação atual.' }} A tentativa e suas chaves foram preservadas. Consulte o atendimento.</p-message>
+                }
+            }
+        </section>
+    }
+    @if (checkout.pedidoSalvo() || !carrinho.vazio() || (anterior() && anteriorPago())) {
+        <div class="acoes flex flex-wrap items-center gap-2">
+            @if (checkout.pedidoSalvo()) {
+                <p-button label="Verificar pedido anterior" [disabled]="bloqueado() || !carrinho.cotacao() || carrinho.carregando()" (onClick)="consultarPedidoAnterior()" />
+                @if (anterior()) {
+                    @if (!anteriorPago()) {
+                        @if (retomavel()) {
+                            <p-button label="Retomar pedido anterior" [disabled]="bloqueado()" (onClick)="retomarPedidoAnterior()" />
+                        }
+                    }
+                }
+            }
+            @if (anterior() && anteriorPago()) {
+                <a pButton routerLink="/loja/biblioteca" class="biblioteca-acao">
+                    <i pButtonIcon class="pi pi-book" aria-hidden="true"></i>
+                    <span pButtonLabel>Acessar minha biblioteca digital</span>
+                </a>
+            }
+            @if (!carrinho.vazio()) {
+                <p-button label="Atualizar cotação" icon="pi pi-refresh" [outlined]="true" [disabled]="carrinho.carregando() || bloqueado()" (onClick)="carrinho.cotar()" />
+                <p-button label="Limpar carrinho" icon="pi pi-trash" severity="secondary" [outlined]="true" [disabled]="bloqueado()" (onClick)="carrinho.limpar()" />
+            }
+        </div>
+    }
     @if (carrinho.vazio()) {
         <section class="vazio" role="status"><h2>Seu carrinho está vazio</h2><p>Explore os livros e escolha seus títulos.</p><a pButton routerLink="/loja">Explorar catálogo</a></section>
     } @else {
-        <div class="acoes"><p-button label="Atualizar cotação" icon="pi pi-refresh" [outlined]="true" [disabled]="carrinho.carregando() || bloqueado()" (onClick)="carrinho.cotar()" /><p-button label="Limpar carrinho" [text]="true" severity="secondary" [disabled]="bloqueado()" (onClick)="carrinho.limpar()" /></div>
-        @if (carrinho.erro(); as erro) { <p-message [severity]="erro.status === 422 || erro.status === 429 ? 'warn' : 'error'">{{ erro.mensagem }}</p-message> }
+        @if (carrinho.erro(); as erro) { <p-message class="block my-3" [severity]="erro.status === 422 || erro.status === 429 ? 'warn' : 'error'">{{ erro.mensagem }}</p-message> }
         @if (carrinho.inconsistencias().length) { <p class="discreto" role="status">A cotação precisa ser revisada. A disponibilidade dos títulos ainda não foi confirmada.</p> }
         <section [attr.aria-busy]="carrinho.carregando()" aria-label="Itens do carrinho">
             @if (carrinho.carregando()) { <p role="status">Consultando preços e disponibilidade…</p> }
@@ -51,16 +106,18 @@
             <h2 id="criar-pedido-titulo">Criar pedido</h2>
             <label for="comprador-email">E-mail real para confirmação da compra</label>
             <input pInputText id="comprador-email" type="email" autocomplete="email" maxlength="254" required [formControl]="email" [readOnly]="bloqueado()" [attr.aria-invalid]="email.touched && email.invalid" aria-describedby="email-ajuda" />
-            <p id="email-ajuda" class="discreto">Informe um endereço real e acessível. Ele será registrado no pedido, independentemente do e-mail da conta PayPal Sandbox. Criar o pedido não realiza pagamento.</p>
-            @if (email.touched && email.invalid) { <p-message severity="warn">Informe um endereço de e-mail válido.</p-message> }
+            <p id="email-ajuda" class="discreto">Informe um endereço real e acessível. Ele será registrado no pedido, independentemente do e-mail da conta PayPal. Criar o pedido não realiza pagamento.</p>
+            @if (email.touched && email.invalid) { <p-message class="block my-3" severity="warn">Informe um endereço de e-mail válido.</p-message> }
             @if (pedidos.pendente(); as tentativa) {
                 <p role="status">Existe uma tentativa pendente para {{ tentativa.entrada.compradorEmail }}, com os produtos {{ tentativa.entrada.produtoIds.join(', ') }}. A repetição usará exatamente essa seleção e o mesmo e-mail.</p>
             }
-            @if (pedidos.erro(); as erro) { <p-message severity="error">{{ erro.mensagem }}</p-message> }
+            @if (pedidos.erro(); as erro) { <p-message class="block my-3" severity="error">{{ erro.mensagem }}</p-message> }
             <p class="discreto">Os preços e a disponibilidade serão verificados novamente. O valor definitivo será apresentado na confirmação.</p>
-            <p-button type="submit" [label]="pedidos.pendente() ? 'Repetir tentativa do pedido' : 'Confirmar criação do pedido'" [loading]="pedidos.processando()" [disabled]="pedidos.processando() || (!pedidos.pendente() && (email.invalid || !carrinho.cotacao() || carrinho.carregando()))" />
+            <p-button type="submit" [label]="pedidos.pendente() ? 'Repetir tentativa do pedido' : checkout.pedidoSalvo() && !anteriorPago() ? 'Verificar antes de criar pedido' : 'Confirmar criação do pedido'" [loading]="pedidos.processando()" [disabled]="pedidos.processando() || checkout.ocupado() || (!pedidos.pendente() && (email.invalid || !carrinho.cotacao() || carrinho.carregando()))" />
         </form>
     }
     }
-    <app-loja-checkout [pedidoId]="pedidos.confirmado()?.publicId ?? null" />
+    @if (pedidos.confirmado(); as pedido) {
+        @if (etapaPagamento()) { <app-loja-checkout [pedidoId]="pedido.publicId" /> }
+    }
 </main>

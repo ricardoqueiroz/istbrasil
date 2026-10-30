@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomBytes,randomUUID,createHash} from 'node:crypto';
 import {criarLojaDownloadAutorizacaoService} from '../src/services/lojaDownloadAutorizacaoService.js';
+import {hashSessaoRecuperada} from '../src/services/lojaDownloadAutoridade.js';
 import {lerCookieLoja} from '../src/middlewares/lojaSessaoMiddleware.js';
 import {criarFixtureDireitos,contextoDireitos as contexto} from './fixtures/lojaDownloadDireitosFixture.js';
 import {criarLojaDownloadDireitosService} from '../src/services/lojaDownloadDireitosService.js';
@@ -44,7 +45,7 @@ test('D6-B1 autorizacao interna em MariaDB descartavel',{
     await t.test('listagem e localizacao pertencem a sessao, nao expõem dados privados e nao escrevem',async()=>{
         const x=await preparar({estadoDireito:'ATIVO'}),antes=await snapshot(x),s=svc();
         const r=await s.listarDireitosDaSessao(x.token);assert.equal(r.direitos.length,2);assert(r.direitos.every(d=>d.estado==='ATIVO'&&d.podeSolicitarArquivo));
-        assert.deepEqual(Object.keys(r.direitos[0]),['publicId','titulo','estado','podeSolicitarArquivo']);
+        assert.deepEqual(Object.keys(r.direitos[0]),['publicId','titulo','estado','podeSolicitarArquivo','pedidoPublicId','produtoId','itemPosicao']);
         assert.doesNotMatch(JSON.stringify(r),/caminho|sha256|email|pagamento|captura|pedidoId|arquivoVersaoId|token/);
         assert.equal((await s.localizarDireitoDaSessao(x.token,x.publicId)).pedidoId,x.pedidoId);
         assert.deepEqual(await s.listarDireitosDaSessao(x.token),r);assert.equal(await snapshot(x),antes);
@@ -131,4 +132,58 @@ test('D6-B1 autorizacao interna em MariaDB descartavel',{
         await writer;assert.deepEqual(await exec,{codigo:'DIREITO_INDISPONIVEL'});
     });
     t.diagnostic(`D6-B1: ${f.identidade.versao}; schema ${f.identidade.banco}; porta ${f.identidade.porta}; sem leitura de PDFs ou escrita da autorizacao.`);
+});
+
+
+test('B2 listagem filtrada preserva sessao, cursor e projecao sem banco ou servidor',async()=>{
+    const tokens=[randomBytes(32).toString('base64url'),randomBytes(32).toString('base64url')];
+    const hashes=tokens.map(t=>createHash('sha256').update(t).digest());
+    const pedidos=[randomUUID(),randomUUID()];
+    const rows=[1,2,3].map((n)=>({public_id:`00000000-0000-4000-8000-${String(n).padStart(12,'0')}`,
+        estado:'ATIVO',titulo_snapshot:'<b>Livro</b>',pedido_public_id:pedidos[n===3?1:0],produto_id:n===2?1:n,posicao:n===2?2:1,sessao_id:n===3?2:1}));
+    const recuperado=randomBytes(32).toString('base64url');
+    const consultas=[];
+    const db={async getConnection(){return {
+        async query(sql,p=[]){
+            consultas.push([sql,p]);
+            if(sql.startsWith('SET '))return [[]];
+            if(sql.includes('@@in_transaction'))return [[{transacao:0,autocommit:1,isolamento:'REPEATABLE-READ'}]];
+            if(sql.includes('FROM ist_loja_download_recuperacoes WHERE sessao_hash=?')){
+                assert(hashSessaoRecuperada(recuperado).equals(p[0]));
+                return [[{id:90,public_id:randomUUID(),consumido_em:'2026-01-01',revogada_em:null,criada:'2026-01-01T00:00:00.000000Z',expira:'2026-01-02T00:00:00.000000Z'}]];
+            }
+            if(sql.includes('FROM ist_loja_sessoes WHERE token_hash =')){
+                const i=hashes.findIndex(h=>h.equals(p[0]));
+                return [i<0?[]:[{id:i+1,criada_em_utc:'2026-01-01T00:00:00.000000Z',expira_em_utc:'2026-01-02T00:00:00.000000Z',revogada:0}]];
+            }
+            if(sql.includes('FROM ist_loja_sessoes WHERE id=?'))return [[{id:p[0]}]];
+            if(sql.includes('rd.recuperacao_id=?')){
+                assert.match(sql,/JOIN ist_loja_download_recuperacao_direitos rd/);assert.equal(p[0],90);
+                return [rows.filter(r=>r.public_id===rows[0].public_id&&(!p[1]||r.pedido_public_id===p[1])).slice(0,p.at(-1))];
+            }
+            assert.match(sql,/p\.sessao_id=\? AND s\.token_hash=\?/);
+            assert.match(sql,/AND \(\? IS NULL OR p\.public_id=\?\)/);
+            assert.match(sql,/ORDER BY d\.public_id LIMIT \?/);
+            const [sessao,hash,pedido,,apos,,limite]=p;
+            assert(hashes[sessao-1].equals(hash));
+            return [rows.filter(r=>r.sessao_id===sessao&&(!pedido||r.pedido_public_id===pedido)&&(!apos||r.public_id>apos)).slice(0,limite)];
+        },async beginTransaction(){},async commit(){},async rollback(){},release(){},destroy(){}
+    };}};
+    const svc=criarLojaDownloadAutorizacaoService({db,contextoEsperado:contexto,agora});
+    const primeira=await svc.listarDireitosDaSessao(tokens[0],{pedidoPublicId:pedidos[0],limite:1});
+    assert.equal(primeira.direitos.length,1);assert.equal(primeira.direitos[0].pedidoPublicId,pedidos[0]);
+    assert.equal(primeira.direitos[0].itemPosicao,1);assert.equal(primeira.direitos[0].titulo,'Livro');
+    const segunda=await svc.listarDireitosDaSessao(tokens[0],{pedidoPublicId:pedidos[0],limite:1,apos:primeira.proximoCursor});
+    assert.equal(segunda.direitos[0].itemPosicao,2);assert.equal(segunda.direitos[0].produtoId,primeira.direitos[0].produtoId);
+    assert.equal(segunda.proximoCursor,null);
+    const vazio={direitos:[],proximoCursor:null};
+    assert.deepEqual(await svc.listarDireitosDaSessao(tokens[0],{pedidoPublicId:pedidos[1]}),vazio);
+    assert.deepEqual(await svc.listarDireitosDaSessao(tokens[0],{pedidoPublicId:randomUUID()}),vazio);
+    assert.deepEqual(await svc.listarDireitosDaSessao(tokens[1],{pedidoPublicId:pedidos[0]}),vazio);
+    assert.equal((await svc.listarDireitosDaSessao(tokens[0])).direitos.length,2);
+    await assert.rejects(svc.listarDireitosDaSessao(tokens[0],{pedidoPublicId:'invalido'}),{codigo:'ENTRADA_INVALIDA'});
+    const autoridade={tipo:'RECUPERACAO',token:recuperado};
+    assert.equal((await svc.listarDireitosDaSessao(autoridade,{pedidoPublicId:pedidos[0]})).direitos.length,1);
+    assert.deepEqual(await svc.listarDireitosDaSessao(autoridade,{pedidoPublicId:pedidos[1]}),vazio);
+    assert(consultas.every(([sql])=>sql.startsWith('SELECT ')||sql.startsWith('SET ')));
 });

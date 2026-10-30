@@ -54,4 +54,14 @@ describe('Biblioteca HTTP D6/D7', () => {
     for (const status of [400, 401, 403, 404, 409, 429, 503]) it(`erro ${status} sanitizado sem detalhes internos`, () => {
         const mensagem = mensagemBiblioteca(new HttpErrorResponse({ status, error: 'segredo-caminho-privado' })); expect(mensagem).not.toContain('segredo-caminho-privado'); expect(mensagem.length).toBeGreaterThan(10);
     });
+    it('B2 filtra por UUID do pedido mantendo credenciais e cursor', () => {
+        api.listar('cursor', 'pedido-publico').subscribe();
+        const r = http.expectOne(req => req.url === `${base}/direitos`);
+        expect(r.request.params.get('pedidoPublicId')).toBe('pedido-publico');
+        expect(r.request.params.get('apos')).toBe('cursor'); expect(r.request.withCredentials).toBeTrue();
+        r.flush({ direitos: [], proximoCursor: null });
+        http.expectNone(`${base}/recuperacao/sessao`);
+    });
+
+
 });

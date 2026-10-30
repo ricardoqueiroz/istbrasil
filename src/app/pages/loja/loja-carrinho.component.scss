@@ -15,7 +15,22 @@
     outline-color: var(--p-primary-700);
     box-shadow: 0 0 0 3px var(--p-surface-0);
 }
-.acoes { display: flex; flex-wrap: wrap; gap: .75rem; margin-bottom: 1.5rem; }
+.acoes { margin-bottom: 1.5rem; }
+.acoes > * { max-width: 100%; min-width: 0; }
+.loja a.biblioteca-acao.p-button {
+    color: #fff;
+    background: var(--p-primary-700);
+    border-color: var(--p-primary-700);
+    white-space: normal;
+    overflow-wrap: anywhere;
+}
+.loja a.biblioteca-acao.p-button:hover {
+    color: #fff;
+    background: var(--p-primary-800);
+    border-color: var(--p-primary-800);
+}
+.conclusao-pedido, .confirmacao { min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
+.confirmacao > * { min-width: 0; }
 .itens { list-style: none; padding: 0; margin: 0; }
 .item { display: grid; grid-template-columns: 5rem minmax(0, 1fr) auto auto; align-items: center; gap: 1.25rem; background: var(--surface-card); border: 1px solid var(--surface-border); border-radius: .75rem; padding: 1.25rem; margin-bottom: 1rem; }
 .mini-capa { background: var(--surface-ground); display: grid; place-items: center; min-height: 6rem; border-radius: .4rem; }

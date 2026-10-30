@@ -5,7 +5,8 @@ import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
 import { environment } from '../../../environments/environment';
 import { CARRINHO_STORAGE, CarrinhoService } from '../../services/carrinho.service';
-import { LojaCarrinhoComponent } from './loja-carrinho.component';
+import { pedidosEquivalentes, LojaCarrinhoComponent } from './loja-carrinho.component';
+import { CHECKOUT_STORAGE_KEY, CheckoutEstado } from '../../services/loja-checkout.service';
 import { LojaCotacao } from './models/loja.model';
 
 describe('LojaCarrinhoComponent', () => {
@@ -24,7 +25,7 @@ describe('LojaCarrinhoComponent', () => {
     it('identifica email real persistido sem associar conta PayPal', () => {
         carregar();
         expect(fixture.nativeElement.querySelector('label[for="comprador-email"]').textContent).toBe('E-mail real para confirmação da compra');
-        expect(texto()).toContain('independentemente do e-mail da conta PayPal Sandbox');
+        expect(texto()).toContain('independentemente do e-mail da conta PayPal');
     });
 
     it('carrinho vazio nao solicita HTTP', () => { pagina([]); expect(texto()).toContain('Seu carrinho está vazio'); http.expectNone(url); });
@@ -80,7 +81,7 @@ describe('LojaCarrinhoComponent', () => {
         expect(texto()).toContain('Livro confirmado 1');
         expect(texto()).toContain('Livro confirmado 2');
         expect(fixture.nativeElement.querySelector('[data-testid="pedido-total"]').textContent).toMatch(/190,00/);
-        expect(carrinho.vazio()).toBeTrue();
+        expect(carrinho.ids()).toEqual([1, 2]);
         expect(fixture.nativeElement.querySelector('a[download], iframe')).toBeNull();
         expect(fixture.nativeElement.querySelector('form')).toBeNull();
         expect(texto()).toContain('Preparar pagamento');
@@ -107,7 +108,7 @@ describe('LojaCarrinhoComponent', () => {
         const repeticao = c.confirmarPedido(); const replay = await prepararPedido(200);
         expect(replay.request.headers.get('Idempotency-Key')).toBe(chave);
         replay.flush(pedidoDto()); await repeticao; fixture.detectChanges();
-        expect(texto()).toContain('Pedido criado'); expect(carrinho.vazio()).toBeTrue();
+        expect(texto()).toContain('Pedido criado'); expect(carrinho.ids()).toEqual([1, 2]);
     });
     for (const [status, codigo, mensagem] of [[401, 'SESSAO_INVALIDA', 'cookies'], [403, 'CSRF_INVALIDO', 'proteção'], [422, 'PRODUTO_INDISPONIVEL', 'indisponíveis']] as const) {
         it(`informa ${codigo} e preserva itens`, async () => {
@@ -132,7 +133,90 @@ describe('LojaCarrinhoComponent', () => {
         const operacao = c.confirmarPedido(); const req = await prepararPedido();
         carrinho.adicionar(3);
         req.flush(pedidoDto()); await operacao; fixture.detectChanges();
-        expect(carrinho.ids()).toEqual([3]);
-        http.expectOne(url).flush(dto([3], 9500));
+        expect(carrinho.ids()).toEqual([1, 2, 3]);
+        http.expectOne(url).flush(dto([1, 2, 3], 28500));
     });
+    it('B2 preserva Voltar e Avancar sem duplicar pedido nem alterar email confirmado', async () => {
+        carregar();const c=fixture.componentInstance;c.email.setValue('comprador@example.com');
+        const operacao=c.confirmarPedido();const req=await prepararPedido();req.flush(pedidoDto());await operacao;fixture.detectChanges();
+        const id=c.pedidos.confirmado()!.publicId;
+        c.etapaPagamento.set(false);fixture.detectChanges();
+        expect(fixture.nativeElement.querySelector('#email-confirmado').readOnly).toBeTrue();
+        expect(fixture.nativeElement.querySelector('#email-confirmado').value).toBe('comprador@example.com');
+        expect(fixture.nativeElement.querySelector('app-loja-checkout')).toBeNull();
+        await c.confirmarPedido();fixture.detectChanges();
+        expect(c.pedidos.confirmado()!.publicId).toBe(id);expect(carrinho.ids()).toEqual([1,2]);
+        http.expectNone('/api/loja/pedidos');
+    });
+
+    const anteriorId='60606060-6060-4060-8060-606060606060';
+    const pagamentoId='70707070-7070-4070-8070-707070707070';
+    const fim='2099-01-01T00:00:00.000Z';
+    const antigo=(estado?:string):CheckoutEstado=>({ambiente:'sandbox',pedido:{publicId:anteriorId,
+        estado:estado==='CAPTURADO'?'PAGO':estado?'AGUARDANDO_PAGAMENTO':'CRIADO',versao:1,moeda:'BRL',totalCentavos:19000,
+        criadoEm:'2026-01-01T00:00:00.000Z',expiraEm:fim,
+        itens:[1,2].map(produtoId=>({produtoId,sku:'SKU'+produtoId,titulo:'Livro '+produtoId,tipo:'DIGITAL',quantidade:1,precoUnitarioCentavos:9500,subtotalCentavos:9500}))},
+        pagamento:estado?{publicId:pagamentoId,pedidoPublicId:anteriorId,estado,pedidoEstado:estado==='CAPTURADO'?'PAGO':'AGUARDANDO_PAGAMENTO',moeda:'BRL',valorCentavos:19000,pagamentoConfirmadoEm:estado==='CAPTURADO'?'2026-01-01T00:01:00.000Z':null}:null,
+        ordemId:estado?'ORDER123':null});
+    const gravar=()=>{dados.set(CHECKOUT_STORAGE_KEY,JSON.stringify({pedidoPublicId:anteriorId,criacao:anteriorId,captura:pagamentoId,expiraSessao:fim}));return dados.get(CHECKOUT_STORAGE_KEY);};
+    const verificarAnterior=async(e=antigo())=>{
+        const p=fixture.componentInstance.consultarPedidoAnterior();
+        http.expectOne('/api/loja/sessao').flush({sessao:{expiraEm:fim}},{headers:{'X-CSRF-Token':'csrf-fixture'}});
+        for(let i=0;i<8;i++)await Promise.resolve();
+        const r=http.expectOne('/api/loja/checkout/estado');expect(r.request.body).toEqual({pedidoPublicId:anteriorId});r.flush(e);await p;fixture.detectChanges();
+    };
+    for(const estado of [undefined,'AGUARDANDO_APROVACAO','APROVADO'])it(`B6 retoma ${estado} sem criar pedido ou preparar pagamento`,async()=>{
+        const original=gravar();carregar();await verificarAnterior(antigo(estado));
+        expect(texto()).toContain('Retomar pedido anterior');fixture.componentInstance.retomarPedidoAnterior();fixture.detectChanges();
+        expect(fixture.componentInstance.pedidos.confirmado()?.publicId).toBe(anteriorId);
+        expect(texto()).toContain('Preparar pagamento');expect(dados.get(CHECKOUT_STORAGE_KEY)).toBe(original);
+        expect(fixture.componentInstance.checkout.pronto()).toBeFalse();
+        http.expectNone('/api/loja/pedidos');http.expectNone('/api/loja/checkout/iniciar');http.expectNone('/api/loja/checkout/capturar');http.expectNone('/api/loja/checkout/reconciliar');
+    });
+    it('B6 confirmar primeiro verifica A e nunca cria B automaticamente',async()=>{
+        gravar();carregar();const c=fixture.componentInstance;c.email.setValue('comprador@example.com');
+        const p=c.confirmarPedido();http.expectOne('/api/loja/sessao').flush({sessao:{expiraEm:fim}},{headers:{'X-CSRF-Token':'csrf-fixture'}});
+        for(let i=0;i<8;i++)await Promise.resolve();http.expectOne('/api/loja/checkout/estado').flush(antigo());await p;
+        expect(c.pedidos.confirmado()).toBeNull();http.expectNone('/api/loja/pedidos');
+    });
+    for(const estado of ['CRIANDO','CAPTURANDO','PENDENTE','DESCONHECIDO','REVISAO','RECUSADO','CANCELADO','EXPIRADO'])it(`B6 preserva estado ${estado}`,async()=>{
+        const original=gravar();carregar();await verificarAnterior(antigo(estado));fixture.componentInstance.retomarPedidoAnterior();
+        expect(fixture.componentInstance.pedidos.confirmado()).toBeNull();expect(dados.get(CHECKOUT_STORAGE_KEY)).toBe(original);
+        expect(texto()).not.toContain('Retomar pedido anterior');http.expectNone('/api/loja/pedidos');
+    });
+    it('B6 pedido pago oferece biblioteca sem retomar ou criar outro automaticamente',async()=>{
+        const original=gravar();carregar();await verificarAnterior(antigo('CAPTURADO'));
+        expect(texto()).toContain('A compra anterior foi concluída');expect(texto()).not.toContain('Retomar pedido anterior');
+        expect(fixture.nativeElement.querySelector('a[href="/loja/biblioteca"]')).not.toBeNull();
+        expect(dados.get(CHECKOUT_STORAGE_KEY)).toBe(original);http.expectNone('/api/loja/pedidos');
+    });
+    it('B6 carrinho divergente preserva tentativa sem retomada',async()=>{
+        const original=gravar();carregar();const e=antigo();e.pedido={...e.pedido,itens:e.pedido.itens.map((i,n)=>n?{...i,produtoId:3}:i)};
+        await verificarAnterior(e);expect(texto()).toContain('Os itens ou valores diferem');
+        fixture.componentInstance.retomarPedidoAnterior();expect(fixture.componentInstance.pedidos.confirmado()).toBeNull();expect(dados.get(CHECKOUT_STORAGE_KEY)).toBe(original);
+    });
+    it('B6 cancela resposta tardia ao trocar cotacao',async()=>{
+        gravar();carregar();const p=fixture.componentInstance.consultarPedidoAnterior();
+        http.expectOne('/api/loja/sessao').flush({sessao:{expiraEm:fim}},{headers:{'X-CSRF-Token':'csrf-fixture'}});
+        for(let i=0;i<8;i++)await Promise.resolve();const r=http.expectOne('/api/loja/checkout/estado');
+        carrinho.remover(2);fixture.detectChanges();expect(r.cancelled).toBeTrue();
+        http.expectOne(url).flush(dto([1],9500));await p;fixture.detectChanges();expect(fixture.componentInstance.anterior()).toBeNull();
+    });
+    it('B6 ignora resposta apos destruir componente',async()=>{
+        gravar();carregar();const p=fixture.componentInstance.consultarPedidoAnterior();
+        http.expectOne('/api/loja/sessao').flush({sessao:{expiraEm:fim}},{headers:{'X-CSRF-Token':'csrf-fixture'}});
+        for(let i=0;i<8;i++)await Promise.resolve();const r=http.expectOne('/api/loja/checkout/estado');fixture.destroy();
+        expect(r.cancelled).toBeTrue();await p;
+    });
+    it('B6 compara todos os valores e ignora ordem e titulo',()=>{
+        const p=antigo().pedido;expect(pedidosEquivalentes({...p,itens:[...p.itens].reverse().map(i=>({...i,titulo:'Outro título'}))},dto())).toBeTrue();
+        for(const campo of ['produtoId','quantidade','precoUnitarioCentavos','subtotalCentavos']) {
+            const itens=p.itens.map((i,n)=>n?i:{...i,[campo]:i[campo as keyof typeof i] as number+1});
+            expect(pedidosEquivalentes({...p,itens},dto())).toBeFalse();
+        }
+        expect(pedidosEquivalentes({...p,moeda:'USD' as 'BRL'},dto())).toBeFalse();
+        expect(pedidosEquivalentes({...p,totalCentavos:1},dto())).toBeFalse();
+        expect(pedidosEquivalentes({...p,itens:[p.itens[0],p.itens[0]]},dto())).toBeFalse();
+    });
+
 });

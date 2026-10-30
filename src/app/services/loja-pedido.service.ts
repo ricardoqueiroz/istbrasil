@@ -27,10 +27,14 @@ export class LojaPedidoService {
     readonly erro = signal<CarrinhoErro | null>(null);
     readonly confirmado = signal<LojaPedido | null>(null);
     readonly precoAlterado = signal(false);
+    readonly emailConfirmado = signal<string | null>(null);
     private armazenamentoInvalido = false;
 
     continuarComprando(): void {
-        if (!this.processando()) this.confirmado.set(null);
+        if (!this.processando()) {
+            this.confirmado.set(null);
+            this.emailConfirmado.set(null);
+        }
     }
 
     constructor() {
@@ -84,6 +88,7 @@ export class LojaPedidoService {
             }
             enviado = true;
             const pedido = await firstValueFrom(this.loja.criarPedido(tentativa.entrada, tentativa.chave, csrf));
+            this.emailConfirmado.set(tentativa.entrada.compradorEmail);
             this.confirmado.set(pedido);
             this.precoAlterado.set(pedido.totalCentavos !== tentativa.totalCotado);
             this.tentativaEstado.set(null);

@@ -1,6 +1,6 @@
 import { provideHttpClient } from '@angular/common/http';
 import { provideHttpClientTesting, HttpTestingController } from '@angular/common/http/testing';
-import { TestBed } from '@angular/core/testing';
+import { TestBed, fakeAsync, tick, flushMicrotasks } from '@angular/core/testing';
 import { CARRINHO_STORAGE } from './carrinho.service';
 import { CARREGAR_PAYPAL_V6, CHECKOUT_STORAGE_KEY, CheckoutEstado, LojaCheckoutService } from './loja-checkout.service';
 
@@ -143,4 +143,195 @@ describe('Checkout da Loja', () => {
         http.expectOne('/api/loja/checkout/configuracao').flush({ ambiente: 'sandbox', clientId: 'public-id' }); await p;
         expect(JSON.parse(dados.get(CHECKOUT_STORAGE_KEY)!).criacao).toBe(salvo.criacao);
     });
+    it('B2 observa somente estado, sem sessao, reconciliacao ou captura; unsubscribe cancela HTTP', async () => {
+        await preparar('PENDENTE');
+        const antes = service.estado();
+        const sub = service.observar(id).subscribe();
+        const r = http.expectOne('/api/loja/checkout/estado');
+        expect(r.request.body).toEqual({ pedidoPublicId: id });
+        expect(r.request.headers.get('X-CSRF-Token')).toBe('csrf-fixture');
+        http.expectNone('/api/loja/sessao'); http.expectNone('/api/loja/checkout/reconciliar');
+        http.expectNone('/api/loja/checkout/capturar'); http.expectNone('/api/loja/checkout/iniciar');
+        sub.unsubscribe(); expect(r.cancelled).toBeTrue(); expect(service.estado()).toBe(antes);
+    });
+    it('B2 impede observacoes sobrepostas e cancela resposta antiga antes da consulta manual', async () => {
+        await preparar('PENDENTE');
+        const sub = service.observar(id).subscribe(); const antigo = http.expectOne('/api/loja/checkout/estado');
+        service.observar(id).subscribe(); http.expectNone('/api/loja/checkout/estado');
+        const manual = service.consultar(id); expect(antigo.cancelled).toBeTrue();
+        await sessao(); http.expectOne('/api/loja/checkout/estado').flush(dto()); await manual;
+        expect(service.estado()?.pagamento).toBeNull(); sub.unsubscribe();
+    });
+    it('B2 direito repetido nao satisfaz dois itens do mesmo produto', async () => {
+        await preparar('CAPTURADO');
+        const e = service.estado()!;
+        (e.pedido as unknown as { itens: any[] }).itens = [1,2].map(() => ({ produtoId:1,sku:'S',titulo:'Livro',tipo:'DIGITAL',quantidade:1,precoUnitarioCentavos:9500,subtotalCentavos:9500 }));
+        const direito = { publicId:'40404040-4040-4040-8040-404040404040',pedidoPublicId:id,produtoId:1,itemPosicao:1,titulo:'Livro',estado:'ATIVO' as const,podeSolicitarArquivo:true };
+        service.registrarDireitos(id,e,[direito]); expect(service.bibliotecaLiberada()).toBeFalse();
+        service.registrarDireitos(id,e,[direito,{...direito,itemPosicao:2}]); expect(service.bibliotecaLiberada()).toBeFalse();
+        service.registrarDireitos(id,e,[direito,{...direito,publicId:'50505050-5050-4050-8050-505050505050',itemPosicao:2}]);
+        expect(service.bibliotecaLiberada()).toBeTrue();
+        service.registrarDireitos(id,e,[{...direito,pedidoPublicId:pgId},{...direito,publicId:'50505050-5050-4050-8050-505050505050',itemPosicao:2}]);
+        expect(service.bibliotecaLiberada()).toBeFalse();
+    });
+
+    it('B2 cancelar popup encerra acompanhamento e preserva chaves sem capturar', async () => {
+        await preparar();aprovar=false;
+        const sub=service.observar(id).subscribe();const leitura=http.expectOne('/api/loja/checkout/estado');
+        const {p}=await iniciar();expect(leitura.cancelled).toBeTrue();await p;
+        expect(service.acompanhamento()).toBeNull();expect(dados.has(CHECKOUT_STORAGE_KEY)).toBeTrue();
+        http.expectNone('/api/loja/checkout/capturar');sub.unsubscribe();
+    });
+
+    const pedidoB = '40404040-4040-4040-8040-404040404040';
+    const verificar = async (resposta: CheckoutEstado, recarga = false) => {
+        await preparar();
+        if (recarga) service = TestBed.runInInjectionContext(() => new LojaCheckoutService());
+        const original = dados.get(CHECKOUT_STORAGE_KEY);
+        const p = service.verificarAnterior(pedidoB); await sessao();
+        const r = http.expectOne('/api/loja/checkout/estado');
+        expect(r.request.body).toEqual({pedidoPublicId:id});
+        expect(r.request.headers.get('X-CSRF-Token')).toBe('csrf-fixture');
+        r.flush(resposta); await p;
+        http.expectNone('/api/loja/checkout/reconciliar'); http.expectNone('/api/loja/checkout/capturar');
+        http.expectNone('/api/loja/checkout/iniciar');
+        return original;
+    };
+    for (const recarga of [false,true]) it(`B5 resolve A paga sem preparar B, recarga=${recarga}`, async () => {
+        const original = JSON.parse((await verificar(dto('CAPTURADO'),recarga))!);
+        expect(service.pedidoSalvo()).toBeNull(); expect(dados.has(CHECKOUT_STORAGE_KEY)).toBeFalse();
+        expect(service.pronto()).toBeFalse(); expect(service.estado()).toBeNull();
+        const p=service.preparar(pedidoB); await sessao();
+        const b=dto(); b.pedido={...b.pedido,publicId:pedidoB};
+        http.expectOne('/api/loja/checkout/estado').flush(b); await micro();
+        http.expectOne('/api/loja/checkout/configuracao').flush({ambiente:'sandbox',clientId:'public-id'});await p;
+        const novas=JSON.parse(dados.get(CHECKOUT_STORAGE_KEY)!);
+        expect(novas.pedidoPublicId).toBe(pedidoB);
+        expect([original.criacao,original.captura]).not.toContain(novas.criacao);
+        expect([original.criacao,original.captura,novas.criacao]).not.toContain(novas.captura);
+    });
+    for (const estado of [undefined,'AGUARDANDO_APROVACAO','APROVADO','CRIANDO','CAPTURANDO','PENDENTE','DESCONHECIDO','REVISAO','CANCELADO','EXPIRADO','RECUSADO']) {
+        it(`B5 preserva tentativa nao comprovada: ${estado}`,async()=>{
+            const original=await verificar(dto(estado));expect(dados.get(CHECKOUT_STORAGE_KEY)).toBe(original);
+            expect(service.pedidoSalvo()).toBe(id);expect(service.erro()).toBeTruthy();
+        });
+    }
+    for (const campo of ['pedido','pagamento','ambiente','valor','moeda','data','id']) it(`B5 rejeita inconsistencia ${campo}`,async()=>{
+        const e=dto('CAPTURADO');
+        if(campo==='pedido')e.pedido={...e.pedido,publicId:pedidoB};
+        if(campo==='pagamento')e.pagamento!.pedidoPublicId=pedidoB;
+        if(campo==='ambiente')e.ambiente='live';
+        if(campo==='valor')e.pagamento!.valorCentavos++;
+        if(campo==='moeda')e.pagamento!.moeda='USD' as 'BRL';
+        if(campo==='data')e.pagamento!.pagamentoConfirmadoEm='invalida';
+        if(campo==='id')e.pagamento!.publicId='invalido';
+        const original=await verificar(e);expect(dados.get(CHECKOUT_STORAGE_KEY)).toBe(original);
+    });
+    for(const status of [0,401,403,404,500])it(`B5 preserva chaves em erro HTTP ${status}`,async()=>{
+        await preparar();const original=dados.get(CHECKOUT_STORAGE_KEY);
+        const p=service.verificarAnterior(pedidoB);await sessao();const r=http.expectOne('/api/loja/checkout/estado');
+        if(status===0)r.error(new ProgressEvent('error'));else r.flush({}, {status,statusText:'Erro'});
+        await p;expect(dados.get(CHECKOUT_STORAGE_KEY)).toBe(original);expect(service.verificandoAnterior()).toBeFalse();
+    });
+    it('B5 sessao substituida preserva A sem consultar estado',async()=>{
+        await preparar();const original=dados.get(CHECKOUT_STORAGE_KEY);const p=service.verificarAnterior(pedidoB);
+        await sessao(201);await p;http.expectNone('/api/loja/checkout/estado');expect(dados.get(CHECKOUT_STORAGE_KEY)).toBe(original);
+    });
+    it('B5 cancela leitura antiga e serializa cliques e preparacao',async()=>{
+        await preparar();service.observar(id).subscribe();const antiga=http.expectOne('/api/loja/checkout/estado');
+        const p=service.verificarAnterior(pedidoB);expect(antiga.cancelled).toBeTrue();
+        await service.verificarAnterior(pedidoB);await service.preparar(pedidoB);await sessao();
+        http.expectOne('/api/loja/checkout/estado').flush(dto('CAPTURADO'));await p;
+        expect(service.estado()).toBeNull();expect(service.direitosConsultados()).toBeNull();expect(service.acompanhamento()).toBeNull();
+    });
+    it('B5 nao encerra contexto nem acompanhamento do proprio pedido A',async()=>{
+        await preparar();const original=dados.get(CHECKOUT_STORAGE_KEY);
+        service.acompanhamento.set({pedidoPublicId:id,inicio:Date.now(),sequencia:1});
+        await service.verificarAnterior(id);
+        expect(dados.get(CHECKOUT_STORAGE_KEY)).toBe(original);expect(service.acompanhamento()?.pedidoPublicId).toBe(id);
+        http.expectNone('/api/loja/checkout/estado');
+    });
+
+    it('B5 timeout cancela consulta e preserva contexto',fakeAsync(()=>{
+        let terminou=false;
+        const prepararPromise=service.preparar(id);
+        http.expectOne('/api/loja/sessao').flush({sessao:{expiraEm:expira}},{headers:{'X-CSRF-Token':'csrf-fixture'}});flushMicrotasks();
+        http.expectOne('/api/loja/checkout/estado').flush(dto());flushMicrotasks();
+        http.expectOne('/api/loja/checkout/configuracao').flush({ambiente:'sandbox',clientId:'public-id'});flushMicrotasks();
+        const original=dados.get(CHECKOUT_STORAGE_KEY);
+        void service.verificarAnterior(pedidoB).then(()=>terminou=true);
+        http.expectOne('/api/loja/sessao').flush({sessao:{expiraEm:expira}},{headers:{'X-CSRF-Token':'csrf-fixture'}});flushMicrotasks();
+        const r=http.expectOne('/api/loja/checkout/estado');tick(15000);flushMicrotasks();
+        expect(r.cancelled).toBeTrue();expect(terminou).toBeTrue();expect(dados.get(CHECKOUT_STORAGE_KEY)).toBe(original);
+        expect(service.pedidoSalvo()).toBe(id);void prepararPromise;
+    }));
+
+    it('B5 ignora callbacks SDK tardios de A depois de preparar B',async()=>{
+        await preparar();aprovar=false;const {p}=await iniciar();await p;const antigos=callbacks;
+        const verificar=service.verificarAnterior(pedidoB);await sessao();
+        http.expectOne('/api/loja/checkout/estado').flush(dto('CAPTURADO'));await verificar;
+        const novo=service.preparar(pedidoB);await sessao();const b=dto();b.pedido={...b.pedido,publicId:pedidoB};
+        http.expectOne('/api/loja/checkout/estado').flush(b);await micro();
+        http.expectOne('/api/loja/checkout/configuracao').flush({ambiente:'sandbox',clientId:'public-id'});await novo;
+        antigos.onCancel();antigos.onError();await antigos.onApprove({orderId:'ORDER123'});
+        expect(service.estado()?.pedido.publicId).toBe(pedidoB);expect(service.erro()).toBeNull();
+        http.expectNone('/api/loja/checkout/capturar');http.expectNone('/api/loja/checkout/estado');
+    });
+
+    const continuidadeDto=(estado?:string):CheckoutEstado=>{
+        const e=dto(estado);
+        e.pedido={...e.pedido,estado:e.pagamento?.pedidoEstado??'CRIADO',itens:[{produtoId:1,sku:'SKU1',titulo:'Livro',tipo:'DIGITAL',quantidade:1,precoUnitarioCentavos:19000,subtotalCentavos:19000}]};
+        return e;
+    };
+    for(const recarga of [false,true]) it(`B6 observa e restaura contexto preservando chaves, recarga=${recarga}`,async()=>{
+        await preparar();const original=dados.get(CHECKOUT_STORAGE_KEY);
+        if(recarga)service=TestBed.runInInjectionContext(()=>new LojaCheckoutService());
+        const p=service.consultarAnterior();await sessao();http.expectOne('/api/loja/checkout/estado').flush(continuidadeDto('AGUARDANDO_APROVACAO'));
+        const e=await p;expect(e).not.toBeNull();expect(service.restaurarAnterior(e!)).toBeTrue();
+        expect(service.estado()?.pedido.publicId).toBe(id);expect(service.pronto()).toBeFalse();
+        expect(dados.get(CHECKOUT_STORAGE_KEY)).toBe(original);http.expectNone('/api/loja/checkout/iniciar');http.expectNone('/api/loja/checkout/capturar');http.expectNone('/api/loja/checkout/reconciliar');
+    });
+    it('B6 serializa consultas e cancela observacao antiga',async()=>{
+        await preparar();service.observar(id).subscribe();const old=http.expectOne('/api/loja/checkout/estado');
+        const p=service.consultarAnterior();expect(old.cancelled).toBeTrue();expect(await service.consultarAnterior()).toBeNull();
+        service.observar(id).subscribe();await sessao();http.expectOne('/api/loja/checkout/estado').flush(continuidadeDto());await p;
+    });
+    it('B6 expira contexto local sem descartar chaves nem consultar sessao',async()=>{
+        await preparar();const salvo=JSON.parse(dados.get(CHECKOUT_STORAGE_KEY)!);salvo.expiraSessao='2000-01-01T00:00:00.000Z';dados.set(CHECKOUT_STORAGE_KEY,JSON.stringify(salvo));
+        service=TestBed.runInInjectionContext(()=>new LojaCheckoutService());const original=dados.get(CHECKOUT_STORAGE_KEY);
+        expect(await service.consultarAnterior()).toBeNull();expect(dados.get(CHECKOUT_STORAGE_KEY)).toBe(original);http.expectNone('/api/loja/sessao');
+    });
+    for(const status of [401,403,404,500])it(`B6 erro ${status} preserva contexto`,async()=>{
+        await preparar();const original=dados.get(CHECKOUT_STORAGE_KEY);const p=service.consultarAnterior();await sessao();
+        http.expectOne('/api/loja/checkout/estado').flush({}, {status,statusText:'Erro'});expect(await p).toBeNull();expect(dados.get(CHECKOUT_STORAGE_KEY)).toBe(original);
+    });
+    for(const campo of ['pedido','pagamento','ambiente','valor','moeda'])it(`B6 rejeita resposta divergente ${campo}`,async()=>{
+        await preparar();const original=dados.get(CHECKOUT_STORAGE_KEY);const p=service.consultarAnterior();await sessao();const e=continuidadeDto('APROVADO');
+        if(campo==='pedido')e.pedido={...e.pedido,publicId:pedidoB};
+        if(campo==='pagamento')e.pagamento!.pedidoPublicId=pedidoB;
+        if(campo==='ambiente')e.ambiente='live';
+        if(campo==='valor')e.pagamento!.valorCentavos++;
+        if(campo==='moeda')e.pagamento!.moeda='USD' as 'BRL';
+        http.expectOne('/api/loja/checkout/estado').flush(e);expect(await p).toBeNull();expect(dados.get(CHECKOUT_STORAGE_KEY)).toBe(original);
+    });
+    it('B6 sessao substituida nao permite observacao ou retomada',async()=>{
+        await preparar();const original=dados.get(CHECKOUT_STORAGE_KEY);const p=service.consultarAnterior();await sessao(201);expect(await p).toBeNull();
+        http.expectNone('/api/loja/checkout/estado');expect(dados.get(CHECKOUT_STORAGE_KEY)).toBe(original);
+    });
+    it('B6 pedido expirado nao permite retomada mesmo sem pagamento',async()=>{
+        await preparar();const p=service.consultarAnterior();await sessao();const e=continuidadeDto();e.pedido={...e.pedido,expiraEm:'2000-01-01T00:00:00.000Z'};
+        http.expectOne('/api/loja/checkout/estado').flush(e);const observado=await p;expect(service.restaurarAnterior(observado!)).toBeFalse();
+    });
+
+    for(const campo of ['quantidade','subtotal','total','duplicado','ordem'])it(`B6 rejeita contrato inconsistente ${campo}`,async()=>{
+        await preparar();const original=dados.get(CHECKOUT_STORAGE_KEY);const p=service.consultarAnterior();await sessao();const e=continuidadeDto();
+        const i=e.pedido.itens[0];
+        if(campo==='quantidade')e.pedido={...e.pedido,itens:[{...i,quantidade:2 as 1}]};
+        if(campo==='subtotal')e.pedido={...e.pedido,itens:[{...i,subtotalCentavos:1}]};
+        if(campo==='total')e.pedido={...e.pedido,totalCentavos:1};
+        if(campo==='duplicado')e.pedido={...e.pedido,itens:[i,i]};
+        if(campo==='ordem')e.ordemId='ORDER123';
+        http.expectOne('/api/loja/checkout/estado').flush(e);expect(await p).toBeNull();expect(dados.get(CHECKOUT_STORAGE_KEY)).toBe(original);
+    });
+
 });

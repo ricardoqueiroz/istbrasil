@@ -15,9 +15,18 @@ import { DireitoBiblioteca, EstadoDireito, LojaBibliotecaService, mensagemBiblio
             <p>Seus e-books nesta sessão de compra ou recuperação.</p></div>
             @if (recuperada()) { <p-button label="Encerrar sessão recuperada" severity="secondary" [disabled]="ocupado()" (onClick)="encerrar()" /> }
         </header>
-        <nav class="flex gap-4 mb-6" aria-label="Acesso à biblioteca"><a routerLink="/loja/biblioteca/recuperar">Recuperar por e-mail</a><a routerLink="/loja">Ir à Loja</a></nav>
+        <nav class="flex flex-wrap gap-4 mb-6" aria-label="Acesso à biblioteca">
+            <a pButton routerLink="/loja/biblioteca/recuperar">
+                <i pButtonIcon class="pi pi-envelope" aria-hidden="true"></i>
+                <span pButtonLabel>Recuperar por e-mail</span>
+            </a>
+            <a pButton routerLink="/loja" severity="secondary" [outlined]="true">
+                <i pButtonIcon class="pi pi-shopping-bag" aria-hidden="true"></i>
+                <span pButtonLabel>Ir à Loja</span>
+            </a>
+        </nav>
         @if (ocupado()) { <p role="status">Aguarde…</p> }
-        @if (erro()) { <p-message severity="warn" role="alert">{{ erro() }}</p-message> }
+        @if (erro()) { <p-message class="block my-3" severity="warn" role="alert">{{ erro() }}</p-message> }
         @if (aviso()) { <p role="status">{{ aviso() }}</p> }
         @if (!ocupado() && !erro() && direitos().length === 0) { <p role="status">Nenhum e-book disponível nesta sessão.</p> }
         <section aria-label="E-books"><ul class="list-none p-0">

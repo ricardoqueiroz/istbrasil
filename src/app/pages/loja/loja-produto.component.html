@@ -4,7 +4,7 @@
         @if (carregando()) {
             <h1 id="produto-titulo">Detalhes do produto</h1><p role="status">Carregando produto…</p><p-skeleton height="20rem" />
         } @else if (erro()) {
-            <h1 id="produto-titulo">Detalhes do produto</h1><p-message severity="error">{{ erro() }}</p-message>
+            <h1 id="produto-titulo">Detalhes do produto</h1><p-message class="block my-3" severity="error">{{ erro() }}</p-message>
             @if (podeTentar()) { <p-button label="Tentar novamente" (onClick)="recarregar()" /> }
         } @else if (produto(); as livro) {
             <article class="detalhe">
@@ -13,7 +13,7 @@
                     <dl><dt>SKU</dt><dd>{{ livro.sku }}</dd>@if (livro.idioma) { <dt>Idioma</dt><dd>{{ idioma(livro.idioma) }}</dd> }<dt>Tipo</dt><dd>{{ tipoProduto(livro.tipo) }}</dd>@if (livro.formatoEditorial) { <dt>Formato editorial</dt><dd>{{ livro.formatoEditorial }}</dd> }</dl>
                     <p class="preco">{{ preco(livro.precoCentavos) }}</p><p class="discreto">Quantidade máxima: 1.</p>
                     <p-button [label]="carrinho.contem(livro.id) ? 'Adicionado ao carrinho' : 'Adicionar ao carrinho'" [icon]="carrinho.contem(livro.id) ? 'pi pi-check' : 'pi pi-plus'" [disabled]="carrinho.contem(livro.id) || !livro.disponivel" (onClick)="adicionar()" data-testid="adicionar" />
-                    @if (aviso()) { <p-message severity="warn">{{ aviso() }}</p-message> }
+                    @if (aviso()) { <p-message class="block my-3" severity="warn">{{ aviso() }}</p-message> }
                 </div>
                 @if (descricaoPropriedades().length || descricao()) {
                     <section class="descricao"><h2>Sobre o produto</h2>

@@ -7,7 +7,7 @@ import { LojaService } from './loja.service';
 export interface DesafioRecuperacao { publicId: string; segredo: string; }
 export interface SessaoBiblioteca { sessao: { autenticada: boolean; expiraEm?: string }; csrfToken: string; }
 export type EstadoDireito = 'ATIVO' | 'AGUARDANDO_CONFIRMACAO' | 'SUSPENSO' | 'REVOGADO';
-export interface DireitoBiblioteca { publicId: string; titulo: string; estado: EstadoDireito; podeSolicitarArquivo: boolean; }
+export interface DireitoBiblioteca { pedidoPublicId?: string; produtoId?: number; itemPosicao?: number; publicId: string; titulo: string; estado: EstadoDireito; podeSolicitarArquivo: boolean; }
 export interface PaginaBiblioteca { direitos: DireitoBiblioteca[]; proximoCursor: string | null; }
 export const MENSAGEM_RECUPERACAO = 'Se houver direitos elegíveis, enviaremos as instruções de recuperação.';
 
@@ -35,9 +35,10 @@ export class LojaBibliotecaService {
     solicitar(email: string): Observable<void> { return this.post<unknown>('solicitar', { email }).pipe(map(() => undefined)); }
     confirmar(d: DesafioRecuperacao): Observable<unknown> { return this.post('validar', { publicId: d.publicId, segredo: d.segredo }); }
     revogar(): Observable<unknown> { return this.post('revogar', {}); }
-    listar(apos?: string): Observable<PaginaBiblioteca> {
+    listar(apos?: string, pedidoPublicId?: string): Observable<PaginaBiblioteca> {
         let params = new HttpParams().set('limite', 50);
         if (apos) params = params.set('apos', apos);
+        if (pedidoPublicId) params = params.set('pedidoPublicId', pedidoPublicId);
         return this.http.get<PaginaBiblioteca>(`${this.base}/direitos`, { ...this.opcoes, params });
     }
     reavaliar(id: string): Observable<{ publicId: string; estado: EstadoDireito }> {
