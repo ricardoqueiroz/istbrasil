@@ -1,3 +1,4 @@
+import {criarOperacoesOtp} from './lojaDownloadRecuperacaoOtp.js';
 import {randomBytes, randomUUID, createHash, createHmac, timingSafeEqual} from 'node:crypto';
 import {normalizarEmailComprador} from './lojaPedidoContratos.js';
 import {avaliarElegibilidadeFinanceiraNaConexao} from './lojaDownloadFinanceiroService.js';
@@ -26,10 +27,11 @@ const campos = `id,public_id,desafio_hash,email_chave,email_normalizado,tentativ
  * O chamador futuro deve enviar o segredo somente ao email armazenado na criacao.
  * Consultar sessao retorna escopo, NAO autoriza download nem substitui a D6.
  */
-export const criarLojaDownloadRecuperacaoService = ({db, chaveEmail, contextoEsperado, agora=()=>new Date()}={}) => {
+export const criarLojaDownloadRecuperacaoService = ({db, chaveEmail, contextoEsperado, agora=()=>new Date(), otp}={}) => {
     if(!db?.getConnection || !Buffer.isBuffer(chaveEmail) || chaveEmail.length!==32 || typeof agora!=='function'
        || contextoEsperado?.provedor!=='paypal' || !['sandbox','live'].includes(contextoEsperado.ambiente)
        || typeof contextoEsperado.contaRecebedora!=='string' || !/^[A-Za-z0-9-]{1,128}$/.test(contextoEsperado.contaRecebedora))falhar('CONFIGURACAO_INVALIDA');
+    if(otp&&[otp.chaveCodigo,otp.chaveLimites].some(k=>Buffer.isBuffer(k)&&k.equals(chaveEmail)))falhar('CONFIGURACAO_INVALIDA');
     const chave=Buffer.from(chaveEmail), financeiro=Object.freeze({provedor:'paypal',
         ambiente:contextoEsperado.ambiente,contaRecebedora:contextoEsperado.contaRecebedora});
     const tempo=()=>{
@@ -63,25 +65,25 @@ export const criarLojaDownloadRecuperacaoService = ({db, chaveEmail, contextoEsp
         return transacao(async c=>{
             const n=tempo();
             await escrever(c,`INSERT INTO ist_loja_download_recuperacoes
-                (public_id,desafio_hash,email_chave,email_normalizado,criado_em,desafio_expira_em)
-                VALUES(?,?,?,?,?,?)`,[publicId,hash('desafio',segredo),emailChave(email),email,utc(n),utc(n+CONTRATO_RECUPERACAO.desafioMs)]);
+                (public_id,desafio_hash,email_chave,email_normalizado,criado_em,desafio_expira_em,tipo)
+                VALUES(?,?,?,?,?,?,'LINK')`,[publicId,hash('desafio',segredo),emailChave(email),email,utc(n),utc(n+CONTRATO_RECUPERACAO.desafioMs)]);
             return {publicId,segredo,expiraEm:new Date(n+CONTRATO_RECUPERACAO.desafioMs).toISOString()};
         });
     };
-    const candidatos=async(c,email)=>{
+    const candidatos=async(c,email,pedidoId=null)=>{
         const [rows]=await c.query(`SELECT d.id,d.pedido_item_id,d.produto_id,d.arquivo_versao_id,p.id pedido_id,p.sessao_id
             FROM ist_loja_pedidos p JOIN ist_loja_pedido_itens i ON i.pedido_id=p.id
             JOIN ist_loja_download_direitos d ON d.pedido_item_id=i.id AND d.produto_id=i.produto_id
             WHERE p.comprador_email=? AND BINARY p.comprador_email=BINARY ? AND p.ambiente=?
-              AND d.estado IN ('ATIVO','AGUARDANDO_CONFIRMACAO') ORDER BY p.sessao_id,p.id,d.id LIMIT 51`,
-        [email,email,financeiro.ambiente]);
+              AND (? IS NULL OR p.id=?) AND d.estado IN ('ATIVO','AGUARDANDO_CONFIRMACAO') ORDER BY p.sessao_id,p.id,d.id LIMIT 51`,
+        [email,email,financeiro.ambiente,pedidoId,pedidoId]);
         if(rows.length>CONTRATO_RECUPERACAO.maxCandidatos)falhar('LIMITE_ESCOPO');
         return rows;
     };
-    const fixarEscopo=async(c,r)=>{
+    const fixarEscopo=async(c,r,persistir=true)=>{
         const email=normalizarEmailComprador(r.email_normalizado);
         if(email!==r.email_normalizado||!Buffer.isBuffer(r.email_chave)||!timingSafeEqual(r.email_chave,emailChave(email)))falhar('RECUPERACAO_INDISPONIVEL');
-        const descobertos=await candidatos(c,email),sessoes=[...new Set(descobertos.map(d=>d.sessao_id))].sort((a,b)=>a-b);
+        const descobertos=await candidatos(c,email,r.pedido_id??null),sessoes=[...new Set(descobertos.map(d=>d.sessao_id))].sort((a,b)=>a-b);
         // Recuperacao -> TODAS as sessoes em ordem -> pedidos em ordem ->
         // pagamentos -> operacoes -> eventos -> direitos. Sem inversao da D6.
         for(const id of sessoes){
@@ -118,31 +120,34 @@ export const criarLojaDownloadRecuperacaoService = ({db, chaveEmail, contextoEsp
             }
         }
         // Snapshot fechado nesta validacao; compras posteriores nao ampliam o escopo.
-        if(JSON.stringify(await candidatos(c,email))!==JSON.stringify(descobertos))falhar('RECUPERACAO_INDISPONIVEL');
+        if(JSON.stringify(await candidatos(c,email,r.pedido_id??null))!==JSON.stringify(descobertos))falhar('RECUPERACAO_INDISPONIVEL');
         if(!escopo.length)falhar('SEM_DIREITOS_ELEGIVEIS');
-        for(const d of escopo)await escrever(c,`INSERT INTO ist_loja_download_recuperacao_direitos
+        if(persistir)for(const d of escopo)await escrever(c,`INSERT INTO ist_loja_download_recuperacao_direitos
             (recuperacao_id,direito_id,arquivo_versao_id) VALUES(?,?,?)`,[r.id,d.direitoId,d.arquivoVersaoId]);
         return escopo;
+    };
+    const emitirSessao=async(c,r,n,expira)=>{
+        const direitos=await fixarEscopo(c,r),fim=tempo();
+        if(fim<n||fim>=expira)falhar('DESAFIO_INVALIDO');
+        const token=randomBytes(32).toString('base64url');
+        await escrever(c,`UPDATE ist_loja_download_recuperacoes SET consumido_em=?,email_normalizado=NULL,
+            sessao_hash=?,sessao_criada_em=?,sessao_expira_em=? WHERE id=? AND consumido_em IS NULL AND tentativas<5 AND invalidado_em IS NULL`,
+        [utc(fim),hash('sessao',token),utc(fim),utc(fim+CONTRATO_RECUPERACAO.sessaoMs),r.id]);
+        return {token,sessao:{publicId:r.public_id,criadaEm:new Date(fim).toISOString(),
+            expiraEm:new Date(fim+CONTRATO_RECUPERACAO.sessaoMs).toISOString(),direitos}};
     };
     const consumirDesafio=async(publicId,segredo)=>{
         if(!uuid(publicId))falhar('DESAFIO_INVALIDO');
         const resultado=await transacao(async c=>{
-            const [[r]]=await c.query(`SELECT ${campos} FROM ist_loja_download_recuperacoes WHERE public_id=? FOR UPDATE`,[publicId]);
+            const [[r]]=await c.query(`SELECT ${campos} FROM ist_loja_download_recuperacoes WHERE public_id=? AND BINARY tipo=BINARY 'LINK' FOR UPDATE`,[publicId]);
             if(!r)return null;
             const n=tempo(),criado=data(r.criado_em),expira=data(r.desafio_expira_em);
             if(r.consumido_em!==null||r.tentativas>=5||n<criado||n>=expira||expira-criado!==CONTRATO_RECUPERACAO.desafioMs)return null;
             if(!tokenValido(segredo)||!Buffer.isBuffer(r.desafio_hash)||!timingSafeEqual(r.desafio_hash,hash('desafio',segredo))){
-                await escrever(c,'UPDATE ist_loja_download_recuperacoes SET tentativas=tentativas+1 WHERE id=? AND tentativas<5 AND consumido_em IS NULL',[r.id]);
+                await escrever(c,"UPDATE ist_loja_download_recuperacoes SET tentativas=tentativas+1 WHERE id=? AND tipo='LINK' AND tentativas<5 AND consumido_em IS NULL",[r.id]);
                 return null; // Commit da tentativa ANTES do erro publico; nunca rollback do contador.
             }
-            const direitos=await fixarEscopo(c,r),fim=tempo();
-            if(fim<n||fim>=expira)falhar('DESAFIO_INVALIDO');
-            const token=randomBytes(32).toString('base64url');
-            await escrever(c,`UPDATE ist_loja_download_recuperacoes SET consumido_em=?,email_normalizado=NULL,
-                sessao_hash=?,sessao_criada_em=?,sessao_expira_em=? WHERE id=? AND consumido_em IS NULL AND tentativas<5`,
-            [utc(fim),hash('sessao',token),utc(fim),utc(fim+CONTRATO_RECUPERACAO.sessaoMs),r.id]);
-            return {token,sessao:{publicId:r.public_id,criadaEm:new Date(fim).toISOString(),
-                expiraEm:new Date(fim+CONTRATO_RECUPERACAO.sessaoMs).toISOString(),direitos}};
+            return emitirSessao(c,r,n,expira);
         });
         if(!resultado)falhar('DESAFIO_INVALIDO');return resultado;
     };
@@ -172,5 +177,6 @@ export const criarLojaDownloadRecuperacaoService = ({db, chaveEmail, contextoEsp
             return {revogada:true};
         });
     };
-    return Object.freeze({criarDesafio,consumirDesafio,obterSessao,revogarSessao});
+    return Object.freeze({criarDesafio,consumirDesafio,obterSessao,revogarSessao,
+        ...(otp?criarOperacoesOtp({config:otp,financeiro,transacao,escrever,fixarEscopo,emitirSessao,tempo,emailChave}):{})});
 };

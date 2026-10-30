@@ -29,7 +29,13 @@ test('D7.1-B2 HTTP, envio simulado e persistencia real descartavel',{
     skip:!process.env.IST_LOJA_PAGAMENTOS_MARIADB_BIN&&!process.env.IST_R2_10339_MANIFEST,timeout:240000
 },async t=>{
     const f=await criarFixtureDireitos(t),{a,pool}=f;
-    await a.query((await readFile(new URL('../migrations/ist_loja_download_recuperacao_fundacao.sql',import.meta.url),'utf8'))
+    const fundacao=await readFile(new URL('../migrations/ist_loja_download_recuperacao_fundacao.sql',import.meta.url),'utf8');
+    if(process.env.IST_LOJA_MARIADB_NATIVO_10339==='true'){
+        // Socket/datadir ja verificados pela fixture; guarda D7.1 original nao admite este bootstrap nativo.
+        for(const ddl of fundacao.match(/CREATE TABLE ist_loja_[\s\S]*?\) ENGINE=InnoDB[^;]*;/g))await a.query(ddl);
+    }else await a.query(fundacao.replace(/^DELIMITER[^\r\n]*$/gm,'').replace(/END\$\$\s*$/,'END'));
+    await a.query("SET @ist_b7c3_schema=DATABASE(),@ist_b7c3_autorizacao='FUNDACAO_OTP_B7_C3'");
+    await a.query((await readFile(new URL('../migrations/ist_loja_download_recuperacao_otp_fundacao.sql',import.meta.url),'utf8'))
         .replace(/^DELIMITER[^\r\n]*$/gm,'').replace(/END\$\$\s*$/,'END'));
     t.diagnostic(`D7_1_B2_HTTP: ${f.identidade.versao}; schema ${f.identidade.banco}; porta ${f.identidade.porta}; somente emails e dados sinteticos.`);
     const preparar=async(email,estadoDireito='ATIVO')=>{

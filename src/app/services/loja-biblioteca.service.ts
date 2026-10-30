@@ -11,6 +11,12 @@ export interface DireitoBiblioteca { pedidoPublicId?: string; produtoId?: number
 export interface PaginaBiblioteca { direitos: DireitoBiblioteca[]; proximoCursor: string | null; }
 export const MENSAGEM_RECUPERACAO = 'Se houver direitos elegíveis, enviaremos as instruções de recuperação.';
 
+export function mensagemCodigoBiblioteca(e: unknown): string {
+    if (e instanceof HttpErrorResponse && e.status === 400) return 'Código inválido, expirado ou já utilizado. Confira os dados ou solicite um novo código.';
+    if (e instanceof HttpErrorResponse && e.status === 401) return 'Sessão expirada ou inválida. Solicite um novo código de acesso.';
+    return mensagemBiblioteca(e);
+}
+
 export function mensagemBiblioteca(e: unknown): string {
     const status = e instanceof HttpErrorResponse ? e.status : 0;
     if (status === 401) return 'Sessão expirada ou inválida. Solicite um novo link de recuperação.';
@@ -33,6 +39,12 @@ export class LojaBibliotecaService {
             { ...this.opcoes, headers: { ...this.opcoes.headers, 'X-CSRF-Token': s.csrfToken } })));
     }
     solicitar(email: string): Observable<void> { return this.post<unknown>('solicitar', { email }).pipe(map(() => undefined)); }
+    solicitarCodigo(email: string, pedidoPublicId: string): Observable<void> {
+        return this.post<unknown>('solicitar-codigo', { email, pedidoPublicId }).pipe(map(() => undefined));
+    }
+    validarCodigo(pedidoPublicId: string, codigo: string): Observable<unknown> {
+        return this.post('validar-codigo', { pedidoPublicId, codigo });
+    }
     confirmar(d: DesafioRecuperacao): Observable<unknown> { return this.post('validar', { publicId: d.publicId, segredo: d.segredo }); }
     revogar(): Observable<unknown> { return this.post('revogar', {}); }
     listar(apos?: string, pedidoPublicId?: string): Observable<PaginaBiblioteca> {

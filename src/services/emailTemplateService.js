@@ -1,6 +1,5 @@
 import sanitizeHtml from 'sanitize-html';
-import { pool as db } from '../config/db.js';
-import { obterCatalogo } from '../config/emailPlaceholders.js';
+import { obterCatalogo, CHAVE_RECUPERACAO_BIBLIOTECA_CODIGO } from '../config/emailPlaceholders.js';
 import { sanitizeEmailHtml } from './emailHtmlSanitizer.js';
 
 const REGEX_PLACEHOLDER = /\{\{\s*([a-z][a-z0-9_]*)\s*\}\}/g;
@@ -9,6 +8,8 @@ const CHAVES_PROIBIDAS = new Set(['__proto__', 'constructor', 'prototype']);
 const LIMITE_URL = 2048;
 const LIMITE_VALOR = 5000;
 const SEPARADOR_ASSINATURA = '<div style="margin-top: 24px"></div>';
+// Composicao pura nao importa pool/configuracao; carregadores mantem o banco padrao.
+const obterBanco = async (banco) => banco ?? (await import('../config/db.js')).pool;
 
 export class EmailComposicaoError extends Error {
     constructor(codigo, message, detalhes = null) {
@@ -107,8 +108,11 @@ const substituirNoAssunto = (assunto, catalogo, variaveis) =>
     });
 
 // Converte HTML sanitizado em texto legível; sanitize-html faz a remoção estrutural das tags.
-const gerarTexto = (html) => {
-    const comQuebras = html
+const gerarTexto = (html, incluirLinks = false) => {
+    const conteudo = incluirLinks
+        ? html.replace(/<a\b[^>]*\bhref="([^"]*)"[^>]*>([\s\S]*?)<\/a>/gi, (_trecho, href, rotulo) => `${rotulo} (${href})`)
+        : html;
+    const comQuebras = conteudo
         .replace(/<br\s*\/?>/gi, '\n')
         .replace(/<\/(p|div|li|tr|h[1-6])>/gi, '\n')
         .replace(/<\/(table|ul|ol)>/gi, '\n');
@@ -123,6 +127,30 @@ const gerarTexto = (html) => {
         .replace(/ *\n */g, '\n')
         .replace(/\n{3,}/g, '\n\n')
         .trim();
+};
+
+const validarContratoRecuperacao = (modelo, html, assunto, catalogo) => {
+    if (modelo.chave !== CHAVE_RECUPERACAO_BIBLIOTECA_CODIGO) return;
+    const marcadores = /\{\{([\s\S]*?)\}\}/g;
+    for (const conteudo of [html, assunto]) {
+        if ([...conteudo.matchAll(marcadores)].some(([, nome]) => !Object.hasOwn(catalogo, nome.trim()))) {
+            throw new EmailComposicaoError('PLACEHOLDER_DESCONHECIDO', 'O modelo contém placeholders fora do catálogo permitido.');
+        }
+        if (/\{\{|\}\}/.test(conteudo.replace(marcadores, ''))) {
+            throw new EmailComposicaoError('MODELO_RECUPERACAO_INVALIDO', 'O modelo contém um marcador incompleto.');
+        }
+    }
+    if (typeof modelo.assunto !== 'string' || !assunto.trim() || /[\r\n\x00-\x1f\x7f]/.test(assunto)
+        || extrairPlaceholders(assunto).has('codigo')) {
+        throw new EmailComposicaoError('ASSUNTO_RECUPERACAO_INVALIDO', 'O assunto deve ser válido e não pode conter o código de acesso.');
+    }
+    const corpo = extrairPlaceholders(html);
+    const visiveis = extrairPlaceholders(sanitizeHtml(html, { allowedTags: [], allowedAttributes: {} }));
+    const ausentes = Object.keys(catalogo).filter(nome => !corpo.has(nome)
+        || (catalogo[nome].tipo === 'texto' && !visiveis.has(nome)));
+    if (ausentes.length) {
+        throw new EmailComposicaoError('PLACEHOLDER_OBRIGATORIO_NO_MODELO', 'O corpo do modelo não contém todos os placeholders obrigatórios.', { placeholders: ausentes });
+    }
 };
 
 const validarVariaveis = (variaveis) => {
@@ -168,6 +196,7 @@ export const comporEmail = ({ modelo, assinatura = null, variaveis = {}, permiti
     // Normaliza aspas e estrutura, garantindo que a detecção de href opere sobre HTML previsível.
     const htmlModelo = sanitizeEmailHtml(String(modelo.conteudoHtml || ''));
     const assuntoModelo = String(modelo.assunto || '');
+    validarContratoRecuperacao(modelo, htmlModelo, assuntoModelo, catalogo);
 
     const usados = new Set([...extrairPlaceholders(htmlModelo), ...extrairPlaceholders(assuntoModelo)]);
     const desconhecidos = [...usados].filter((nome) => !Object.prototype.hasOwnProperty.call(catalogo, nome));
@@ -198,12 +227,23 @@ export const comporEmail = ({ modelo, assinatura = null, variaveis = {}, permiti
         );
     }
 
+    const recuperacaoCodigo = modelo.chave === CHAVE_RECUPERACAO_BIBLIOTECA_CODIGO;
+    if (recuperacaoCodigo && Object.values(fornecidas).some(valor => !valor.trim())) {
+        throw new EmailComposicaoError('VARIAVEL_INVALIDA', 'Os placeholders obrigatórios precisam de valores não vazios.');
+    }
     const assunto = substituirNoAssunto(assuntoModelo, catalogo, fornecidas);
+    if (recuperacaoCodigo && assunto.includes(fornecidas.codigo)) {
+        throw new EmailComposicaoError('ASSUNTO_RECUPERACAO_INVALIDO', 'O assunto não pode conter o código de acesso.');
+    }
     let html = substituirNoConteudo(substituirNoHref(htmlModelo, catalogo, fornecidas), catalogo, fornecidas);
 
     if (assinatura) {
         if (assinatura.ativo) {
-            html += SEPARADOR_ASSINATURA + sanitizeEmailHtml(String(assinatura.conteudoHtml || ''));
+            const htmlAssinatura = sanitizeEmailHtml(String(assinatura.conteudoHtml || ''));
+            if (recuperacaoCodigo && /\{\{|\}\}/.test(htmlAssinatura)) {
+                throw new EmailComposicaoError('PLACEHOLDER_NA_ASSINATURA', 'Os placeholders devem estar no modelo, não na assinatura.');
+            }
+            html += SEPARADOR_ASSINATURA + htmlAssinatura;
         } else {
             avisos.push({ codigo: 'assinatura_inativa', mensagem: 'A assinatura associada está inativa e não foi incluída.' });
         }
@@ -214,7 +254,7 @@ export const comporEmail = ({ modelo, assinatura = null, variaveis = {}, permiti
         throw new EmailComposicaoError('CONTEUDO_FINAL_VAZIO', 'O conteúdo final ficou vazio após a sanitização.');
     }
 
-    return { assunto, html, text: gerarTexto(html), avisos };
+    return { assunto, html, text: gerarTexto(html, recuperacaoCodigo), avisos };
 };
 
 const mapearModelo = (linha) => ({
@@ -226,7 +266,7 @@ const mapearModelo = (linha) => ({
     ativo: Boolean(linha.ativo)
 });
 
-const carregarAssinatura = async (idAssinatura) => {
+const carregarAssinatura = async (idAssinatura, db) => {
     if (idAssinatura === null || idAssinatura === undefined) {
         return null;
     }
@@ -241,25 +281,30 @@ const carregarAssinatura = async (idAssinatura) => {
 const SELECT_MODELO = `SELECT id_modelo, chave, assunto, conteudo_html, id_assinatura, ativo
      FROM ist_email_modelos`;
 
-export const comporEmailPorChave = async (chave, variaveis = {}) => {
+// Snapshot administrativo por operacao; composicao posterior e pura, sem recarregar o modelo.
+export const prepararEmailPorChave = async (chave, { db: banco } = {}) => {
+    const db = await obterBanco(banco);
     const [rows] = await db.query(`${SELECT_MODELO} WHERE chave = ?`, [chave]);
     if (!rows.length) {
         throw new EmailComposicaoError('CHAVE_INEXISTENTE', 'Modelo não encontrado para a chave informada.');
     }
-
     const modelo = mapearModelo(rows[0]);
-    const assinatura = await carregarAssinatura(modelo.idAssinatura);
-    return comporEmail({ modelo, assinatura, variaveis, permitirInativo: false });
+    const assinatura = await carregarAssinatura(modelo.idAssinatura, db);
+    return variaveis => comporEmail({ modelo, assinatura, variaveis, permitirInativo: false });
 };
 
-export const comporEmailPorId = async (idModelo, variaveis = {}, { permitirInativo = false } = {}) => {
+export const comporEmailPorChave = async (chave, variaveis = {}, opcoes = {}) =>
+    (await prepararEmailPorChave(chave, opcoes))(variaveis);
+
+export const comporEmailPorId = async (idModelo, variaveis = {}, { permitirInativo = false, db: banco } = {}) => {
+    const db = await obterBanco(banco);
     const [rows] = await db.query(`${SELECT_MODELO} WHERE id_modelo = ?`, [idModelo]);
     if (!rows.length) {
         throw new EmailComposicaoError('MODELO_INEXISTENTE', 'Modelo não encontrado.');
     }
 
     const modelo = mapearModelo(rows[0]);
-    const assinatura = await carregarAssinatura(modelo.idAssinatura);
+    const assinatura = await carregarAssinatura(modelo.idAssinatura, db);
     const resultado = comporEmail({ modelo, assinatura, variaveis, permitirInativo });
 
     if (modelo.idAssinatura !== null && assinatura === null) {
@@ -272,7 +317,8 @@ export const comporEmailPorId = async (idModelo, variaveis = {}, { permitirInati
     return resultado;
 };
 
-export const obterPlaceholdersDoModelo = async (idModelo) => {
+export const obterPlaceholdersDoModelo = async (idModelo, { db: banco } = {}) => {
+    const db = await obterBanco(banco);
     const [rows] = await db.query(`${SELECT_MODELO} WHERE id_modelo = ?`, [idModelo]);
     if (!rows.length) {
         throw new EmailComposicaoError('MODELO_INEXISTENTE', 'Modelo não encontrado.');
@@ -283,6 +329,8 @@ export const obterPlaceholdersDoModelo = async (idModelo) => {
     if (!catalogo) {
         throw new EmailComposicaoError('SEM_CATALOGO', `Não há catálogo de placeholders para a chave "${modelo.chave}".`);
     }
+
+    validarContratoRecuperacao(modelo, sanitizeEmailHtml(String(modelo.conteudoHtml || '')), String(modelo.assunto || ''), catalogo);
 
     const usados = [
         ...new Set([

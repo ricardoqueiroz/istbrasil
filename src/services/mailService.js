@@ -1,19 +1,32 @@
 import nodemailer from 'nodemailer';
 import { normalizarEmailComprador } from './lojaPedidoContratos.js';
 
-// Permite usar um relay SMTP externo via variáveis de ambiente,
-// caindo de volta para o MTA local (localhost:587) usado em produção quando não configurado.
-export const mailTransporter = nodemailer.createTransport({
-    host: process.env.SMTP_HOST || 'localhost',
-    port: Number(process.env.SMTP_PORT) || 587,
-    secure: process.env.SMTP_SECURE === 'true',
-    auth: process.env.SMTP_USER
-        ? { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS }
-        : undefined,
-    // O Postfix local usa STARTTLS com certificado autoassinado; aceitar aqui é seguro
-    // pois a conexão fica restrita ao loopback do próprio servidor.
-    tls: { rejectUnauthorized: process.env.SMTP_REJECT_UNAUTHORIZED === 'true' }
-});
+// Opt-in independente de NODE_ENV. IP literal evita resolucao DNS e fallback externo.
+const opcoesCapturaLocal = env => {
+    const flag = env.IST_SMTP_CAPTURA_LOCAL;
+    if (flag === undefined || flag === 'false') return null;
+    if (flag !== 'true' || !['127.0.0.1', '::1'].includes(env.SMTP_HOST)
+        || typeof env.SMTP_PORT !== 'string' || !/^[1-9]\d{0,4}$/.test(env.SMTP_PORT)
+        || Number(env.SMTP_PORT) > 65535 || env.SMTP_SECURE !== 'false'
+        || env.SMTP_REJECT_UNAUTHORIZED !== 'true' || env.SMTP_USER || env.SMTP_PASS
+        || (env.IST_LOJA_RECUPERACAO_SMTP_AUTENTICACAO !== undefined
+            && env.IST_LOJA_RECUPERACAO_SMTP_AUTENTICACAO !== 'relay')) {
+        throw new Error('CONFIGURACAO_SMTP_CAPTURA_LOCAL_INVALIDA');
+    }
+    return { host: env.SMTP_HOST, port: Number(env.SMTP_PORT), secure: false,
+        requireTLS: false, ignoreTLS: true, tls: { rejectUnauthorized: true } };
+};
+
+export const obterOpcoesSmtpGeral = (env = process.env) => opcoesCapturaLocal(env) ?? {
+    // Preservar o transporte legado quando a captura nao estiver habilitada.
+    host: env.SMTP_HOST || 'localhost',
+    port: Number(env.SMTP_PORT) || 587,
+    secure: env.SMTP_SECURE === 'true',
+    auth: env.SMTP_USER ? { user: env.SMTP_USER, pass: env.SMTP_PASS } : undefined,
+    tls: { rejectUnauthorized: env.SMTP_REJECT_UNAUTHORIZED === 'true' }
+};
+
+export const mailTransporter = nodemailer.createTransport(obterOpcoesSmtpGeral());
 
 const senderBySubject = {
     'Dúvida': 'duvida@istbrasil.org.br',
@@ -54,11 +67,12 @@ export async function enviarEmail({ to, subject, html, text, fromName, fromAddre
 export function criarEnvioRecuperacaoSmtp({ env = process.env, criarTransporte = nodemailer.createTransport, classificarNaoAceito = false } = {}) {
     const falhar = () => { throw new Error('CONFIGURACAO_SMTP_RECUPERACAO_INVALIDA'); };
     const host = env.SMTP_HOST, porta = env.SMTP_PORT, nome = env.MAIL_FROM_NAME, remetente = env.MAIL_FROM_ADDRESS;
+    const captura = opcoesCapturaLocal(env);
     try { if (normalizarEmailComprador(remetente) !== remetente) falhar(); } catch { falhar(); }
-    if (typeof host !== 'string' || host.length > 253 || !/^(?=.{1,253}$)[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/i.test(host)
+    if ((!captura && (typeof host !== 'string' || host.length > 253 || !/^(?=.{1,253}$)[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/i.test(host)
         || !host.includes('.') || host.split('.').some(s => !s || s.length > 63 || s.startsWith('-') || s.endsWith('-'))
         || !['465', '587'].includes(porta) || env.SMTP_SECURE !== (porta === '465' ? 'true' : 'false')
-        || env.SMTP_REJECT_UNAUTHORIZED !== 'true' || typeof criarTransporte !== 'function'
+        || env.SMTP_REJECT_UNAUTHORIZED !== 'true')) || typeof criarTransporte !== 'function'
         || typeof remetente !== 'string' || remetente.length > 254
         || !/^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?\.[A-Za-z]{2,}$/.test(remetente)
         || typeof nome !== 'string' || !nome.trim() || nome.length > 100 || /[\x00-\x1f\x7f]/.test(nome)) falhar();
@@ -75,15 +89,15 @@ export function criarEnvioRecuperacaoSmtp({ env = process.env, criarTransporte =
     } else if (modo !== 'relay' || env.SMTP_USER || env.SMTP_PASS) falhar();
     let transporte;
     try {
-        transporte = criarTransporte({ host, port: Number(porta), secure: porta === '465', requireTLS: true,
-            ignoreTLS: false, tls: { rejectUnauthorized: true, minVersion: 'TLSv1.2', servername: host },
+        transporte = criarTransporte({ ...(captura ?? { host, port: Number(porta), secure: porta === '465', requireTLS: true,
+            ignoreTLS: false, tls: { rejectUnauthorized: true, minVersion: 'TLSv1.2', servername: host } }),
             ...(auth ? { auth } : {}), pool: false, logger: false, debug: false,
             connectionTimeout: 10000, greetingTimeout: 10000, socketTimeout: 15000,
             disableFileAccess: true, disableUrlAccess: true });
     } catch { throw new Error('SMTP_RECUPERACAO_INDISPONIVEL'); }
-    return async ({ to, subject, text }) => {
+    return async ({ to, subject, text, html }) => {
         try {
-            const r = await enviarEmail({ to, subject, text, fromName: nome, fromAddress: remetente }, transporte);
+            const r = await enviarEmail({ to, subject, text, ...(html===undefined?{}:{html}), fromName: nome, fromAddress: remetente }, transporte);
             if (!Array.isArray(r?.accepted) || !r.accepted.includes(to) || r.rejected?.length || r.pending?.length) throw Error();
             // Nao devolver envelope, resposta do relay, messageId ou link ao chamador.
         } catch(e) {

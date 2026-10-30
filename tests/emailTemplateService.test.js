@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { obterCatalogo } from '../src/config/emailPlaceholders.js';
-import { EmailComposicaoError, comporEmail } from '../src/services/emailTemplateService.js';
+import { obterCatalogo, CHAVE_RECUPERACAO_BIBLIOTECA_CODIGO, ASSUNTO_RECUPERACAO_BIBLIOTECA_CODIGO } from '../src/config/emailPlaceholders.js';
+import { EmailComposicaoError, comporEmail, comporEmailPorChave, comporEmailPorId, obterPlaceholdersDoModelo } from '../src/services/emailTemplateService.js';
 
 const modeloBase = (extra = {}) => ({
     idModelo: 1,
@@ -231,4 +231,110 @@ test('compoe confirmacao de inscricao com fallback da segunda musica e escape do
     assert.match(html, /Não informado/);
     assert.match(text, /Catraias/);
     assert.match(text, /Não informada/);
+});
+
+const modeloRecuperacao = (extra = {}) => ({
+    chave: CHAVE_RECUPERACAO_BIBLIOTECA_CODIGO, assunto: ASSUNTO_RECUPERACAO_BIBLIOTECA_CODIGO, ativo: true,
+    conteudoHtml: '<p>Pedido {{pedido_public_id}}</p><p>Código: <strong>{{codigo}}</strong></p><p>Válido por {{validade_minutos}} minutos.</p><p><a href="{{link_acesso}}">Entrar na biblioteca</a></p>',
+    idAssinatura: null, ...extra
+});
+const variaveisRecuperacao = {
+    pedido_public_id: '20202020-2020-4020-8020-202020202020', codigo: '000042', validade_minutos: '10',
+    link_acesso: 'https://loja.example.invalid/loja/biblioteca/entrar?pid=20202020-2020-4020-8020-202020202020&origem=teste'
+};
+const comporRecuperacao = (extra = {}) => comporEmail({modelo: modeloRecuperacao(), variaveis: variaveisRecuperacao, ...extra});
+test('C2 catalogo registra exatamente quatro placeholders obrigatorios', () => {
+    const catalogo=obterCatalogo(CHAVE_RECUPERACAO_BIBLIOTECA_CODIGO);
+    assert.deepEqual(Object.keys(catalogo),Object.keys(variaveisRecuperacao));
+    for(const [k,v] of Object.entries(catalogo)){assert.equal(v.obrigatorio,true);assert.equal(v.tipo,k==='link_acesso'?'url':'texto');}
+});
+test('C2 compoe HTML e texto com codigo sintetico, zeros e URL completa', () => {
+    const r=comporRecuperacao();assert.equal(r.assunto,ASSUNTO_RECUPERACAO_BIBLIOTECA_CODIGO);
+    assert(r.html.includes('<strong>000042</strong>'));assert(r.html.includes('&amp;origem=teste'));
+    assert(r.text.includes('000042'));assert(r.text.includes('10 minutos'));assert(r.text.includes(variaveisRecuperacao.pedido_public_id));
+    assert(r.text.includes(variaveisRecuperacao.link_acesso));assert(!r.text.includes('<p>'));assert(!r.assunto.includes('000042'));
+});
+for(const nome of Object.keys(variaveisRecuperacao))test('C2 placeholder obrigatorio no corpo: '+nome,()=>{
+    const modelo=modeloRecuperacao();modelo.conteudoHtml=modelo.conteudoHtml.replaceAll('{{'+nome+'}}','ausente');
+    assert.equal(capturarCodigo(()=>comporRecuperacao({modelo})),'PLACEHOLDER_OBRIGATORIO_NO_MODELO');
+});
+for(const nome of Object.keys(variaveisRecuperacao))test('C2 valor obrigatorio ausente: '+nome,()=>{
+    const variaveis={...variaveisRecuperacao};delete variaveis[nome];assert.equal(capturarCodigo(()=>comporRecuperacao({variaveis})),'PLACEHOLDER_AUSENTE');
+});
+test('C2 placeholders desconhecidos rejeitados sem valores no erro',()=>{
+    const modelo=modeloRecuperacao();modelo.conteudoHtml+='<p>{{desconhecido}}</p>';
+    assert.equal(capturarCodigo(()=>comporRecuperacao({modelo})),'PLACEHOLDER_DESCONHECIDO');
+});
+for(const [caso,assunto] of ['Código {{codigo}}','Código 000042','', 'Assunto\r\nBcc: teste@example.invalid'].entries())test('C2 assunto nao inclui codigo ou cabecalhos invalidos, caso '+caso,()=>{
+    assert.equal(capturarCodigo(()=>comporRecuperacao({modelo:modeloRecuperacao({assunto})})),'ASSUNTO_RECUPERACAO_INVALIDO');
+});
+test('C2 codigo oculto em atributo nao satisfaz contrato do corpo',()=>{
+    const modelo=modeloRecuperacao();modelo.conteudoHtml=modelo.conteudoHtml.replace('<strong>{{codigo}}</strong>','<span title="{{codigo}}">Sem código</span>');
+    assert.equal(capturarCodigo(()=>comporRecuperacao({modelo})),'PLACEHOLDER_OBRIGATORIO_NO_MODELO');
+});
+test('C2 modelo ausente, inativo ou sem corpo nao utiliza fallback',()=>{
+    assert.equal(capturarCodigo(()=>comporRecuperacao({modelo:null})),'MODELO_INEXISTENTE');
+    assert.equal(capturarCodigo(()=>comporRecuperacao({modelo:modeloRecuperacao({ativo:false})})),'MODELO_INATIVO');
+    assert.equal(capturarCodigo(()=>comporRecuperacao({modelo:modeloRecuperacao({conteudoHtml:'<script>removido</script>'})})),'PLACEHOLDER_OBRIGATORIO_NO_MODELO');
+    assert(comporRecuperacao({modelo:modeloRecuperacao({ativo:false}),permitirInativo:true}).avisos.some(a=>a.codigo==='modelo_inativo'));
+});
+test('C2 sanitiza modelo e assinatura administrativa',()=>{
+    const r=comporRecuperacao({modelo:modeloRecuperacao({conteudoHtml:modeloRecuperacao().conteudoHtml+'<script>alert(1)</script>'}),assinatura:{ativo:true,conteudoHtml:'<p onclick="alert(1)">Assinatura IST</p>'}});
+    assert(r.html.includes('Assinatura IST'));assert(r.text.includes('Assinatura IST'));assert(!/onclick|<script/i.test(r.html));
+    assert(!comporRecuperacao({assinatura:{ativo:false,conteudoHtml:'<p>Antiga</p>'}}).html.includes('Antiga'));
+});
+test('C2 assinatura nao pode introduzir placeholders pendentes',()=>{
+    assert.equal(capturarCodigo(()=>comporRecuperacao({assinatura:{ativo:true,conteudoHtml:'<p>{{desconhecido}}</p>'}})),'PLACEHOLDER_NA_ASSINATURA');
+});
+test('C2 texto inclui URL mesmo com rotulo formatado e entidades',()=>{
+    const modelo=modeloRecuperacao({conteudoHtml:modeloRecuperacao().conteudoHtml.replace('Entrar na biblioteca','<strong>Entrar</strong> &amp; consultar')});
+    assert(comporRecuperacao({modelo}).text.includes(variaveisRecuperacao.link_acesso));
+});
+test('C2 modelos antigos preservam subconjuntos e texto anterior',()=>{
+    assert.equal(comporEmail({modelo:modeloBase({conteudoHtml:'<p>{{nome}}</p>'}),variaveis:{nome:'Ana'}}).text,'Ana');
+    assert.equal(comporEmail({modelo:modeloBase(),variaveis:variaveisValidas}).text,'Ola Joao\nConfirmar');
+});
+const bancoSintetico=(modelo=modeloRecuperacao(),assinatura=null)=>{
+    const chamadas=[];
+    return {chamadas,async query(sql,params){chamadas.push({sql,params});
+        if(sql.includes('FROM ist_email_assinaturas'))return [assinatura?[{conteudo_html:assinatura.conteudoHtml,ativo:assinatura.ativo}]:[]];
+        assert(sql.includes('FROM ist_email_modelos'));
+        return [modelo?[{id_modelo:7,chave:modelo.chave,assunto:modelo.assunto,conteudo_html:modelo.conteudoHtml,id_assinatura:modelo.idAssinatura,ativo:modelo.ativo}]:[]];
+    }};
+};
+test('C2 carrega por chave e assinatura exclusivamente pelo banco injetado',async()=>{
+    const db=bancoSintetico(modeloRecuperacao({idAssinatura:9}),{ativo:true,conteudoHtml:'<p>Assinatura administrativa</p>'});
+    const r=await comporEmailPorChave(CHAVE_RECUPERACAO_BIBLIOTECA_CODIGO,variaveisRecuperacao,{db});
+    assert(r.html.includes('Assinatura administrativa'));assert.equal(db.chamadas.length,2);
+    assert.deepEqual(db.chamadas[0].params,[CHAVE_RECUPERACAO_BIBLIOTECA_CODIGO]);assert.deepEqual(db.chamadas[1].params,[9]);
+    assert(db.chamadas.every(c=>/^SELECT/.test(c.sql)));
+});
+test('C2 carregador rejeita chave ausente, modelo inativo e invalido',async()=>{
+    await assert.rejects(comporEmailPorChave(CHAVE_RECUPERACAO_BIBLIOTECA_CODIGO,variaveisRecuperacao,{db:bancoSintetico(null)}),{codigo:'CHAVE_INEXISTENTE'});
+    await assert.rejects(comporEmailPorChave(CHAVE_RECUPERACAO_BIBLIOTECA_CODIGO,variaveisRecuperacao,{db:bancoSintetico(modeloRecuperacao({ativo:false}))}),{codigo:'MODELO_INATIVO'});
+    await assert.rejects(comporEmailPorChave(CHAVE_RECUPERACAO_BIBLIOTECA_CODIGO,variaveisRecuperacao,{db:bancoSintetico(modeloRecuperacao({conteudoHtml:'<p>Incompleto</p>'}))}),{codigo:'PLACEHOLDER_OBRIGATORIO_NO_MODELO'});
+});
+test('C2 preview e metadados usam o contrato e dependencia injetada',async()=>{
+    const db=bancoSintetico(modeloRecuperacao({ativo:false}));
+    const r=await comporEmailPorId(7,variaveisRecuperacao,{permitirInativo:true,db});assert(r.avisos.some(a=>a.codigo==='modelo_inativo'));
+    const meta=await obterPlaceholdersDoModelo(7,{db});assert.deepEqual(meta.placeholders.map(p=>p.nome),Object.keys(variaveisRecuperacao));
+    await assert.rejects(obterPlaceholdersDoModelo(7,{db:bancoSintetico(modeloRecuperacao({conteudoHtml:'<p>Incompleto</p>'}))}),{codigo:'PLACEHOLDER_OBRIGATORIO_NO_MODELO'});
+});
+test('C2 nenhuma composicao ou rejeicao registra codigo em logs',async(t)=>{
+    const calls=[];for(const level of ['log','info','warn','error','debug','trace'])t.mock.method(console,level,(...args)=>calls.push(args));
+    comporRecuperacao();await comporEmailPorChave(CHAVE_RECUPERACAO_BIBLIOTECA_CODIGO,variaveisRecuperacao,{db:bancoSintetico()});
+    try{comporRecuperacao({modelo:modeloRecuperacao({assunto:'Código '+variaveisRecuperacao.codigo})});assert.fail('Era esperada rejeição');}
+    catch(e){assert(e instanceof EmailComposicaoError);assert(!JSON.stringify(e).includes(variaveisRecuperacao.codigo));}
+    assert.deepEqual(calls,[]);
+});
+for(const marcador of ['{{CODIGO}}','{{nao-permitido}}','{{constructor}}'])test('C2 rejeita marcador fora do contrato: '+marcador,()=>{
+    const modelo=modeloRecuperacao({conteudoHtml:modeloRecuperacao().conteudoHtml+'<p>'+marcador+'</p>'});
+    assert.equal(capturarCodigo(()=>comporRecuperacao({modelo})),'PLACEHOLDER_DESCONHECIDO');
+});
+for(const marcador of ['{{incompleto','incompleto}}'])test('C2 rejeita marcador incompleto: '+marcador,()=>{
+    const modelo=modeloRecuperacao({conteudoHtml:modeloRecuperacao().conteudoHtml+'<p>'+marcador+'</p>'});
+    assert.equal(capturarCodigo(()=>comporRecuperacao({modelo})),'MODELO_RECUPERACAO_INVALIDO');
+});
+for(const nome of Object.keys(variaveisRecuperacao))test('C2 rejeita valor obrigatorio vazio: '+nome,()=>{
+    assert.equal(capturarCodigo(()=>comporRecuperacao({variaveis:{...variaveisRecuperacao,[nome]:' '}})),'VARIAVEL_INVALIDA');
 });

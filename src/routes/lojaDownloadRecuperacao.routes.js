@@ -49,7 +49,7 @@ export const criarLojaDownloadRecuperacaoRouter=({db,env=process.env,
     obterConfiguracao=()=>carregarConfiguracaoLojaSessao(env),service,adaptadorEmail,
     chaveEmail,contextoEsperado,agora=()=>new Date()}={})=>{
     const router=express.Router(),limites=new Map(),tarefas=new Set(),sal=randomBytes(32);
-    let servico;
+    let servico,servicoOtp;
     const config=()=>cookiesRecuperacao(obterConfiguracao());
     const contexto=()=>contextoEsperado??{provedor:'paypal',ambiente:env.IST_LOJA_PAYPAL_ENV,contaRecebedora:env.IST_LOJA_PAYPAL_CONTA_RECEBEDORA};
     const obterService=()=>{
@@ -58,6 +58,15 @@ export const criarLojaDownloadRecuperacaoRouter=({db,env=process.env,
         const texto=env.IST_LOJA_DOWNLOAD_RECUPERACAO_CHAVE_EMAIL;
         const chave=chaveEmail??(typeof texto==='string'&&tokenSessaoValido(texto)?Buffer.from(texto,'base64url'):null);
         return servico=criarLojaDownloadRecuperacaoService({db,chaveEmail:chave,contextoEsperado:contexto(),agora});
+    };
+    const obterServiceOtp=()=>{
+        if(service)return service;
+        if(servicoOtp)return servicoOtp;
+        const lerChave=nome=>tokenSessaoValido(env[nome])?Buffer.from(env[nome],'base64url'):null;
+        return servicoOtp=criarLojaDownloadRecuperacaoService({db,chaveEmail:chaveEmail??lerChave('IST_LOJA_DOWNLOAD_RECUPERACAO_CHAVE_EMAIL'),
+            contextoEsperado:contexto(),agora,otp:{
+                chaveCodigo:lerChave('IST_LOJA_DOWNLOAD_RECUPERACAO_CHAVE_OTP'),
+                chaveLimites:lerChave('IST_LOJA_DOWNLOAD_RECUPERACAO_CHAVE_LIMITES')}});
     };
     const consumirLimite=(chave,max,ms)=>{
         const n=agora().getTime();
@@ -122,14 +131,43 @@ export const criarLojaDownloadRecuperacaoRouter=({db,env=process.env,
         }
         responder(res,202,uniforme);
     });
-    router.post('/validar',async(req,res)=>{
-        if(!corpo(req,['publicId','segredo'])||typeof req.body.publicId!=='string'||typeof req.body.segredo!=='string')throw erro('SOLICITACAO_INVALIDA');
-        if(!consumirLimite('validar:'+req.ip,10,900000))throw erro('LIMITE_REQUISICOES');
-        const r=await obterService().consumirDesafio(req.body.publicId,req.body.segredo),c=res.locals.configRecuperacao;
-        const expira=new Date(r.sessao.expiraEm),n=agora().getTime();
+    router.post('/solicitar-codigo',(req,res)=>{
+        if(!corpo(req,['email','pedidoPublicId'])||typeof req.body.pedidoPublicId!=='string'
+            ||req.body.pedidoPublicId.length>36)throw erro('SOLICITACAO_INVALIDA');
+        let email;try{email=normalizarEmailComprador(req.body.email);}catch{throw erro('SOLICITACAO_INVALIDA');}
+        const emailKey=createHmac('sha256',sal).update(email).digest('hex');
+        const liberado=consumirLimite('solicitar:'+req.ip,5,900000)&&consumirLimite('email:'+emailKey,3,3600000);
+        if(liberado&&tarefas.size<4&&adaptadorEmail?.prepararCodigo){
+            const pedidoPublicId=req.body.pedidoPublicId,ip=req.ip;
+            const tarefa=new Promise(resolve=>setImmediate(resolve)).then(async()=>{
+                const preparado=await adaptadorEmail.prepararCodigo();
+                let mensagem;
+                const r=await obterServiceOtp().solicitarCodigo({email,pedidoPublicId,ip},
+                    {prepararEntrega:entrega=>{mensagem=preparado.compor(entrega);}});
+                if(r.entrega)await preparado.enviar(mensagem);
+            }).catch(()=>{});
+            tarefas.add(tarefa);void tarefa.finally(()=>tarefas.delete(tarefa));
+        }
+        responder(res,202,uniforme);
+    });
+    const emitirCookie=(res,r)=>{
+        const c=res.locals.configRecuperacao,expira=new Date(r.sessao.expiraEm),n=agora().getTime();
         if(!tokenSessaoValido(r.token)||!Number.isFinite(expira.getTime())||expira.getTime()<=n||expira.getTime()>n+86400000)throw erro('RECUPERACAO_INDISPONIVEL');
         res.cookie(c.cookieRecuperacao,r.token,{...c.cookie,nome:undefined,expires:expira});
         responder(res,200,{sessao:{autenticada:true,expiraEm:expira.toISOString()}});
+    };
+    router.post('/validar-codigo',async(req,res)=>{
+        if(!corpo(req,['pedidoPublicId','codigo'])||typeof req.body.pedidoPublicId!=='string'
+            ||req.body.pedidoPublicId.length>36||typeof req.body.codigo!=='string'||req.body.codigo.length>6)throw erro('SOLICITACAO_INVALIDA');
+        if(!consumirLimite('validar:'+req.ip,10,900000))throw erro('LIMITE_REQUISICOES');
+        const r=await obterServiceOtp().validarCodigoDoPedido({...req.body,ip:req.ip});
+        emitirCookie(res,r);
+    });
+    router.post('/validar',async(req,res)=>{
+        if(!corpo(req,['publicId','segredo'])||typeof req.body.publicId!=='string'||typeof req.body.segredo!=='string')throw erro('SOLICITACAO_INVALIDA');
+        if(!consumirLimite('validar:'+req.ip,10,900000))throw erro('LIMITE_REQUISICOES');
+        const r=await obterService().consumirDesafio(req.body.publicId,req.body.segredo);
+        emitirCookie(res,r);
     });
     router.post('/revogar',async(req,res)=>{
         if(!corpo(req,[]))throw erro('SOLICITACAO_INVALIDA');

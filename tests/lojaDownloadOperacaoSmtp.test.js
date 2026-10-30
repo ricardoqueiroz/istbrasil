@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomBytes,randomUUID} from 'node:crypto';
 import {readFile} from 'node:fs/promises';
-import {criarEnvioRecuperacaoSmtp,enviarEmail} from '../src/services/mailService.js';
+import {criarEnvioRecuperacaoSmtp,enviarEmail,obterOpcoesSmtpGeral} from '../src/services/mailService.js';
 import {comporEmailRecuperacao} from '../src/services/lojaDownloadRecuperacaoSmtp.js';
 import {criarLimpezaRecuperacao} from '../src/services/lojaDownloadRecuperacaoLimpeza.js';
 
@@ -87,4 +87,45 @@ test('limpeza exige autorizacao, schema e lote limitado antes de obter conexao',
     assert.throws(()=>criarLimpezaRecuperacao({db}));const limpar=criarLimpezaRecuperacao({db,bancoEsperado:'sintetico'}).limpar;
     for(const op of [{},{confirmarRetencao:true,limite:101},{confirmarRetencao:true,limite:0}])await assert.rejects(limpar(op),{codigo:'LIMPEZA_NAO_AUTORIZADA'});
     assert.equal(acessos,0);
+});
+
+const capturaEnv=()=>({...envSmtp(),NODE_ENV:'production',IST_SMTP_CAPTURA_LOCAL:'true',SMTP_HOST:'127.0.0.1',SMTP_PORT:'1025',SMTP_SECURE:'false'});
+for(const host of ['127.0.0.1','::1'])test('B7-B6 captura explicita '+host+' reutiliza transporte e contratos',async()=>{
+    const env={...capturaEnv(),SMTP_HOST:host};let opcoes,criados=0,envios=0;
+    const enviar=criarEnvioRecuperacaoSmtp({env,criarTransporte:o=>{opcoes=o;criados++;return {sendMail:async m=>{envios++;assert.equal(m.to,'teste@example.invalid');assert.equal(m.text,'sintetico');return {accepted:[m.to]};}};}});
+    assert.equal(criados,1);assert.equal(envios,0);
+    assert.equal(opcoes.host,host);assert.equal(opcoes.port,1025);assert.equal(opcoes.secure,false);assert.equal(opcoes.requireTLS,false);assert.equal(opcoes.ignoreTLS,true);
+    assert.deepEqual(opcoes.tls,{rejectUnauthorized:true});assert.equal(opcoes.auth,undefined);assert.equal(opcoes.pool,false);
+    const geral=obterOpcoesSmtpGeral(env);for(const k of Object.keys(geral))assert.deepEqual(opcoes[k],geral[k]);
+    assert.equal(await enviar({to:'teste@example.invalid',subject:'Teste',text:'sintetico'}),undefined);assert.equal(envios,1);
+});
+for(const extra of [
+    {SMTP_HOST:'smtp.example.invalid'},{SMTP_HOST:'localhost'},{SMTP_HOST:'127.0.0.1.example.invalid'},{SMTP_HOST:'0.0.0.0'},
+    {SMTP_HOST:'192.168.1.1'},{SMTP_HOST:'::ffff:127.0.0.1'},{SMTP_HOST:undefined},
+    {SMTP_PORT:undefined},{SMTP_PORT:''},{SMTP_PORT:'0'},{SMTP_PORT:'65536'},{SMTP_PORT:'01025'},{SMTP_PORT:'1025 '},
+    {SMTP_SECURE:undefined},{SMTP_SECURE:'true'},{SMTP_REJECT_UNAUTHORIZED:'false'},
+    {SMTP_USER:'sintetico'},{SMTP_PASS:'sintetico'},{IST_LOJA_RECUPERACAO_SMTP_AUTENTICACAO:'login'},
+    {IST_SMTP_CAPTURA_LOCAL:'TRUE'},{IST_SMTP_CAPTURA_LOCAL:'1'}
+])test('B7-B6 captura invalida bloqueia transporte geral e estrito: '+JSON.stringify(extra),()=>{
+    const env={...capturaEnv(),...extra};let criados=0;
+    assert.throws(()=>obterOpcoesSmtpGeral(env),/CONFIGURACAO_SMTP/);
+    assert.throws(()=>criarEnvioRecuperacaoSmtp({env,criarTransporte:()=>{criados++;return {};}}),/CONFIGURACAO_SMTP/);assert.equal(criados,0);
+});
+test('B7-B6 sem opt-in nao libera SMTP local no adaptador estrito',()=>{
+    for(const flag of [undefined,'false'])assert.throws(()=>criarEnvioRecuperacaoSmtp({env:{...capturaEnv(),IST_SMTP_CAPTURA_LOCAL:flag}}),/CONFIGURACAO_SMTP/);
+});
+test('B7-B6 desligado preserva exatamente opcoes anteriores do transporte geral',()=>{
+    const env=envSmtp();const antigo={host:env.SMTP_HOST,port:587,secure:false,auth:undefined,tls:{rejectUnauthorized:true}};
+    assert.deepEqual(obterOpcoesSmtpGeral(env),antigo);assert.deepEqual(obterOpcoesSmtpGeral({...env,IST_SMTP_CAPTURA_LOCAL:'false'}),antigo);
+    assert.deepEqual(obterOpcoesSmtpGeral({}),{host:'localhost',port:587,secure:false,auth:undefined,tls:{rejectUnauthorized:false}});
+});
+test('B7-B6 excecao local nao relaxa TLS externo',()=>{
+    for(const extra of [{SMTP_PORT:'1025'},{SMTP_REJECT_UNAUTHORIZED:'false'},{SMTP_PORT:'465',SMTP_SECURE:'false'}]){
+        let criados=0;assert.throws(()=>criarEnvioRecuperacaoSmtp({env:{...envSmtp(),...extra},criarTransporte:()=>{criados++;}}),/CONFIGURACAO_SMTP/);assert.equal(criados,0);
+    }
+});
+test('B7-B6 composicao de recuperacao local nao conecta nem cria sessao, worker ou agendador',()=>{
+    let criados=0,envios=0;const resultado=comporEmailRecuperacao({env:capturaEnv(),obterConfiguracao,
+        criarEnvio:({env})=>criarEnvioRecuperacaoSmtp({env,criarTransporte:()=>{criados++;return{sendMail:()=>{envios++;assert.fail('ENVIO_NAO_AUTORIZADO');}};}})});
+    assert.equal(typeof resultado.enviar,'function');assert.equal(criados,1);assert.equal(envios,0);
 });

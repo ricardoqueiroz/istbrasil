@@ -63,5 +63,26 @@ describe('Biblioteca HTTP D6/D7', () => {
         http.expectNone(`${base}/recuperacao/sessao`);
     });
 
+    it('solicita OTP com email e pedido via CSRF, sem usar resposta para enumeracao', () => {
+        let recebido = false; api.solicitarCodigo('a@example.invalid', 'pedido').subscribe(() => recebido = true); sessao(false);
+        const r = http.expectOne(`${base}/recuperacao/solicitar-codigo`);
+        expect(r.request.body).toEqual({ email: 'a@example.invalid', pedidoPublicId: 'pedido' });
+        expect(r.request.headers.get('X-CSRF-Token')).toBe('csrf-recuperacao'); expect(r.request.withCredentials).toBeTrue();
+        r.flush({ mensagem: 'resposta generica' }, { status: 202, statusText: 'Accepted' }); expect(recebido).toBeTrue();
+    });
+    it('valida OTP string no POST, sem email, query ou armazenamento', () => {
+        const storage = spyOn(Storage.prototype, 'setItem');
+        api.validarCodigo('pedido', '012345').subscribe(); sessao();
+        const r = http.expectOne(`${base}/recuperacao/validar-codigo`);
+        expect(r.request.body).toEqual({ pedidoPublicId: 'pedido', codigo: '012345' });
+        expect(r.request.urlWithParams).not.toContain('012345'); expect(r.request.withCredentials).toBeTrue();
+        expect(r.request.headers.get('X-CSRF-Token')).toBe('csrf-recuperacao'); r.flush({ sessao: { autenticada: true } });
+        expect(storage).not.toHaveBeenCalled();
+    });
+    it('falha de bootstrap OTP nao envia codigo nem repete consulta', () => {
+        let falhou = false; api.validarCodigo('pedido', '012345').subscribe({ error: () => falhou = true });
+        http.expectOne(`${base}/recuperacao/sessao`).flush({}, { status: 403, statusText: 'Forbidden' });
+        http.expectNone(`${base}/recuperacao/validar-codigo`); expect(falhou).toBeTrue();
+    });
 
 });
