@@ -71,6 +71,44 @@ const bloquearDireitosNaConexao = async(c,pedidoId)=>{
     return direitos;
 };
 
+// Chamador financeiro ja bloqueou sessao -> pedido -> pagamentos -> operacoes.
+// Sem HTTP, PayPal, nova conexao ou COMMIT. Falhas digitais reversiveis nao
+// desfazem a quitacao; deadlock/perda da transacao seguem a recuperacao financeira.
+export const confirmarDireitosFinanceirosNaConexao = async(c,pedidoId,esperado,instante)=>{
+    const [[tx]]=await c.query('SELECT @@in_transaction transacao');
+    if(Number(tx?.transacao)!==1||!id(pedidoId))falhar('TRANSACAO_INVALIDA');
+    await c.query('SAVEPOINT ist_loja_ativacao_digital');
+    try{
+        const [eventos]=await c.query(`SELECT e.id FROM ist_loja_pagamento_eventos e JOIN ist_loja_pagamentos p ON p.id=e.pagamento_id
+            WHERE p.pedido_id=? ORDER BY e.id`,[pedidoId]);
+        for(const e of eventos)await c.query('SELECT id FROM ist_loja_pagamento_eventos WHERE id=? FOR UPDATE',[e.id]);
+        const direitos=await bloquearDireitosNaConexao(c,pedidoId);
+        let falhaLeitura;
+        const avaliacao=await avaliarElegibilidadeFinanceiraNaConexao({query:async(...args)=>{
+            try{return await c.query(...args);}catch(e){falhaLeitura=e;throw e;}
+        }},pedidoId,esperado);
+        if(falhaLeitura)throw falhaLeitura;
+        if(!avaliacao.referencias||avaliacao.referencias.pedidoId!==pedidoId
+            ||avaliacao.referencias.direitos.length!==direitos.length)falhar('AVALIACAO_INDISPONIVEL');
+        let transicoes=[];
+        // Ativacao automatica nunca substitui o fluxo de suspensao financeira.
+        if(avaliacao.classificacao==='ELEGIVEL'&&avaliacao.elegivel===true){
+            const data=utc(instante);
+            if(direitos.some(d=>data+'000'<d.atualizado_em))falhar('RELOGIO_REGRESSIVO');
+            transicoes=await aplicarTransicoesNaConexao(c,avaliacao,{direitos,instante:data});
+        }
+        await c.query('RELEASE SAVEPOINT ist_loja_ativacao_digital');
+        return {avaliacao,transicoes,pendente:false};
+    }catch(e){
+        // InnoDB pode ter revertido TODA a transacao em deadlock. Nunca engolir
+        // esse erro, nem falha no rollback/release; o chamador trata incerteza.
+        if(transitorio(e))throw e;
+        await c.query('ROLLBACK TO SAVEPOINT ist_loja_ativacao_digital');
+        await c.query('RELEASE SAVEPOINT ist_loja_ativacao_digital');
+        return {transicoes:[],pendente:true};
+    }
+};
+
 // Interface interna D8: conexao transacional obrigatoria. Nao aceita uma decisao
 // financeira pronta; reavalia a persistencia real na mesma conexao. Nunca ativa.
 export const suspenderDireitosFinanceirosNaConexao = async(c,pedidoId,esperado,instante)=>{

@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
+import { confirmarDireitosFinanceirosNaConexao, criarLojaDownloadDireitosService } from '../src/services/lojaDownloadDireitosService.js';
 import { criarLojaPagamentoService } from '../src/services/lojaPagamentoService.js';
 import { criarFalhaPagamento, normalizarResultadoPagamento, normalizarReconciliacaoPagamento, hashPagamento } from '../src/services/lojaPagamentoContratos.js';
 import { criarPagamentoSimulado } from './fixtures/lojaPagamentoSimulado.js';
@@ -23,6 +25,7 @@ const comReconciliacaoTeste = adaptador => ({ ...adaptador,
 // Double em memoria da conexao mysql2. Nao interpreta SQL em um servidor,
 // nao simula locks InnoDB e nao comprova concorrencia real/compatibilidade SQL.
 const montarSemBanco = (opcoes = {}) => {
+    const contextoLocal = opcoes.direitos ? { ...contexto, provedor: 'paypal' } : contexto;
     let instante = Date.parse('2026-10-18T12:00:00.000Z');
     const inicio = '2026-10-18T11:59:00.000Z', fim = '2026-10-18T12:20:00.000Z';
     const pgPublicId = randomUUID(), pedidoPublicId = randomUUID();
@@ -36,10 +39,10 @@ const montarSemBanco = (opcoes = {}) => {
         ist_loja_pedidos: [{ id: 1, public_id: pedidoPublicId, sessao_id: 1, estado: 'AGUARDANDO_PAGAMENTO',
             comprador_email:'comprador.real@example.invalid',
             ambiente: 'sandbox', moeda: 'BRL', total_centavos: '19000', versao: 1,
-            criado_em: inicio, atualizado_em: inicio, expira_em: fim, pagamento_confirmado_em: null }],
-        ist_loja_pagamentos: [{ id: 1, public_id: pgPublicId, pedido_id: 1, ...contexto,
-            conta_recebedora: contexto.contaRecebedora, estado: 'PENDENTE', reserva_ativa: 1,
-            valor_centavos: '19000', capturado_centavos: '0', moeda: 'BRL', versao: 1,
+            criado_em: inicio, atualizado_em: inicio, expira_em: fim, pagamento_confirmado_em: null, motivo_revisao:null }],
+        ist_loja_pagamentos: [{ id: 1, public_id: pgPublicId, pedido_id: 1, ...contextoLocal,
+            conta_recebedora: contextoLocal.contaRecebedora, estado: 'PENDENTE', reserva_ativa: 1,
+            reembolsado_centavos:'0',motivo_revisao:null,valor_centavos: '19000', capturado_centavos: '0', moeda: 'BRL', versao: 1,
             ordem_externa_id: 'ORDEMTESTE', captura_externa_id: null, capturado_em: null,
             criado_em: inicio, atualizado_em: inicio, expira_em: fim, encerrado_em: null }],
         ist_loja_pagamento_operacoes: [{ id: 1, pagamento_id: 1, pedido_id: 1, acao: 'CAPTURAR',
@@ -48,10 +51,24 @@ const montarSemBanco = (opcoes = {}) => {
             criado_em: inicio, atualizado_em: inicio, envio_iniciado_em: inicio, concluido_em: inicio }],
         ist_loja_pagamento_eventos: [],ist_loja_notificacoes:[]
     };
+    if(opcoes.direitos){
+        estado.ist_loja_pedido_itens=[1,2].map(id=>({id,pedido_id:1,produto_id:id,posicao:id,tipo_snapshot:'DIGITAL',
+            quantidade:1,preco_unitario_centavos:'9500',subtotal_centavos:'9500'}));
+        estado.ist_loja_download_direitos=[1,2].map(id=>({id,pedido_item_id:id,produto_id:id,arquivo_versao_id:id,
+            estado:'AGUARDANDO_CONFIRMACAO',versao:1,motivo_codigo:null,ativado_em:null,suspenso_em:null,revogado_em:null,
+            criado_em:'2026-10-18 11:59:00.000000',atualizado_em:'2026-10-18 11:59:00.000000',
+            versao_id:id,versao_produto_id:id,versao_estado:'PUBLICADA',versao_publicada_em:inicio}));
+        estado.ist_loja_download_direito_eventos=[1,2].map(id=>({direito_id:id,direito_versao:1,
+            estado_anterior:null,estado_novo:'AGUARDANDO_CONFIRMACAO',origem:'PEDIDO',motivo_codigo:'DIREITO_CRIADO'}));
+    }
+    // Projecao DATE_FORMAT do avaliador; o double continua sem interpretar SQL/InnoDB.
+    const projetar=rows=>rows.map(row=>Object.fromEntries(Object.entries(clonar(row)).map(([k,v])=>
+        [k,k.endsWith('_em')&&typeof v==='string'&&/\.\d{3}Z$/.test(v)?v.replace(/Z$/,'000Z'):v])));
+    let falhasDigitais=0;
     let abertas = 0, conexoes = 0, descartadas = 0, falhou = false;
     const consultas = [];
     const db = { async getConnection() {
-        conexoes++; let copia = null;
+        conexoes++; let copia = null, savepoint = null;
         const encerrar = () => { if (copia) { copia = null; abertas--; } };
         return {
             async beginTransaction() { assert.equal(copia, null); copia = clonar(estado); abertas++; },
@@ -72,8 +89,52 @@ const montarSemBanco = (opcoes = {}) => {
                     &&p.ambiente===params[1]&&p.conta_recebedora===params[2]
                     &&(p.ordem_externa_id===params[3]||p.captura_externa_id===params[5]))
                     .map(p=>({pagamentoId:p.id,pedidoId:p.pedido_id,sessaoId:1,ordem_externa_id:p.ordem_externa_id,captura_externa_id:p.captura_externa_id}))];
+                if(sql==='SELECT @@in_transaction transacao,@@autocommit autocommit')return [[{transacao:copia?1:0,autocommit:1}]];
                 assert.ok(copia);
                 if(sql==='SELECT @@in_transaction AS em_transacao')return [[{em_transacao:1}]];
+                if(sql==='SELECT @@in_transaction transacao')return [[{transacao:1}]];
+                if(sql.startsWith('SAVEPOINT ')){assert.equal(abertas,1,'sem transacao/conexao aninhada');savepoint=clonar(copia);return [[]];}
+                if(sql.startsWith('ROLLBACK TO SAVEPOINT ')){
+                    if(opcoes.falhaRollbackDigital)throw Error('rollback digital perdido');
+                    assert.ok(savepoint);copia=clonar(savepoint);return [[]];
+                }
+                if(sql.startsWith('RELEASE SAVEPOINT ')){assert.ok(savepoint);savepoint=null;return [[]];}
+                if(opcoes.direitos){
+                    if(sql.startsWith('SELECT sessao_id FROM ist_loja_pedidos'))return [[{sessao_id:1}]];
+                    if(sql.startsWith('SELECT id,sessao_id,ambiente FROM ist_loja_pedidos'))return [clonar(copia.ist_loja_pedidos)];
+                    if(sql.startsWith('SELECT e.id FROM ist_loja_pagamento_eventos'))return [copia.ist_loja_pagamento_eventos.map(e=>({id:e.id}))];
+                    if(sql.startsWith('SELECT id FROM ist_loja_pagamento_eventos'))return [copia.ist_loja_pagamento_eventos.filter(e=>e.id===params[0])];
+                    if(sql.startsWith('SELECT e.id,e.pagamento_id'))return [clonar(copia.ist_loja_pagamento_eventos)];
+                    if(sql.includes('FROM ist_loja_pedido_itens'))return [clonar(copia.ist_loja_pedido_itens)];
+                    if(sql.includes('FROM ist_loja_download_direito_eventos'))return [clonar(copia.ist_loja_download_direito_eventos.filter(e=>e.direito_id===params[0]))];
+                    if(sql.includes('FROM ist_loja_download_direitos')){
+                        if(sql.startsWith('SELECT d.id FROM'))return [copia.ist_loja_download_direitos.map(d=>({id:d.id}))];
+                        return [sql.includes('FOR UPDATE')?clonar(copia.ist_loja_download_direitos.filter(d=>d.id===params[0])):projetar(copia.ist_loja_download_direitos)];
+                    }
+                    if(sql.includes('FROM ist_loja_pedidos WHERE id=?')&&!sql.includes('FOR UPDATE'))return [projetar(copia.ist_loja_pedidos)];
+                    if(sql.includes('FROM ist_loja_pagamentos WHERE')&&!sql.includes('FOR UPDATE'))return [projetar(copia.ist_loja_pagamentos)];
+                    if(sql.includes('FROM ist_loja_pagamento_operacoes WHERE')&&!sql.includes('FOR UPDATE'))return [projetar(copia.ist_loja_pagamento_operacoes)];
+                    const update=sql.startsWith('UPDATE ist_loja_download_direitos');
+                    const insert=sql.startsWith('INSERT INTO ist_loja_download_direito_eventos');
+                    if((update||insert)&&params[update?5:0]===(opcoes.falhaNoDireito??2)){
+                        if(opcoes.deadlockDigital&&(opcoes.deadlockDigital==='permanente'||falhasDigitais===0)){
+                            falhasDigitais++;encerrar();throw Object.assign(Error('deadlock sintetico'),{errno:1213,code:'ER_LOCK_DEADLOCK'});
+                        }
+                        if(opcoes.falhaDigital===(update?'UPDATE':'INSERT'))throw Error('falha digital sintetica');
+                    }
+                    if(update){
+                        const d=copia.ist_loja_download_direitos.find(d=>d.id===params[5]&&d.versao===params[6]&&d.estado===params[7]&&d.arquivo_versao_id===params[8]);
+                        if(!d)return [{affectedRows:0}];
+                        Object.assign(d,{estado:params[0],versao:d.versao+1,atualizado_em:params[1]+'000',ativado_em:params[2]===null?null:params[2]+'000',suspenso_em:params[3],motivo_codigo:params[4]});
+                        return [{affectedRows:1,warningStatus:0}];
+                    }
+                    if(insert){
+                        assert(!copia.ist_loja_download_direito_eventos.some(e=>e.direito_id===params[0]&&e.direito_versao===params[1]));
+                        copia.ist_loja_download_direito_eventos.push({direito_id:params[0],direito_versao:params[1],estado_anterior:params[2],estado_novo:params[3],origem:'FINANCEIRO',motivo_codigo:params[4],ocorrido_em:params[5]});
+                        return [{affectedRows:1,warningStatus:0}];
+                    }
+                }
+
                 if(sql.includes('FROM ist_loja_pagamento_eventos'))return [clonar(copia.ist_loja_pagamento_eventos.filter(e=>
                     e.provedor===params[0]&&e.ambiente===params[1]&&e.conta_recebedora===params[2]&&e.origem==='WEBHOOK'&&e.evento_id===params[3]))];
                 if (sql.startsWith('SELECT pedido_id')) return [copia.ist_loja_pagamentos.filter(p => p.public_id === params[0]).map(p => ({ pedido_id: p.pedido_id }))];
@@ -116,7 +177,7 @@ const montarSemBanco = (opcoes = {}) => {
     } };
     const resultado = (extras = {}) => ({ estado: 'CAPTURADO', referencia: pgPublicId, ambiente: 'sandbox',
         ordemId: 'ORDEMTESTE', capturaId: 'CAPTURATESTE', valorCentavos: '19000', moeda: 'BRL',
-        contaRecebedora: contexto.contaRecebedora, capturadoEm: '2026-10-18T12:00:00.000Z', ...extras });
+        contaRecebedora: contextoLocal.contaRecebedora, capturadoEm: '2026-10-18T12:00:00.000Z', ...extras });
     const chamadas = { reconciliar: [], consultar: 0, capturar: 0, criar: 0 };
     const adaptador = {
         async criar() { chamadas.criar++; assert.fail('criacao externa proibida'); },
@@ -128,8 +189,8 @@ const montarSemBanco = (opcoes = {}) => {
         }
     };
     if (opcoes.semCapacidade) delete adaptador.reconciliar;
-    const service = criarLojaPagamentoService({ db, adaptador, contexto, agora: () => new Date(instante), timeoutMs: 30, execucaoMs: 1000 });
-    return { service, resultado, chamadas, consultas, adaptador, db, pgPublicId, pedidoPublicId,
+    const service = criarLojaPagamentoService({ db, adaptador, contexto:contextoLocal, agora: () => new Date(instante), timeoutMs: 30, execucaoMs: 1000 });
+    return { service, resultado, chamadas, consultas, adaptador, db, contexto:contextoLocal, opcoes, pgPublicId, pedidoPublicId,
         reconciliar: (sessao = { id: 1 }, entrada = { pagamentoPublicId: pgPublicId }) => service.reconciliar(sessao, entrada),
         get estado() { return estado; }, get abertas() { return abertas; }, get conexoes() { return conexoes; }, get descartadas() { return descartadas; },
         avancar(ms) { instante += ms; },
@@ -365,8 +426,184 @@ test('68.1 outbox em integracao simulada do nucleo financeiro, sem banco ou SMTP
     });
 });
 
+test('Fase A ativacao na conclusao financeira sem banco, rede ou SMTP',async t=>{
+    const direitos=m=>m.estado.ist_loja_download_direitos;
+    const eventos=m=>m.estado.ist_loja_download_direito_eventos;
+    const entrada=m=>({pagamentoPublicId:m.pgPublicId});
+    const iniciarCaptura=m=>{
+        m.pg().estado='AGUARDANDO_APROVACAO';m.op().acao='CRIAR';m.op().envio_iniciado_em=null;
+        const chave=randomUUID();
+        return {chave,capturar:()=>m.service.capturar({id:1},entrada(m),chave)};
+    };
+    const ativo=m=>{
+        assert.deepEqual(direitos(m).map(d=>[d.estado,d.versao]),[['ATIVO',2],['ATIVO',2]]);
+        assert.equal(eventos(m).length,4);
+        for(const e of eventos(m).filter(e=>e.direito_versao===2)){
+            assert.equal(e.estado_anterior,'AGUARDANDO_CONFIRMACAO');assert.equal(e.estado_novo,'ATIVO');
+            assert.equal(e.origem,'FINANCEIRO');assert.equal(e.motivo_codigo,'CAPTURA_CONFIRMADA');
+        }
+        assert.equal(m.pedido().estado,'PAGO');assert.equal(m.pg().estado,'CAPTURADO');assert.equal(m.abertas,0);
+    };
+    const pendente=m=>{
+        assert.deepEqual(direitos(m).map(d=>[d.estado,d.versao]),[['AGUARDANDO_CONFIRMACAO',1],['AGUARDANDO_CONFIRMACAO',1]]);
+        assert.equal(eventos(m).length,2);assert.equal(m.abertas,0);
+    };
+    const webhook=(id='WH-FASE-A')=>({eventoId:id,tipo:'PAYMENT.CAPTURE.COMPLETED',
+        ordemId:'ORDEMTESTE',capturaId:'CAPTURATESTE',hash:Buffer.alloc(32,6)});
+    await t.test('funcao interna recusa ausencia de transacao sem gravar',async()=>{
+        const consultas=[];
+        await assert.rejects(confirmarDireitosFinanceirosNaConexao({query:async sql=>{
+            consultas.push(sql);return [[{transacao:0}]];
+        }},1,{provedor:'paypal',ambiente:'sandbox',contaRecebedora:'recebedor-fixture'},new Date()),{codigo:'TRANSACAO_INVALIDA'});
+        assert.deepEqual(consultas,['SELECT @@in_transaction transacao']);
+    });
+    await t.test('captura sincrona ativa e replay da mesma chave nao recaptura',async()=>{
+        const m=montarSemBanco({direitos:true}),c=iniciarCaptura(m);
+        const r=await c.capturar();assert.equal(r.estado,'CAPTURADO');ativo(m);
+        const antes=JSON.stringify(m.estado);await c.capturar();await m.reconciliar();
+        assert.equal(JSON.stringify(m.estado),antes);assert.equal(m.chamadas.capturar,1);assert.equal(m.chamadas.reconciliar.length,0);
+        await assert.rejects(m.service.capturar({id:1},entrada(m),randomUUID()),codigo('CONFLITO_IDEMPOTENCIA'));
+        assert.equal(m.chamadas.capturar,1);
+    });
+    await t.test('reconciliacao ativa e replay nao altera direito, evento ou notificacao',async()=>{
+        const m=montarSemBanco({direitos:true});await m.reconciliar();ativo(m);
+        const antes=JSON.stringify(m.estado);await m.reconciliar();assert.equal(JSON.stringify(m.estado),antes);
+        assert.equal(m.chamadas.reconciliar.length,1);assert.equal(m.chamadas.capturar,0);
+        const r=await criarLojaDownloadDireitosService({db:m.db,agora:()=>new Date('2026-10-18T12:00:00.000Z')})
+            .reavaliarDireitosDoPedido(1,m.contexto);
+        assert.deepEqual(r.transicoes,[]);assert.equal(JSON.stringify(m.estado),antes);
+    });
+    await t.test('webhook ativa somente apos PROCESSADO; reentregas nao duplicam',async()=>{
+        const m=montarSemBanco({direitos:true}),w=webhook();await m.service.reconciliarWebhook(w);ativo(m);
+        assert.equal(m.estado.ist_loja_pagamento_eventos.find(e=>e.evento_id===w.eventoId).estado,'PROCESSADO');
+        const antes=JSON.stringify(m.estado);await m.service.reconciliarWebhook(w);assert.equal(JSON.stringify(m.estado),antes);
+        await m.service.reconciliarWebhook(webhook('WH-FASE-A-OUTRO'));ativo(m);
+        assert.equal(m.chamadas.reconciliar.length,1);assert.equal(m.chamadas.capturar,0);
+        const fimOperacao=m.consultas.findIndex(q=>q.startsWith('UPDATE ist_loja_pagamento_operacoes')&&q.includes('resultado_json'));
+        const fimWebhook=m.consultas.findIndex(q=>q.startsWith('UPDATE ist_loja_pagamento_eventos')&&q.includes('processado_em'));
+        const inicioDigital=m.consultas.findIndex(q=>q.startsWith('SAVEPOINT '));
+        assert(fimOperacao>=0&&fimOperacao<inicioDigital);assert(fimWebhook>=0&&fimWebhook<inicioDigital);
+    });
+    for(const falhaDigital of ['UPDATE','INSERT'])await t.test(`falha no segundo direito em ${falhaDigital} reverte somente direitos e permite recuperacao local`,async()=>{
+        const m=montarSemBanco({direitos:true,falhaDigital}),c=iniciarCaptura(m);
+        await c.capturar();pendente(m);
+        assert.equal(m.pedido().estado,'PAGO');assert.equal(m.pg().estado,'CAPTURADO');
+        assert.equal(m.estado.ist_loja_pagamento_operacoes.find(o=>o.acao==='CAPTURAR').estado,'SUCESSO');
+        assert.equal(m.pg().capturado_centavos,'19000');assert.equal(m.pg().captura_externa_id,'CAPTURATESTE');
+        assert.equal(m.estado.ist_loja_notificacoes.length,1);assert.equal(m.chamadas.capturar,1);
+        const financeiro=JSON.stringify([m.pedido(),m.pg(),m.estado.ist_loja_pagamento_operacoes,m.estado.ist_loja_notificacoes]);
+        delete m.opcoes.falhaDigital;
+        if(falhaDigital==='UPDATE')await c.capturar();else await m.reconciliar();
+        ativo(m);
+        assert.equal(JSON.stringify([m.pedido(),m.pg(),m.estado.ist_loja_pagamento_operacoes,m.estado.ist_loja_notificacoes]),financeiro);
+        assert.equal(m.chamadas.capturar,1);assert.equal(m.chamadas.reconciliar.length,0);
+        await c.capturar();ativo(m);assert.equal(m.chamadas.capturar,1);
+    });
+    await t.test('fachada existente recupera falha digital sem alterar financeiro nem chamar PayPal',async()=>{
+        const m=montarSemBanco({direitos:true,falhaDigital:'INSERT'}),c=iniciarCaptura(m);
+        await c.capturar();pendente(m);delete m.opcoes.falhaDigital;
+        const financeiro=JSON.stringify([m.pedido(),m.pg(),m.estado.ist_loja_pagamento_operacoes,m.estado.ist_loja_notificacoes]);
+        const r=await criarLojaDownloadDireitosService({db:m.db,agora:()=>new Date('2026-10-18T12:00:00.000Z')})
+            .reavaliarDireitosDoPedido(1,m.contexto);
+        assert.equal(r.avaliacao.classificacao,'ELEGIVEL');assert.equal(r.transicoes.length,2);ativo(m);
+        assert.equal(JSON.stringify([m.pedido(),m.pg(),m.estado.ist_loja_pagamento_operacoes,m.estado.ist_loja_notificacoes]),financeiro);
+        assert.equal(m.chamadas.capturar,1);assert.equal(m.chamadas.reconciliar.length,0);
+    });
+    await t.test('captura externa concluida e falha na persistencia financeira exigem reconciliacao',async()=>{
+        const m=montarSemBanco({direitos:true,falhaPago:true}),c=iniciarCaptura(m);
+        await assert.rejects(c.capturar(),codigo('RESULTADO_DESCONHECIDO'));pendente(m);
+        assert.equal(m.chamadas.capturar,1);assert.equal(m.pg().estado,'DESCONHECIDO');
+        assert.equal(m.pg().capturado_centavos,'0');assert.equal(m.pedido().estado,'AGUARDANDO_PAGAMENTO');
+        await assert.rejects(m.service.capturar({id:1},entrada(m),randomUUID()),codigo('CONFLITO_IDEMPOTENCIA'));
+        await m.reconciliar();ativo(m);await c.capturar();assert.equal(m.chamadas.capturar,1);
+    });
+    for(const repetido of [false,true])await t.test(`webhook ja capturado recupera direito sem PayPal, evento previamente processado=${repetido}`,async()=>{
+        const m=montarSemBanco({direitos:true,falhaDigital:'INSERT'}),w=webhook();
+        await m.service.reconciliarWebhook(w);pendente(m);delete m.opcoes.falhaDigital;
+        await m.service.reconciliarWebhook(repetido?w:webhook('WH-RECUPERACAO'));ativo(m);
+        assert.equal(m.chamadas.reconciliar.length,1);assert.equal(m.chamadas.capturar,0);
+    });
+    for(const persistiu of [true,false])await t.test(`commit compartilhado incerto, persistiu=${persistiu}, recuperacao sem recaptura`,async()=>{
+        const m=montarSemBanco({direitos:true,commitIncerto:persistiu}),c=iniciarCaptura(m);
+        if(persistiu){await c.capturar();ativo(m);}else{
+            await assert.rejects(c.capturar(),codigo('RESULTADO_DESCONHECIDO'));pendente(m);
+            assert.equal(m.pedido().estado,'AGUARDANDO_PAGAMENTO');assert.equal(m.pg().estado,'DESCONHECIDO');
+            assert.equal(m.estado.ist_loja_pagamento_operacoes.find(o=>o.acao==='CAPTURAR').estado,'DESCONHECIDA');
+        }
+        await m.reconciliar();ativo(m);await c.capturar();ativo(m);assert.equal(m.chamadas.capturar,1);
+    });
+    for(const deadlockDigital of ['uma','permanente'])await t.test(`deadlock ${deadlockDigital} nao e engolido pelo savepoint nem repete captura`,async()=>{
+        const m=montarSemBanco({direitos:true,deadlockDigital}),c=iniciarCaptura(m);
+        if(deadlockDigital==='uma'){await c.capturar();ativo(m);}else{
+            await assert.rejects(c.capturar(),codigo('RESULTADO_DESCONHECIDO'));pendente(m);
+            assert.equal(m.pg().estado,'DESCONHECIDO');delete m.opcoes.deadlockDigital;
+            await m.reconciliar();ativo(m);
+        }
+        assert.equal(m.chamadas.capturar,1);
+    });
+    await t.test('rollback do savepoint indisponivel nao confirma transacao perdida',async()=>{
+        const m=montarSemBanco({direitos:true,falhaDigital:'INSERT',falhaRollbackDigital:true}),c=iniciarCaptura(m);
+        await assert.rejects(c.capturar(),codigo('RESULTADO_DESCONHECIDO'));pendente(m);
+        assert.equal(m.pedido().estado,'AGUARDANDO_PAGAMENTO');assert.equal(m.pg().estado,'DESCONHECIDO');
+        delete m.opcoes.falhaDigital;delete m.opcoes.falhaRollbackDigital;
+        await m.reconciliar();ativo(m);assert.equal(m.chamadas.capturar,1);
+    });
+    for(const etapa of ['consultar','capturar'])await t.test(`falha externa em ${etapa} conserva incerteza e direitos bloqueados`,async()=>{
+        const m=montarSemBanco({direitos:true}),c=iniciarCaptura(m);
+        m.adaptador[etapa]=async()=>{m.chamadas[etapa]++;throw criarFalhaPagamento({categoria:'INFRAESTRUTURA',envio:'INDETERMINADO'});};
+        await assert.rejects(c.capturar(),codigo('RESULTADO_DESCONHECIDO'));pendente(m);
+        assert.equal(m.pedido().estado,'AGUARDANDO_PAGAMENTO');assert.equal(m.pg().estado,'DESCONHECIDO');
+        assert.equal(m.chamadas.capturar,etapa==='capturar'?1:0);
+        if(etapa==='capturar'){
+            // Simula captura externa concluida com resposta perdida: recupera por consulta.
+            await m.reconciliar();ativo(m);assert.equal(m.chamadas.capturar,1);
+        }
+    });
+    for(const estado of ['SUSPENSO','REVOGADO'])await t.test(`pedido PAGO nao reativa direito ${estado}`,async()=>{
+        const m=montarSemBanco({direitos:true});
+        for(const d of direitos(m)){
+            d.estado=estado;d.versao=2;
+            eventos(m).push({direito_id:d.id,direito_versao:2,estado_anterior:'AGUARDANDO_CONFIRMACAO',
+                estado_novo:estado,origem:'FINANCEIRO',motivo_codigo:'EVIDENCIA_ADVERSA'});
+        }
+        await m.reconciliar();assert.equal(m.pedido().estado,'PAGO');
+        assert(direitos(m).every(d=>d.estado===estado&&d.versao===2));assert.equal(eventos(m).length,4);
+    });
+    await t.test('pedido PAGO com arquivo inelegivel permanece pendente',async()=>{
+        const m=montarSemBanco({direitos:true});direitos(m)[1].versao_publicada_em='2026-10-18T12:00:00.000Z';
+        await m.reconciliar();assert.equal(m.pedido().estado,'PAGO');pendente(m);
+    });
+    await t.test('webhook ainda recebido impede ativacao mesmo com pedido PAGO',async()=>{
+        const m=montarSemBanco({direitos:true});
+        m.estado.ist_loja_pagamento_eventos.push({id:1,pagamento_id:1,provedor:'paypal',ambiente:'sandbox',
+            conta_recebedora:m.contexto.contaRecebedora,origem:'WEBHOOK',evento_id:'WH-PENDENTE',estado:'RECEBIDO'});
+        await m.reconciliar();assert.equal(m.pedido().estado,'PAGO');pendente(m);
+    });
+    await t.test('locks ordenados e ausencia de transacao aninhada',async()=>{
+        const m=montarSemBanco({direitos:true});await m.reconciliar();ativo(m);
+        const inicio=m.consultas.findIndex(q=>q.startsWith('SAVEPOINT '));
+        const inicioTransacao=m.consultas.slice(0,inicio).findLastIndex(q=>q.startsWith('SET TRANSACTION'));
+        const trecho=m.consultas.slice(inicioTransacao),pos=nome=>trecho.findIndex(q=>q.includes(`FROM ${nome}`)&&q.includes('FOR UPDATE'));
+        assert(pos('ist_loja_sessoes')>=0);
+        assert(pos('ist_loja_sessoes')<pos('ist_loja_pedidos'));
+        assert(pos('ist_loja_pedidos')<pos('ist_loja_pagamentos'));
+        assert(pos('ist_loja_pagamentos')<pos('ist_loja_pagamento_operacoes'));
+        assert(pos('ist_loja_pagamento_operacoes')<pos('ist_loja_pagamento_eventos'));
+        assert(pos('ist_loja_pagamento_eventos')<pos('ist_loja_download_direitos'));
+        assert(pos('ist_loja_download_direitos')<pos('ist_loja_download_direito_eventos'));
+        assert.equal(m.chamadas.reconciliar.length,1);assert.equal(m.abertas,0);
+    });
+    await t.test('concorrencia simulada mantem uma execucao externa e uma ativacao',async()=>{
+        const entrou=adiar(),liberar=adiar();
+        const m=montarSemBanco({direitos:true,responder:async(_a,r)=>{entrou.resolver();await liberar.promessa;return envelopeTeste(r());}});
+        const a=m.reconciliar();await entrou.promessa;
+        try{await assert.rejects(m.reconciliar(),codigo('OPERACAO_EM_ANDAMENTO'));}finally{liberar.resolver();}
+        await a;await m.reconciliar();ativo(m);assert.equal(m.chamadas.reconciliar.length,1);
+    });
+});
+
 test('nucleo transacional em MariaDB descartavel e adaptador exclusivo de testes', {
-    skip: !process.env.IST_LOJA_PAGAMENTOS_MARIADB_BIN, timeout: 180000
+    skip: !process.env.IST_LOJA_PAGAMENTOS_MARIADB_BIN&&process.env.IST_LOJA_MARIADB_NATIVO_10339!=='true', timeout: 180000
 }, async t => {
     const anterior = process.env.NODE_ENV; process.env.NODE_ENV = 'test';
     t.after(() => { if (anterior === undefined) delete process.env.NODE_ENV; else process.env.NODE_ENV = anterior; });
@@ -1211,5 +1448,191 @@ test('nucleo transacional em MariaDB descartavel e adaptador exclusivo de testes
         try { assert.throws(() => criarServico({ db: pool, contexto, adaptador: sim.adaptador }), codigo('CONFIGURACAO_INVALIDA')); }
         finally { process.env.NODE_ENV = 'test'; }
         assert.throws(() => criarServico({ db: pool, contexto: { ...contexto, ambiente: 'live' }, adaptador: sim.adaptador }), codigo('CONFIGURACAO_INVALIDA'));
+    });
+});
+
+
+test('Fase A MariaDB 10.3.39: transacao financeira compartilhada e direitos',{
+    skip:process.env.IST_LOJA_MARIADB_NATIVO_10339!=='true',timeout:120000
+},async t=>{
+    const f=await criarBancoPagamentoIsolado(t),{admin:a,pool,novaCompra}=f;
+    assert.match(f.versao,/^10\.3\.39-MariaDB/);
+    const ctx={provedor:'paypal',ambiente:'sandbox',contaRecebedora:'RECEBEDOR-SINTETICO'};
+    await a.query('ALTER TABLE ist_loja_pedido_itens ADD UNIQUE KEY uq_lpi_id_produto_download(id,produto_id)');
+    const fonte=await readFile(new URL('../migrations/ist_loja_downloads_fundacao.sql',import.meta.url),'utf8');
+    for(const ddl of fonte.match(/CREATE TABLE ist_loja_(?:arquivo_versoes|download_direitos|download_direito_eventos) \([\s\S]*?\) ENGINE=InnoDB[^;]*;/g))await a.query(ddl);
+    await a.query("INSERT INTO ist_loja_categorias(id,nome,slug) VALUES(1,'Sintetico','sintetico')");
+    await a.query('INSERT INTO ist_livros(id) VALUES(1),(2)');
+    await a.query("INSERT INTO ist_loja_produtos(id,categoria_id,livro_id,sku) VALUES(1,1,1,'SINT-1'),(2,1,2,'SINT-2')");
+    for(const id of [1,2])await a.execute(`INSERT INTO ist_loja_arquivo_versoes
+        (id,public_id,produto_id,arquivo_logico_id,numero_versao,caminho_relativo,tamanho_bytes,sha256,mime,estado,publicacao_atual,criado_em,publicado_em)
+        VALUES(?,?,?,?,1,?,32,?,'application/pdf','PUBLICADA',1,'2026-01-01','2026-01-01')`,
+        [id,randomUUID(),id,randomUUID(),`sintetico-${id}.pdf`,Buffer.alloc(32,id)]);
+    const [engines]=await a.query('SELECT table_name,engine FROM information_schema.tables WHERE table_schema=DATABASE()');
+    assert(engines.length>0&&engines.every(x=>x.engine==='InnoDB'));
+    t.diagnostic('TABELAS_INNODB '+JSON.stringify(engines));
+    const envolver=(hook,commit)=>({async getConnection(){const c=await pool.getConnection();return {
+        query:async(sql,p=[])=>{const r=await hook?.(sql,p,c);return r??c.query(sql,p);},
+        beginTransaction:()=>c.beginTransaction(),commit:()=>commit?commit(c):c.commit(),
+        rollback:()=>c.rollback(),release:()=>c.release(),destroy:()=>c.destroy()
+    };}});
+    const compra=async(db=pool)=>{
+        const x=await novaCompra();x.direitos=[];
+        for(const id of [1,2]){
+            const [i]=await a.execute(`INSERT INTO ist_loja_pedido_itens(pedido_id,produto_id,posicao,sku_snapshot,titulo_snapshot,tipo_snapshot,
+                quantidade,preco_unitario_centavos,subtotal_centavos) VALUES(?,?,?,?,'Sintetico','DIGITAL',1,9500,9500)`,[x.pedidoId,id,id,`SINT-${id}`]);
+            const [d]=await a.execute('INSERT INTO ist_loja_download_direitos(public_id,pedido_item_id,produto_id,arquivo_versao_id,criado_em,atualizado_em) VALUES(?,?,?,?,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))',
+                [randomUUID(),i.insertId,id,id]);x.direitos.push(d.insertId);
+            await a.execute(`INSERT INTO ist_loja_download_direito_eventos(direito_id,direito_versao,estado_anterior,estado_novo,origem,motivo_codigo,ocorrido_em)
+                VALUES(?,1,NULL,'AGUARDANDO_CONFIRMACAO','PEDIDO','DIREITO_CRIADO',UTC_TIMESTAMP(3))`,[d.insertId]);
+        }
+        x.sim=criarPagamentoSimulado();x.service=criarLojaPagamentoService({db,contexto:ctx,adaptador:comReconciliacaoTeste(x.sim.adaptador)});
+        x.pg=await x.service.criarTentativa(x.sessao,{pedidoPublicId:x.pedidoPublicId},randomUUID());
+        x.sim.aprovado(x.pg.publicId);x.chave=randomUUID();
+        x.capturar=()=>x.service.capturar(x.sessao,{pagamentoPublicId:x.pg.publicId},x.chave);
+        x.reconciliar=()=>x.service.reconciliar(x.sessao,{pagamentoPublicId:x.pg.publicId});
+        return x;
+    };
+    const dados=async x=>{
+        const [ds]=await a.query(`SELECT d.* FROM ist_loja_download_direitos d JOIN ist_loja_pedido_itens i ON i.id=d.pedido_item_id WHERE i.pedido_id=? ORDER BY d.id`,[x.pedidoId]);
+        const [ev]=await a.query(`SELECT e.* FROM ist_loja_download_direito_eventos e JOIN ist_loja_download_direitos d ON d.id=e.direito_id
+            JOIN ist_loja_pedido_itens i ON i.id=d.pedido_item_id WHERE i.pedido_id=? ORDER BY e.id`,[x.pedidoId]);
+        const [[pedido]]=await a.query('SELECT * FROM ist_loja_pedidos WHERE id=?',[x.pedidoId]);
+        const [pg]=await a.query('SELECT * FROM ist_loja_pagamentos WHERE pedido_id=?',[x.pedidoId]);
+        const [ops]=await a.query('SELECT * FROM ist_loja_pagamento_operacoes WHERE pedido_id=? ORDER BY id',[x.pedidoId]);
+        const [outbox]=await a.query('SELECT * FROM ist_loja_notificacoes WHERE pedido_id=?',[x.pedidoId]);
+        return {ds,ev,pedido,pg,ops,outbox};
+    };
+    const ativo=async x=>{
+        const d=await dados(x);assert(d.ds.every(r=>r.estado==='ATIVO'&&r.versao===2));assert.equal(d.ev.length,4);
+        assert(d.ev.filter(e=>e.direito_versao===2).every(e=>e.origem==='FINANCEIRO'&&e.motivo_codigo==='CAPTURA_CONFIRMADA'));
+        assert.equal(d.pedido.estado,'PAGO');assert.equal(d.pg[0].estado,'CAPTURADO');
+        assert.equal(String(d.pg[0].capturado_centavos),'19000');assert.equal(d.outbox.length,1);return d;
+    };
+    const pendente=async x=>{
+        const d=await dados(x);assert(d.ds.every(r=>r.estado==='AGUARDANDO_CONFIRMACAO'&&r.versao===1));assert.equal(d.ev.length,2);return d;
+    };
+    const webhook=async(x,id=randomUUID())=>{
+        const d=await dados(x);
+        return {eventoId:id,tipo:'PAYMENT.CAPTURE.COMPLETED',ordemId:d.pg[0].ordem_externa_id,
+            capturaId:`captura-${x.pg.publicId}`,hash:Buffer.alloc(32,7)};
+    };
+    // Uma falha critica aborta este grupo; nao prosseguir para o proximo cenario.
+    const caso=async(nome,fn)=>{let falha;
+        await t.test(nome,async()=>{try{await fn();}catch(e){falha=e;throw e;}});
+        if(falha)throw new Error('VALIDACAO_CRITICA_INTERROMPIDA',{cause:falha});
+    };
+    await caso('captura, repeticao, reconciliacao e webhook preservam uma ativacao e uma captura',async()=>{
+        const x=await compra();await x.capturar();await ativo(x);const antes=JSON.stringify(await dados(x));
+        await x.capturar();await x.reconciliar();
+        const w=await webhook(x);await x.service.reconciliarWebhook(w);await x.service.reconciliarWebhook(w);
+        await criarLojaDownloadDireitosService({db:pool}).reavaliarDireitosDoPedido(x.pedidoId,ctx);
+        assert.equal(JSON.stringify(await dados(x)),antes);assert.equal(x.sim.chamadas.capturar,1);assert.equal(x.sim.efeitosCaptura,1);
+    });
+    for(const etapa of ['UPDATE','INSERT'])await caso(`erro SQL real em ${etapa} do segundo direito reverte somente o savepoint`,async()=>{
+        let x,falhar=true;
+        const db=envolver(async(sql,p,c)=>{
+            if(!x||!falhar)return;
+            if(etapa==='UPDATE'&&sql.startsWith('UPDATE ist_loja_download_direitos')&&p[5]===x.direitos[1]){
+                const alterado=[...p];alterado[0]='INVALIDO';return c.query(sql,alterado);
+            }
+            if(etapa==='INSERT'&&sql.startsWith('INSERT INTO ist_loja_download_direito_eventos')&&p[0]===x.direitos[1]){
+                const alterado=[...p];alterado[1]=1;return c.query(sql,alterado);
+            }
+        });
+        x=await compra(db);await x.capturar();const d=await pendente(x);
+        assert.equal(d.pedido.estado,'PAGO');assert.equal(d.pg[0].estado,'CAPTURADO');
+        assert.equal(d.ops.find(o=>o.acao==='CAPTURAR').estado,'SUCESSO');assert.equal(d.outbox.length,1);
+        const financeiro=JSON.stringify([d.pedido,d.pg,d.ops,d.outbox]);falhar=false;
+        if(etapa==='UPDATE')await x.capturar();else await criarLojaDownloadDireitosService({db:pool}).reavaliarDireitosDoPedido(x.pedidoId,ctx);
+        const depois=await ativo(x);assert.equal(JSON.stringify([depois.pedido,depois.pg,depois.ops,depois.outbox]),financeiro);
+        assert.equal(x.sim.chamadas.capturar,1);assert.equal(x.sim.efeitosCaptura,1);
+    });
+    await caso('webhook confirma captura pendente e reentrega nao reativa',async()=>{
+        const x=await compra();x.sim.modos.captura='pendente';await x.capturar();await pendente(x);
+        x.sim.concluirPendente(x.pg.publicId);const w=await webhook(x);await x.service.reconciliarWebhook(w);
+        const antes=JSON.stringify(await ativo(x));await x.service.reconciliarWebhook(w);
+        assert.equal(JSON.stringify(await dados(x)),antes);assert.equal(x.sim.chamadas.capturar,1);
+    });
+    for(const persistiu of [true,false])await caso(`commit compartilhado com resposta perdida, persistiu=${persistiu}`,async()=>{
+        let x,falhou=false;
+        const db=envolver(undefined,async c=>{
+            const [[p]]=await c.query('SELECT estado FROM ist_loja_pedidos WHERE id=?',[x?.pedidoId??0]);
+            if(!falhou&&p?.estado==='PAGO'){
+                falhou=true;if(persistiu)await c.commit();else await c.rollback();throw Error('RESPOSTA_COMMIT_PERDIDA');
+            }
+            return c.commit();
+        });
+        x=await compra(db);
+        if(persistiu){await x.capturar();await ativo(x);}else{
+            await assert.rejects(x.capturar(),codigo('RESULTADO_DESCONHECIDO'));const d=await pendente(x);
+            assert.equal(d.pedido.estado,'AGUARDANDO_PAGAMENTO');assert.equal(d.pg[0].estado,'DESCONHECIDO');
+        }
+        await x.reconciliar();await ativo(x);await x.capturar();assert.equal(x.sim.chamadas.capturar,1);assert.equal(x.sim.efeitosCaptura,1);
+    });
+    await caso('duas conclusoes concorrentes respeitam os locks e nao duplicam eventos',async()=>{
+        let x,pausa=true;const entrou=adiar(),liberar=adiar(),trace=[];
+        const db=envolver(async(sql,p)=>{
+            trace.push(sql);
+            if(x&&pausa&&sql.startsWith('UPDATE ist_loja_download_direitos')){pausa=false;entrou.resolver();await liberar.promessa;}
+        });
+        x=await compra(db);const primeira=x.capturar();
+        await entrou.promessa;
+        const segunda=x.capturar();let terminou=false;segunda.then(()=>{terminou=true;},()=>{terminou=true;});
+        try{await new Promise(r=>setTimeout(r,100));assert.equal(terminou,false);}finally{liberar.resolver();}
+        await Promise.all([primeira,segunda]);await ativo(x);assert.equal(x.sim.chamadas.capturar,1);
+        const sp=trace.findIndex(q=>q.startsWith('SAVEPOINT ')),inicio=trace.slice(0,sp).findLastIndex(q=>q.startsWith('SET TRANSACTION'));
+        const parte=trace.slice(inicio),pos=nome=>parte.findIndex(q=>q.includes(`FROM ${nome}`)&&q.includes('FOR UPDATE'));
+        const nomes=['ist_loja_sessoes','ist_loja_pedidos','ist_loja_pagamentos','ist_loja_pagamento_operacoes','ist_loja_pagamento_eventos','ist_loja_download_direitos','ist_loja_download_direito_eventos'];
+        const ordem=nomes.map(pos);assert(ordem.every((p,i)=>p>=0&&(i===0||p>ordem[i-1])));
+    });
+    await caso('deadlock InnoDB real reverte a transacao vitima e retry nao recaptura',async()=>{
+        let x,uma=true,erros1213=0,conexaoFinanceira;
+        const pronto=adiar();
+        const db=envolver(async(sql,p,c)=>{
+            if(x&&uma&&sql.includes('FROM ist_loja_download_direitos WHERE id=? FOR UPDATE')&&p[0]===x.direitos[1]){
+                uma=false;conexaoFinanceira=Number((await c.query('SELECT CONNECTION_ID() id'))[0][0].id);pronto.resolver();
+                try{return await c.query(sql,p);}catch(e){if(e.errno===1213)erros1213++;throw e;}
+            }
+        });
+        x=await compra(db);const b=await pool.getConnection();let captura;
+        try{
+            await b.beginTransaction();await b.query('SELECT id FROM ist_loja_download_direitos WHERE id=? FOR UPDATE',[x.direitos[1]]);
+            // A transacao de apoio tem peso maior: a conclusao financeira deve ser a vitima.
+            for(let n=0;n<64;n++)await b.query('INSERT INTO ist_loja_categorias(nome,slug) VALUES(?,?)',['Peso sintetico',randomUUID()]);
+            captura=x.capturar();await pronto.promessa;
+            let espera=false;
+            for(let n=0;n<100;n++){
+                const [[r]]=await a.query(`SELECT COUNT(*) n FROM information_schema.INNODB_LOCK_WAITS w
+                    JOIN information_schema.INNODB_TRX t ON t.trx_id=w.requesting_trx_id WHERE t.trx_mysql_thread_id=?`,[conexaoFinanceira]);
+                if(Number(r.n)>0){espera=true;break;}await new Promise(r=>setTimeout(r,10));
+            }
+            assert(espera,'A conclusao financeira deve aguardar o lock real.');
+            await b.query('SELECT id FROM ist_loja_sessoes WHERE id=? FOR UPDATE',[x.sessao.id]);
+        }finally{await b.rollback();b.release();if(captura)await captura;}
+        assert.equal(erros1213,1);await ativo(x);assert.equal(x.sim.chamadas.capturar,1);assert.equal(x.sim.efeitosCaptura,1);
+        t.diagnostic('DEADLOCK_REAL_1213 confirmado na conclusao financeira; captura simulada unica.');
+    });
+    for(const estado of ['SUSPENSO','REVOGADO'])await caso(`pedido pago preserva direito ${estado}`,async()=>{
+        const x=await compra();
+        for(const id of x.direitos){
+            const campo=estado==='SUSPENSO'?'suspenso_em':'revogado_em';
+            await a.query(`UPDATE ist_loja_download_direitos SET estado=?,versao=2,${campo}=UTC_TIMESTAMP(3),atualizado_em=UTC_TIMESTAMP(3),motivo_codigo='SINTETICO' WHERE id=?`,[estado,id]);
+            await a.query(`INSERT INTO ist_loja_download_direito_eventos(direito_id,direito_versao,estado_anterior,estado_novo,origem,motivo_codigo,ocorrido_em)
+                VALUES(?,2,'AGUARDANDO_CONFIRMACAO',?,'FINANCEIRO','SINTETICO',UTC_TIMESTAMP(3))`,[id,estado]);
+        }
+        await x.capturar();const d=await dados(x);assert.equal(d.pedido.estado,'PAGO');
+        assert(d.ds.every(r=>r.estado===estado&&r.versao===2));assert.equal(d.ev.length,4);
+    });
+    await caso('pedido pago com evidencia adversa nao ativa direitos pendentes',async()=>{
+        let x,permitir=false;
+        const db=envolver(async(sql,p,c)=>{
+            if(x&&!permitir&&sql.startsWith('UPDATE ist_loja_download_direitos')){
+                const invalido=[...p];invalido[0]='INVALIDO';return c.query(sql,invalido);
+            }
+        });
+        x=await compra(db);await x.capturar();await pendente(x);permitir=true;
+        await a.query('UPDATE ist_loja_pagamentos SET reembolsado_centavos=50 WHERE pedido_id=?',[x.pedidoId]);
+        await x.reconciliar();const d=await pendente(x);assert.equal(d.pedido.estado,'PAGO');assert.equal(x.sim.chamadas.capturar,1);
     });
 });

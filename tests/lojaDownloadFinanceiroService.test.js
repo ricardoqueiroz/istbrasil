@@ -123,6 +123,7 @@ test('D8 evidencia normalizada invalida nunca permite elegibilidade',async()=>{
 test('avaliador em MariaDB descartavel: SQL real, somente leitura e integridade',{
     skip:!process.env.IST_LOJA_PAGAMENTOS_MARIADB_BIN&&!process.env.IST_R2_10339_MANIFEST,timeout:120000
 },async t=>{
+    if(process.env.IST_LOJA_MARIADB_NATIVO_10339==='true')assert.equal(process.env.IST_R2_10339_MANIFEST,'NATIVO_DESCARTAVEL_10339');
     const antigo=Boolean(process.env.IST_R2_10339_MANIFEST);
     const {criarBancoPagamentoIsolado}=await import(antigo?'./fixtures/lojaCatalogoMariaDB10339.js':'./fixtures/lojaPagamentoBancoIsolado.js');
     const {admin:a,versao}=await criarBancoPagamentoIsolado(t);

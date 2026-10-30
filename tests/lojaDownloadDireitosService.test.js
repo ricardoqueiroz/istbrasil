@@ -20,7 +20,12 @@ test('conexao suja e descartada sem transacao aninhada',async()=>{
 test('transicoes financeiras em MariaDB descartavel',{
     skip:!process.env.IST_LOJA_PAGAMENTOS_MARIADB_BIN&&!process.env.IST_R2_10339_MANIFEST,timeout:180000
 },async t=>{
+    if(process.env.IST_LOJA_MARIADB_NATIVO_10339==='true')assert.equal(process.env.IST_R2_10339_MANIFEST,'NATIVO_DESCARTAVEL_10339');
     const f=await criarFixtureDireitos(t),{a,pool,preparar,ler}=f;
+    if(process.env.IST_LOJA_MARIADB_NATIVO_10339==='true'){
+        f.config.socketPath=pool.pool.config.connectionConfig.socketPath;
+        delete f.config.host;delete f.config.port;
+    }
     const svc=(db=pool)=>criarLojaDownloadDireitosService({db,agora});
     const executar=(x,s=svc())=>s.reavaliarDireitosDoPedido(x.pedidoId,contexto);
     const envolver=(hook,commit,rollback)=>({async getConnection(){const c=await pool.getConnection();return {
@@ -135,7 +140,20 @@ test('transicoes financeiras em MariaDB descartavel',{
         const x=await preparar();const url=new URL('../src/services/lojaDownloadDireitosService.js',import.meta.url).href;
         const code=`import mysql from 'mysql2/promise';import {criarLojaDownloadDireitosService} from ${JSON.stringify(url)};
             let entrada='';for await(const b of process.stdin)entrada+=b;const {config,pedidoId,contexto}=JSON.parse(entrada);
-            const db=mysql.createPool(config);try{const r=await criarLojaDownloadDireitosService({db,agora:()=>new Date('2026-01-01T13:00:00.000Z')}).reavaliarDireitosDoPedido(pedidoId,contexto);
+            const db=mysql.createPool(config);
+            if(config.socketPath){
+                const obter=db.getConnection.bind(db);
+                db.getConnection=async()=>{
+                    const c=await obter(),query=c.query.bind(c);
+                    c.query=async(...args)=>{
+                        const [[i]]=await query('SELECT VERSION() versao,@@socket socket,DATABASE() banco,@@skip_networking semTcp');
+                        if(!/^10\\.3\\.39-MariaDB/.test(i.versao)||i.socket!==config.socketPath||i.banco!==config.database||Number(i.semTcp)!==1)throw Error('ISOLAMENTO_INVALIDO');
+                        return query(...args);
+                    };
+                    const release=c.release.bind(c);c.release=()=>{c.query=query;c.release=release;release();};return c;
+                };
+            }
+            try{const r=await criarLojaDownloadDireitosService({db,agora:()=>new Date('2026-01-01T13:00:00.000Z')}).reavaliarDireitosDoPedido(pedidoId,contexto);
             process.stdout.write(JSON.stringify({transicoes:r.transicoes.length}));}catch{process.stderr.write('FALHA_WORKER_SINTETICO');process.exitCode=1;}finally{await db.end();}`;
         const worker=()=>new Promise((resolve,reject)=>{
             const p=spawn(process.execPath,['--input-type=module','-e',code],{cwd:process.cwd(),windowsHide:true,stdio:['pipe','pipe','pipe']});let out='';

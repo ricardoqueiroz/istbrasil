@@ -1,5 +1,6 @@
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { pedidoPublico } from './lojaPedidoContratos.js';
+import {confirmarDireitosFinanceirosNaConexao} from './lojaDownloadDireitosService.js';
 import {registrarConfirmacaoCompraNaConexao} from './lojaNotificacoesService.js';
 import { normalizarEventoAdversoPaypal } from './lojaPaypalEventoAdverso.js';
 import { criarLojaPagamentoAdversoService } from './lojaPagamentoAdversoService.js';
@@ -30,6 +31,12 @@ export const criarLojaPagamentoService = ({ db, adaptador, contexto, agora = () 
     contexto = Object.freeze({ provedor: contexto.provedor, ambiente: contexto.ambiente, contaRecebedora: contexto.contaRecebedora });
     const persistencia = criarPersistenciaPagamento({ db, agora });
     const transacao = persistencia.transacao;
+    const confirmarDireitos = async ctx => {
+        if(contexto.provedor!=='paypal'||ctx.pedido.estado!=='PAGO'
+            ||!ctx.pagamentos.some(pg=>pg.estado==='CAPTURADO'))return;
+        const r=await confirmarDireitosFinanceirosNaConexao(ctx.c,ctx.pedido.id,contexto,new Date(ctx.instante));
+        if(r.pendente){try{console.warn('[Loja direitos] ATIVACAO_DIGITAL_PENDENTE: reavaliacao local necessaria.');}catch{}}
+    };
     const referencia = (sessao, entrada) => {
         if (!sessao || !Number.isInteger(sessao.id) || sessao.id < 1 || sessao.id > 4294967295) falhar('SESSAO_INVALIDA');
         return { sessaoId: sessao.id, ...entrada };
@@ -222,6 +229,7 @@ export const criarLojaPagamentoService = ({ db, adaptador, contexto, agora = () 
         const dto = await processar();
         const op = ctx.operacoes.find(o => o.id === job.operacaoId);
         await finalizarWebhook(ctx, job, token, ['SUCESSO', 'RECUSADA', 'REVISAO'].includes(op.estado));
+        await confirmarDireitos(ctx);
         return dto;
     });
 
@@ -237,7 +245,10 @@ export const criarLojaPagamentoService = ({ db, adaptador, contexto, agora = () 
                 if (eventoRecebido && (eventoRecebido.pagamento_id !== pg.id || !eventoRecebido.conteudo_hash.equals(w.hash))) {
                     falhar('RESULTADO_DESCONHECIDO');
                 }
-                if (eventoRecebido?.estado === 'PROCESSADO') return { dto: pagamentoPublico(pg, ctx.pedido) };
+                if (eventoRecebido?.estado === 'PROCESSADO') {
+                    await confirmarDireitos(ctx);
+                    return { dto: pagamentoPublico(pg, ctx.pedido) };
+                }
                 if (eventoRecebido?.estado === 'PROCESSANDO' && eventoRecebido.execucao_ate > ctx.instante) falhar('OPERACAO_EM_ANDAMENTO');
                 if (!eventoRecebido) {
                     await inserir(ctx, 'ist_loja_pagamento_eventos', { pagamento_id: pg.id, provedor: pg.provedor,
@@ -250,6 +261,7 @@ export const criarLojaPagamentoService = ({ db, adaptador, contexto, agora = () 
                 if (finais.includes(pg.estado)) {
                     await persistencia.atualizarWebhook(ctx, eventoRecebido,
                         { estado: 'PROCESSADO', execucao_token: null, execucao_ate: null, processado_em: ctx.instante });
+                    await confirmarDireitos(ctx);
                     return { dto: pagamentoPublico(pg, ctx.pedido) };
                 }
             }
@@ -277,6 +289,7 @@ export const criarLojaPagamentoService = ({ db, adaptador, contexto, agora = () 
             }
             if (pedidoDivergente(ctx, pg)) return { dto: await revisar(ctx, pg, op, 'PEDIDO_DIVERGENTE') };
             if (finais.includes(pg.estado) || (!reconciliar && ['SUCESSO', 'RECUSADA', 'REVISAO'].includes(op.estado))) {
+                await confirmarDireitos(ctx);
                 return { dto: pagamentoPublico(pg, ctx.pedido) };
             }
             if (op.estado === 'EM_EXECUCAO' && op.execucao_ate > ctx.instante) falhar('OPERACAO_EM_ANDAMENTO');

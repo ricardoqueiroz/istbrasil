@@ -10,6 +10,10 @@ import mysql from 'mysql2/promise';
 
 // Instancia propria: nao importa dotenv, pool da aplicacao nem credenciais reais.
 export const criarBancoPagamentoIsolado = async t => {
+    if(process.env.IST_LOJA_MARIADB_NATIVO_10339==='true'){
+        const {criarBancoPagamentoIsolado:nativo}=await import('./lojaCatalogoMariaDB10339.js');
+        return nativo(t);
+    }
     const bin = process.env.IST_LOJA_PAGAMENTOS_MARIADB_BIN;
     assert.ok(bin && isAbsolute(bin), 'Diretorio absoluto MariaDB obrigatorio.');
     const basedir = dirname(await realpath(bin));
