@@ -207,6 +207,12 @@ export class LojaCheckoutService {
         this.interromperLeituras();
         this.acompanhamento.set({ pedidoPublicId: this.tentativa.pedidoPublicId, inicio: Date.now(), sequencia: ++this.sequencia });
     }
+    retomarAcompanhamento(pedidoPublicId: string): void {
+        if (this.ocupado() || this.acompanhamento() || this.tentativa?.pedidoPublicId !== pedidoPublicId
+            || this.estado()?.pedido.publicId !== pedidoPublicId || !this.confirmado() || this.bibliotecaLiberada()) return;
+        // Somente leituras observacionais: nao chama reconciliar, criar ou capturar.
+        this.iniciarAcompanhamento();
+    }
     encerrarAcompanhamento(pedidoPublicId: string): void {
         if (this.acompanhamento()?.pedidoPublicId !== pedidoPublicId) return;
         this.interromperLeituras();

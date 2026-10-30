@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { confirmarDireitosFinanceirosNaConexao } from '../src/services/lojaDownloadDireitosService.js';
 import { randomUUID, createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { avaliarElegibilidadeFinanceiraNaConexao as avaliar } from '../src/services/lojaDownloadFinanceiroService.js';
@@ -88,6 +89,51 @@ test('PENDING historico superado por COMPLETED nao bloqueia; adverso antigo nao 
     const b=base(),e=envelope({...b.r,estado:'PENDENTE',capturadoEm:null});e.observacao.statusCaptura='PENDING';evento(b,e);b.eventos[0].tipo='PENDENTE';evento(b,envelope(b.r));
     assert.equal((await avaliar(banco(b),1,ctx)).elegivel,true);
     e.observacao.motivoPendencia='CHARGEBACK';b.eventos[0].evidencia_json=JSON.stringify(e);assert.equal((await avaliar(banco(b),1,ctx)).classificacao,'ADVERSO');
+});
+const retomado=()=>{
+    const b=base(),r={...b.r,estado:'AGUARDANDO_APROVACAO',capturaId:null,capturadoEm:null};
+    const obs={resultado:r,observacao:{evidencia:'PRESENTE',associacaoOrdem:'NAO_DEMONSTRADA',validacao:'INCONCLUSIVA',statusOrdem:'CREATED',statusCaptura:null,motivoPendencia:null}};
+    evento(b,obs);Object.assign(b.eventos[0],{tipo:r.estado,recebido_em:'2026-01-01T11:00:00.000000Z'});
+    evento(b,b.r,'API');b.eventos[1].recebido_em=dt;
+    return b;
+};
+test('interrupcao, consulta inconclusiva e captura API posterior comprovada permitem elegibilidade',async()=>{
+    const b=retomado(),antes=structuredClone(b);
+    assert.equal((await avaliar(banco(b),1,ctx)).elegivel,true);
+    assert.deepEqual(b,antes);
+});
+for(const [nome,mudar]of [
+    ['sem prova posterior',b=>b.eventos.pop()],
+    ['sem data historica',b=>delete b.eventos[0].recebido_em],
+    ['observacao posterior a captura',b=>b.eventos[0].recebido_em='2026-01-01T13:00:00.000000Z'],
+    ['cronologia ambigua',b=>b.eventos[0].recebido_em=dt],
+    ['prova com data invalida',b=>b.eventos[1].recebido_em=null],
+    ['prova de valor parcial',b=>b.eventos[1].evidencia_json=JSON.stringify({...b.r,valorCentavos:'99'})],
+    ['captura sem operacao comprovada',b=>b.ops[0].resultado_json=null],
+    ['ordem historica divergente',b=>{const x=JSON.parse(b.eventos[0].evidencia_json);x.resultado.ordemId='OUTRA';b.eventos[0].evidencia_json=JSON.stringify(x);}],
+    ['contradicao antiga',b=>{const x=JSON.parse(b.eventos[0].evidencia_json);x.observacao.validacao='DIVERGENTE';b.eventos[0].evidencia_json=JSON.stringify(x);}],
+    ['captura historica explicitamente negada',b=>{const x=JSON.parse(b.eventos[0].evidencia_json);x.observacao.statusCaptura='DECLINED';b.eventos[0].evidencia_json=JSON.stringify(x);}],
+    ['adverso antigo',b=>{const x=JSON.parse(b.eventos[0].evidencia_json);x.observacao.motivoPendencia='CHARGEBACK';b.eventos[0].evidencia_json=JSON.stringify(x);}]
+])test('retomada continua bloqueada: '+nome,async()=>{const b=retomado();mudar(b);assert.equal((await avaliar(banco(b),1,ctx)).elegivel,false);});
+test('ativacao apos retomada e repeticao preservam versao e unico evento financeiro',async()=>{
+    const b=retomado(),historico=[{direito_versao:1,estado_novo:'AGUARDANDO_CONFIRMACAO'}];
+    b.direitos[0].atualizado_em='2026-01-01 00:00:00.000000';
+    const leitura=banco(b);
+    const c={query:async(sql,args)=>{
+        if(sql.includes('@@in_transaction'))return [[{transacao:1,em_transacao:1}]];
+        if(/^(SAVEPOINT|RELEASE|ROLLBACK TO)/.test(sql))return [[]];
+        if(sql.startsWith('SELECT d.id FROM'))return [[{id:1}]];
+        if(sql.startsWith('SELECT e.id FROM')||sql.startsWith('SELECT id FROM ist_loja_pagamento_eventos'))return [[]];
+        if(sql.includes('FROM ist_loja_download_direito_eventos'))return [historico];
+        if(sql.startsWith('UPDATE ist_loja_download_direitos')){b.direitos[0].estado=args[0];b.direitos[0].versao++;return [{affectedRows:1,warningStatus:0}];}
+        if(sql.startsWith('INSERT INTO ist_loja_download_direito_eventos')){historico.push({direito_versao:args[1],estado_novo:args[3]});return [{affectedRows:1,warningStatus:0}];}
+        return leitura.query(sql.replace(' FOR UPDATE',''),args);
+    }};
+    const executar=()=>confirmarDireitosFinanceirosNaConexao(c,1,ctx,new Date('2026-01-01T13:00:00Z'));
+    assert.equal((await executar()).transicoes.length,1);
+    assert.equal((await executar()).transicoes.length,0);
+    assert.equal(b.direitos[0].estado,'ATIVO');assert.equal(b.direitos[0].versao,2);
+    assert.equal(historico.filter(x=>x.estado_novo==='ATIVO').length,1);
 });
 test('assinatura de webhook nao substitui resultado observado nem e interpretada como JSON normalizado',async()=>{
     const b=base();evento(b,{resource:{id:'CAPTURA-SINTETICA'}},'WEBHOOK');assert.equal((await avaliar(banco(b),1,ctx)).elegivel,true);

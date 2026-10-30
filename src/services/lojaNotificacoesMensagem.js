@@ -13,6 +13,21 @@ const lerData=v=>{
 const formatarData=n=>new Intl.DateTimeFormat('pt-BR',{dateStyle:'short',timeStyle:'medium',timeZone:'America/Sao_Paulo'}).format(n)+' (America/Sao_Paulo)';
 const instante=k=>`DATE_FORMAT(${k},'%Y-%m-%dT%H:%i:%s.%fZ') ${k}`;
 
+// Somente metadados editoriais planos do snapshot; valores seguem escapados
+// pelo compositor administrativo, nunca interpretados como HTML.
+const descricaoLegivel = descricao => {
+    if (!descricao) return '';
+    try {
+        const objeto = JSON.parse(descricao);
+        if (!objeto || Array.isArray(objeto) || typeof objeto !== 'object') return descricao;
+        const campos = ['Título','Conteúdo','Formato','Dimensões (pol)','Editor','Idioma',
+            'Prefixo Ed.','ISBN-10','ISBN-13','Dimensões (cm)','Autor:'];
+        if (!Object.keys(objeto).length || Object.keys(objeto).some(k=>!campos.includes(k)
+            || !['string','number'].includes(typeof objeto[k]))) return descricao;
+        return Object.entries(objeto).map(([k,v])=>`${k.replace(/:$/, '')}: ${v}`).join('\n');
+    } catch { return descricao; }
+};
+
 // O worker fornece sua conexao READ ONLY apos o COMMIT da reserva. Sem pool,
 // SMTP, logs, leituras do catalogo atual ou escrita no nucleo financeiro.
 export const criarCompositorConfirmacaoCompra=({origemPublica,ambiente,prepararModelo=prepararEmailPorChave}={})=>{
@@ -49,7 +64,7 @@ export const criarCompositorConfirmacaoCompra=({origemPublica,ambiente,prepararM
                     ||(i.descricao_snapshot!==null&&typeof i.descricao_snapshot!=='string')||!Number.isInteger(i.quantidade)||i.quantidade<1||i.quantidade>65535)falhar();
                 posicoes.add(i.posicao);const unitario=inteiro(i.preco_unitario_centavos),subtotal=inteiro(i.subtotal_centavos);
                 if(unitario<=0n||subtotal!==unitario*BigInt(i.quantidade))falhar();soma+=subtotal;
-                linhas.push(`${i.posicao}. ${i.titulo_snapshot}\n${i.descricao_snapshot??''}\nQuantidade: ${i.quantidade} | Preço unitário: ${p.moeda} ${dinheiro(unitario)} | Subtotal: ${p.moeda} ${dinheiro(subtotal)}`);
+                linhas.push(`${i.posicao}. ${i.titulo_snapshot}\n${descricaoLegivel(i.descricao_snapshot)}\nQuantidade: ${i.quantidade} | Preço unitário: ${p.moeda} ${dinheiro(unitario)} | Subtotal: ${p.moeda} ${dinheiro(subtotal)}`);
             }
             if(soma!==total)falhar();
             const compor=await prepararModelo(CHAVE_CONFIRMACAO_COMPRA,{db:c});

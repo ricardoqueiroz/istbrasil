@@ -194,3 +194,12 @@ test('recibo MariaDB 10.3.39: leitura historica pelo worker',{
   assert.equal(n.estado,'FALHA');assert.equal(await snapshot(),antes);
  });
 });
+
+test('descricao editorial JSON do snapshot fica legivel e segura em HTML e texto',async()=>{
+ const f=fixture();f.itens[0].descricao_snapshot=JSON.stringify({'Título':'Título antigo','Autor:':'Pessoa <script>alert(1)</script>','ISBN-13':'1234567890123','Conteúdo':'Linha 1\nLinha 2'});
+ const m=await f.compor();assert(m.text.includes('Título: Título antigo'));assert(m.text.includes('Autor: Pessoa <script>alert(1)</script>'));
+ assert(m.text.includes('ISBN-13: 1234567890123'));assert(!m.text.includes('"Título":'));assert(!m.html.includes('<script>'));assert(m.html.includes('&lt;script&gt;'));
+});
+for(const descricao of ['Descrição textual histórica','{JSON inválido',JSON.stringify({desconhecido:'<img src=x onerror=alert(1)>'}),JSON.stringify(['texto'])])test('descricao comum ou JSON nao editorial preservado: '+descricao,async()=>{
+ const f=fixture();f.itens[0].descricao_snapshot=descricao;const m=await f.compor();assert(m.text.includes(descricao));assert(!m.html.includes('<img'));
+});

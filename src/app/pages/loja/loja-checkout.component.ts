@@ -48,6 +48,11 @@ import { CheckoutEstado, LojaCheckoutService } from '../../services/loja-checkou
                         } @else if (podePagar()) {
                             <p-button label="Pagar com PayPal Sandbox" [disabled]="checkout.ocupado()" (onClick)="checkout.pagar()" />
                         }
+                        @if (checkout.confirmado() && !checkout.bibliotecaLiberada() && !checkout.acompanhamento()) {
+                            <p-button label="Retomar acompanhamento" [outlined]="true"
+                                [disabled]="checkout.ocupado() || manualEmCurso() || checkout.pedidoSalvo() !== pedidoId()"
+                                (onClick)="retomarAcompanhamento()" />
+                        }
                         <p-button label="Consultar estado do pedido" [outlined]="true" [disabled]="checkout.ocupado() || manualEmCurso() || checkout.pedidoSalvo() !== pedidoId()" (onClick)="consultarManual()" />
                     </div>
                     @if (checkout.ocupado()) { <p role="status">Processando. Aguarde sem iniciar outra tentativa.</p> }
@@ -82,7 +87,7 @@ export class LojaCheckoutComponent {
         const pg = this.estadoAtual()?.pagamento;
         if (this.estadoAtual() && this.checkout.confirmado()) return this.checkout.bibliotecaLiberada()
             ? 'Pagamento confirmado. Seu livro digital está disponível.'
-            : 'Pagamento confirmado. Estamos preparando seu livro digital.';
+            : 'Pagamento confirmado. O acesso digital ainda está pendente de confirmação. Retome o acompanhamento ou consulte o pedido. Se a pendência persistir, procure o atendimento com o código do pedido. Não efetue outro pagamento.';
         if (!pg) return this.estadoAtual()?.pedido.estado === 'AGUARDANDO_PAGAMENTO'
             ? 'Aguardando pagamento.' : this.estadoAtual()?.pedido.estado === 'CRIADO'
                 ? 'Pedido criado. Pagamento ainda não realizado.' : 'Pedido sem captura integral confirmada. Consulte o estado ou procure o atendimento.';
@@ -208,6 +213,12 @@ export class LojaCheckoutComponent {
         }
         this.checkout.encerrarAcompanhamento(id);
         this.erroConsulta.set('Não foi possível confirmar o estado deste pedido. Consulte novamente ou procure o atendimento.');
+    }
+    retomarAcompanhamento(): void {
+        const id = this.pedidoId();
+        if (!id || this.conflito() || this.manualEmCurso() || Date.now() < this.retomarEm) return;
+        this.checkout.retomarAcompanhamento(id);
+        if (this.checkout.acompanhamento()?.pedidoPublicId === id) this.aviso.set('Acompanhamento retomado por até dois minutos. Não efetue outro pagamento.');
     }
     async consultarManual(): Promise<void> {
         const id = this.pedidoId();

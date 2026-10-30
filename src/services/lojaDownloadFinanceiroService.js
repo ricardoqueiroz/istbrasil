@@ -53,7 +53,7 @@ export const avaliarElegibilidadeFinanceiraNaConexao = async (conexao, pedidoId,
             ${instante('envio_iniciado_em')},${instante('concluido_em')}
             FROM ist_loja_pagamento_operacoes WHERE pedido_id=? ORDER BY id`, [pedidoId]);
         const [eventos] = await conexao.query(`SELECT e.id,e.pagamento_id,e.provedor,e.ambiente,e.conta_recebedora,
-            e.origem,e.tipo,e.estado,e.codigo_erro,e.evidencia_json FROM ist_loja_pagamento_eventos e
+            e.origem,e.tipo,e.estado,e.codigo_erro,e.evidencia_json,${instante('e.recebido_em','recebido_em')} FROM ist_loja_pagamento_eventos e
             JOIN ist_loja_pagamentos pg ON pg.id=e.pagamento_id WHERE pg.pedido_id=? ORDER BY e.id`, [pedidoId]);
         const [itens] = await conexao.query(`SELECT id,produto_id,posicao,tipo_snapshot,quantidade,
             CAST(preco_unitario_centavos AS CHAR) preco_unitario_centavos,CAST(subtotal_centavos AS CHAR) subtotal_centavos
@@ -147,7 +147,7 @@ export const avaliarElegibilidadeFinanceiraNaConexao = async (conexao, pedidoId,
         }
         // Eventos antigos PENDING podem ter sido superados por COMPLETED; adversos
         // ou contraditorios permanecem impeditivos. Nao inventar resolucao de disputa.
-        const ultimas = new Map();
+        const ultimas = new Map(), capturasComprovadas = [];
         for (const e of eventos) {
             const alvo=pagamentos.find(x=>x.id===e.pagamento_id);
             if (!alvo || e.provedor!==alvo.provedor || e.ambiente!==alvo.ambiente || e.conta_recebedora!==alvo.conta_recebedora) { conflito('EVENTO_CONTEXTO_DIVERGENTE'); continue; }
@@ -173,15 +173,42 @@ export const avaliarElegibilidadeFinanceiraNaConexao = async (conexao, pedidoId,
             if (!['API','RECONCILIACAO'].includes(e.origem) || !['CAPTURADO','PENDENTE','DESCONHECIDO','RECUSADO','APROVADO','AGUARDANDO_APROVACAO','CANCELADO','EXPIRADO'].includes(e.tipo)) continue;
             try {
                 const r=lerResultado(e.evidencia_json);
-                if (e.origem==='RECONCILIACAO') ultimas.set(e.pagamento_id,{e,r});
-                if (e.tipo==='CAPTURADO' && pg?.id===alvo.id) checarResultado(r,alvo,true);
+                if (e.origem==='RECONCILIACAO') ultimas.set(e.pagamento_id,{e,r,observacao:json(e.evidencia_json)?.observacao});
+                if (e.tipo==='CAPTURADO' && pg?.id===alvo.id) {
+                    checarResultado(r,alvo,true);
+                    if (e.origem==='API' && json(e.evidencia_json)?.resultado===undefined
+                        && e.estado==='PROCESSADO' && r.estado==='CAPTURADO'
+                        && r.referencia===alvo.public_id && r.ordemId===alvo.ordem_externa_id
+                        && r.capturaId===alvo.captura_externa_id && r.ambiente===alvo.ambiente
+                        && r.moeda===p.moeda && centavos(r.valorCentavos)===total
+                        && r.contaRecebedora===contextoEsperado.contaRecebedora
+                        && Date.parse(r.capturadoEm)===data(alvo.capturado_em)
+                        && data(e.recebido_em)!==null && data(e.recebido_em)>=data(alvo.capturado_em))
+                        capturasComprovadas.push(e);
+                }
             } catch { falta('EVENTO_FINANCEIRO_INVALIDO'); }
         }
         if (pg && ultimas.has(pg.id)) {
-            const {e}=ultimas.get(pg.id);
+            const {e,r,observacao}=ultimas.get(pg.id);
+            // Apenas uma observacao pre-captura, vinculada e sem captura propria,
+            // pode ser superada por prova posterior. observar() ja preservou riscos
+            // e contradicoes de TODOS os eventos, inclusive os historicos.
+            const anteriorSuperada = e.estado==='PROCESSADO'
+                && observacao?.evidencia==='PRESENTE'
+                && ['CONFIRMADA','NAO_DEMONSTRADA'].includes(observacao.associacaoOrdem)
+                && ['CONSISTENTE','INCONCLUSIVA'].includes(observacao.validacao)
+                && [null,'CREATED','SAVED','PAYER_ACTION_REQUIRED','APPROVED','DESCONHECIDO'].includes(observacao.statusOrdem)
+                && [null,'PENDING','DESCONHECIDO'].includes(observacao.statusCaptura) && observacao.motivoPendencia===null
+                && ['AGUARDANDO_APROVACAO','APROVADO','PENDENTE','DESCONHECIDO'].includes(e.tipo)
+                && r.estado===e.tipo && r.capturaId===null && r.capturadoEm===null
+                && r.referencia===pg.public_id && r.ordemId===pg.ordem_externa_id
+                && r.ambiente===pg.ambiente && r.moeda===p.moeda && centavos(r.valorCentavos)===total
+                && (r.contaRecebedora===null || r.contaRecebedora===contextoEsperado.contaRecebedora)
+                && data(e.recebido_em)!==null && data(e.recebido_em)<data(pg.capturado_em)
+                && capturasComprovadas.some(c=>c.id>e.id && data(c.recebido_em)>data(e.recebido_em));
             try {
                 if (!json(e.evidencia_json)?.observacao) falta('RECONCILIACAO_SEM_ENVELOPE');
-                checarResultado(lerResultado(e.evidencia_json,true),pg,true);
+                if (!anteriorSuperada) checarResultado(lerResultado(e.evidencia_json,true),pg,true);
             } catch { falta('RECONCILIACAO_INVALIDA'); }
         }
         let soma=0n;const produtos=new Set(),posicoes=new Set();
