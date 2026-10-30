@@ -4,7 +4,7 @@ import {criarCompositorConfirmacaoCompra} from './lojaNotificacoesMensagem.js';
 const erro=()=>Error('NOTIFICACOES_INDISPONIVEIS');
 const data=ms=>new Date(ms).toISOString().slice(0,23).replace('T',' ');
 export const criarProcessadorNotificacoes=({db,enviar,ambiente,agora=Date.now,timeoutMs=20000,reservaMs=60000,origemPublica,comporMensagem}={})=>{
-    if(!db?.getConnection||typeof enviar!=='function'||ambiente!=='sandbox'||typeof agora!=='function'
+    if(!db?.getConnection||typeof enviar!=='function'||!['sandbox','live'].includes(ambiente)||typeof agora!=='function'
         ||!Number.isInteger(timeoutMs)||timeoutMs<1||timeoutMs>30000
         ||!Number.isInteger(reservaMs)||reservaMs<timeoutMs+1000||reservaMs>300000)throw erro();
     const compor=comporMensagem??criarCompositorConfirmacaoCompra({origemPublica,ambiente});

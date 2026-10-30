@@ -10,7 +10,7 @@ const destruir=c=>{try{c?.destroy();}catch{}};
 // Fila e reservas no ledger existente. Nenhum GET/efeito financeiro aqui.
 export const criarLojaPagamentoAdversoWorker=({db,contexto,reconciliar,agora=()=>new Date(),aleatorio=Math.random}={})=>{
     if(!db?.getConnection||typeof reconciliar!=='function'||contexto?.provedor!=='paypal'
-        ||contexto.ambiente!=='sandbox'||!contexto.contaRecebedora)throw erro('CONFIGURACAO_INVALIDA');
+        ||!['sandbox','live'].includes(contexto.ambiente)||!contexto.contaRecebedora)throw erro('CONFIGURACAO_INVALIDA');
     const chave=[contexto.provedor,contexto.ambiente,contexto.contaRecebedora];
     const instante=()=>sqlUtcPagamento(agora().toISOString());
     const conexao=async()=>{

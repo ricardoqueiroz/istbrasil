@@ -5,9 +5,9 @@ import {fontesDescoberta,isoDescoberta} from './lojaDescobertaContratos.js';
 
 export const comporFinanceiroLoja = ({ db, env, criarServico = criarLojaPagamentoService, criarAdaptador = criarPaypalProvider }) => {
     const ambiente = env.IST_LOJA_PAYPAL_ENV, contaRecebedora = env.IST_LOJA_PAYPAL_CONTA_RECEBEDORA;
-    if (ambiente !== 'sandbox' || carregarConfiguracaoLojaPedido(env).ambiente !== ambiente
+    if (!['sandbox','live'].includes(ambiente) || carregarConfiguracaoLojaPedido(env).ambiente !== ambiente
         || !/^[2-9A-HJ-NP-Z]{13}$/.test(contaRecebedora ?? '') || !db?.getConnection) throw new Error('CONFIGURACAO_INVALIDA');
-    const adaptador = criarAdaptador({ env: { IST_LOJA_PAYPAL_ENV: ambiente,
+    const adaptador = criarAdaptador({ env: { IST_LOJA_PAYPAL_ENV: ambiente, LOJA_AMBIENTE: ambiente,
         IST_LOJA_PAYPAL_CLIENT_ID: env.IST_LOJA_PAYPAL_CLIENT_ID, IST_LOJA_PAYPAL_CLIENT_SECRET: env.IST_LOJA_PAYPAL_CLIENT_SECRET } });
     return { adaptador, service: criarServico({ db, adaptador, contexto: { provedor: 'paypal', ambiente, contaRecebedora } }) };
 };

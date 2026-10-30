@@ -18,21 +18,33 @@ export interface SdkCheckout {
     createPayPalOneTimePaymentSession(eventos: { onApprove(data: { orderId: string }): Promise<void>; onCancel(): void; onError(): void }): SessaoPayPal;
 }
 interface PayPalV6 { createInstance(opcoes: { clientId: string; components: string[]; pageType: string }): Promise<SdkCheckout>; }
-export const CARREGAR_PAYPAL_V6 = new InjectionToken<() => Promise<PayPalV6>>('SDK PayPal v6 Sandbox', {
+export const urlSdkPayPal = (ambiente: 'sandbox' | 'live'): string => {
+    if (!['sandbox','live'].includes(ambiente)) throw new Error('CONFIGURACAO_INVALIDA');
+    return ambiente === 'sandbox' ? 'https://www.sandbox.paypal.com/web-sdk/v6/core' : 'https://www.paypal.com/web-sdk/v6/core';
+};
+export const CARREGAR_PAYPAL_V6 = new InjectionToken<(ambiente: 'sandbox' | 'live') => Promise<PayPalV6>>('SDK PayPal v6', {
     providedIn: 'root', factory: () => {
         let carregamento: Promise<PayPalV6> | null = null;
-        return () => carregamento ??= new Promise((resolve, reject) => {
-            // URL fixa: nao utiliza valores do comprador, configuracao Live ou SDK legado.
-            const script = document.createElement('script');
-            script.src = 'https://www.sandbox.paypal.com/web-sdk/v6/core'; script.async = true;
-            script.onload = () => {
-                const sdk = (window as unknown as { paypal?: PayPalV6 }).paypal;
-                if (typeof sdk?.createInstance === 'function') resolve(sdk);
-                else { carregamento = null; script.remove(); reject(new Error('SDK_INDISPONIVEL')); }
-            };
-            script.onerror = () => { carregamento = null; script.remove(); reject(new Error('SDK_INDISPONIVEL')); };
-            document.head.appendChild(script);
-        });
+        let ambienteCarregado: 'sandbox' | 'live' | null = null;
+        return ambiente => {
+            const url = urlSdkPayPal(ambiente);
+            if (ambienteCarregado && ambienteCarregado !== ambiente) return Promise.reject(new Error('SDK_AMBIENTE_DIVERGENTE'));
+            if (carregamento) return carregamento;
+            if ((window as unknown as { paypal?: unknown }).paypal) return Promise.reject(new Error('SDK_PREEXISTENTE'));
+            ambienteCarregado = ambiente;
+            return carregamento = new Promise((resolve, reject) => {
+                // URL de lista fechada; nunca utiliza URL fornecida pelo servidor/comprador.
+                const script = document.createElement('script');
+                script.src = url; script.async = true;
+                script.onload = () => {
+                    const sdk = (window as unknown as { paypal?: PayPalV6 }).paypal;
+                    if (typeof sdk?.createInstance === 'function') resolve(sdk);
+                    else { carregamento = null; script.remove(); reject(new Error('SDK_INDISPONIVEL')); }
+                };
+                script.onerror = () => { carregamento = null; script.remove(); reject(new Error('SDK_INDISPONIVEL')); };
+                document.head.appendChild(script);
+            });
+        };
     }
 });
 export const CHECKOUT_STORAGE_KEY = 'ist.loja.checkout';
@@ -82,7 +94,7 @@ export class LojaCheckoutService {
     readonly confirmado = computed(() => {
         const pg = this.estado()?.pagamento;
         const e=this.estado();
-        return e?.ambiente==='sandbox' && e.pedido.estado==='PAGO' && pg?.pedidoPublicId===e.pedido.publicId
+        return !!e && ['sandbox','live'].includes(e.ambiente) && e.pedido.estado==='PAGO' && pg?.pedidoPublicId===e.pedido.publicId
             && pg?.estado === 'CAPTURADO' && pg.pedidoEstado === 'PAGO' && !!pg.pagamentoConfirmadoEm;
     });
     private armazenamentoInvalido = false;
@@ -110,7 +122,7 @@ export class LojaCheckoutService {
                 .pipe(timeout(15000), takeUntil(this.leiturasInterrompidas)));
             const pg = e?.pagamento;
             if (this.tentativa !== anterior || revisao !== this.revisaoLeitura) return null;
-            if (e?.ambiente !== 'sandbox' || e.pedido?.publicId !== anterior.pedidoPublicId || e.pedido.moeda !== 'BRL'
+            if (!e || !['sandbox','live'].includes(e.ambiente) || e.pedido?.publicId !== anterior.pedidoPublicId || e.pedido.moeda !== 'BRL'
                 || !Number.isSafeInteger(e.pedido.totalCentavos) || e.pedido.totalCentavos <= 0
                 || !Array.isArray(e.pedido.itens) || !e.pedido.itens.length
                 || e.pedido.itens.some(i => !i || !Number.isSafeInteger(i.produtoId) || i.produtoId <= 0
@@ -158,7 +170,7 @@ export class LojaCheckoutService {
                 { pedidoPublicId: anterior.pedidoPublicId }, { withCredentials: true,
                     headers: { 'X-IST-Loja': '1', 'X-CSRF-Token': this.csrf } }).pipe(timeout(15000)));
             const pg = e?.pagamento;
-            if (this.tentativa !== anterior || e?.ambiente !== 'sandbox' || e.pedido?.publicId !== anterior.pedidoPublicId
+            if (this.tentativa !== anterior || !e || !['sandbox','live'].includes(e.ambiente) || e.pedido?.publicId !== anterior.pedidoPublicId
                 || e.pedido.estado !== 'PAGO' || !pg || !uuid.test(pg.publicId)
                 || pg.pedidoPublicId !== anterior.pedidoPublicId || pg.estado !== 'CAPTURADO' || pg.pedidoEstado !== 'PAGO'
                 || e.pedido.moeda !== 'BRL' || pg.moeda !== e.pedido.moeda
@@ -274,10 +286,11 @@ export class LojaCheckoutService {
             }
             await this.atualizar();
             const config = await this.post<{ ambiente: string; clientId: string }>('configuracao', {});
-            if (config.ambiente !== 'sandbox' || this.estado()?.ambiente!==config.ambiente) {
+            if (!config || !['sandbox','live'].includes(config.ambiente) || this.estado()?.ambiente!==config.ambiente
+                || Object.keys(config).sort().join(',') !== 'ambiente,clientId' || typeof config.clientId !== 'string' || !/^[A-Za-z0-9_-]{1,2048}$/.test(config.clientId)) {
                 this.estado.set(null);this.sdk=null;throw new Error('CONFIGURACAO_INVALIDA');
             }
-            const sdk = await this.carregarSdk();
+            const sdk = await this.carregarSdk(config.ambiente as 'sandbox' | 'live');
             this.sdk = await sdk.createInstance({ clientId: config.clientId, components: ['paypal-payments'], pageType: 'checkout' });
             if (!(await this.sdk.findEligibleMethods({ currencyCode: 'BRL' })).isEligible('paypal')) throw new Error('INELEGIVEL');
             this.pronto.set(true);
@@ -289,7 +302,7 @@ export class LojaCheckoutService {
         if (this.tentativa === tentativa) this.receberEstado(e);
     }
     private receberEstado(e: CheckoutEstado): void {
-        if(e?.ambiente!=='sandbox'||e.pedido?.publicId!==this.tentativa?.pedidoPublicId
+        if(!e || !['sandbox','live'].includes(e.ambiente)||e.pedido?.publicId!==this.tentativa?.pedidoPublicId
             ||(e.pagamento&&e.pagamento.pedidoPublicId!==e.pedido.publicId)) {
             this.estado.set(null);this.pronto.set(false);this.sdk=null;throw new Error('CONFIGURACAO_INVALIDA');
         }

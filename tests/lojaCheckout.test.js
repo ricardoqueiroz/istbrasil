@@ -25,10 +25,10 @@ const envelope = r => normalizarReconciliacaoPagamento({ resultado: normalizarRe
     motivoPendencia: r.estado === 'PENDENTE' ? 'PENDING_REVIEW' : null
 } });
 // Express completo em memoria. Nenhum listen(), socket TCP ou API externa.
-const ambienteHttp = (service, sessoes) => {
+const ambienteHttp = (service, sessoes, ambienteEnv = { IST_LOJA_PAYPAL_ENV: 'sandbox', IST_LOJA_PAYPAL_CLIENT_ID: 'public-fixture-id' }) => {
     const app = express();
     app.use('/checkout', criarLojaCheckoutRouter({ obterFinanceiro: () => ({ service }),
-        env: { IST_LOJA_PAYPAL_ENV: 'sandbox', IST_LOJA_PAYPAL_CLIENT_ID: 'public-fixture-id' },
+        env: ambienteEnv,
         obterConfiguracaoSessao: () => config, sessaoService: { async obterSessao(token) {
             const s = sessoes.get(token); if (!s) throw criarErroPedido('SESSAO_INVALIDA'); return s;
         } } }));
@@ -164,4 +164,12 @@ test('checkout com pedidos, catalogo e financeiro reais em MariaDB descartavel; 
             assert.equal(anterior.body.pedido.totalCentavos, 19000);
         } finally { await admin.query('UPDATE ist_loja_produtos SET preco_centavos=9500 WHERE id=1'); }
     });
+});
+
+for(const ambiente of ['sandbox','live'])test('configuracao HTTP '+ambiente+' e publica, com sessao e sem credenciais privadas',async()=>{
+ const token=randomBytes(32).toString('base64url'),enviar=ambienteHttp({},new Map([[token,{id:1}]]),{IST_LOJA_PAYPAL_ENV:ambiente,LOJA_AMBIENTE:ambiente,IST_LOJA_PAYPAL_CLIENT_ID:'public-'+ambiente,IST_LOJA_PAYPAL_CLIENT_SECRET:'secret-nao-publico'});
+ const out=await enviar('configuracao',{},token);assert.equal(out.status,200);assert.deepEqual(out.body,{ambiente,clientId:'public-'+ambiente});
+});
+test('configuracao HTTP rejeita ambientes inconsistentes',async()=>{
+ const token=randomBytes(32).toString('base64url'),enviar=ambienteHttp({},new Map([[token,{id:1}]]),{IST_LOJA_PAYPAL_ENV:'live',LOJA_AMBIENTE:'sandbox',IST_LOJA_PAYPAL_CLIENT_ID:'fixture'});assert.equal((await enviar('configuracao',{},token)).status,500);
 });

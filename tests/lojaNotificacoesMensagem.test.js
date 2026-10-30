@@ -81,20 +81,20 @@ test('contrato completo de placeholders e assinatura, sem fallback ou logs',asyn
 });
 
 // Worker real com conexao simulada: unica persistencia gravavel e a outbox.
-const workerFixture=()=>{
- const f=fixture();let row={...f.n,id:1,estado:'PENDENTE',tentativas:0,proxima_tentativa_em:true},tx=false,readOnly=false;let envios=0;
+const workerFixture=(ambiente='sandbox')=>{
+ const f=fixture();f.n.ambiente=f.p.ambiente=f.pagamentos[0].ambiente=ambiente;let row={...f.n,id:1,estado:'PENDENTE',tentativas:0,proxima_tentativa_em:true},tx=false,readOnly=false;let envios=0;
  const db={getConnection:async()=>({release(){assert.equal(tx,false);},destroy(){tx=false;},query:async({sql},args)=>{
   if(sql.startsWith('SELECT @@'))return [[{tx:0,ac:1}]];
   if(sql.startsWith('SET TRANSACTION'))return [[]];
   if(sql.startsWith('START TRANSACTION')){assert.equal(tx,false);tx=true;readOnly=sql.endsWith('READ ONLY');return [[]];}
   if(sql==='COMMIT'||sql==='ROLLBACK'){tx=false;return [[]];}
-  if(sql.startsWith('SELECT n.*'))return [[...(['PENDENTE','FALHA'].includes(row.estado)&&row.proxima_tentativa_em?[{...row}]:[] )]];
+  if(sql.startsWith('SELECT n.*')){assert.equal(args[0],ambiente);return [[...(['PENDENTE','FALHA'].includes(row.estado)&&row.proxima_tentativa_em?[{...row}]:[] )]];}
   if(sql.startsWith('SELECT id FROM ist_loja_notificacoes'))return [[...(row.estado==='PROCESSANDO'?[{id:1}]:[])]];
   if(sql.startsWith('UPDATE ist_loja_notificacoes SET estado=\'PROCESSANDO\'')){row.estado='PROCESSANDO';row.tentativas++;row.reserva_token=args[0];return [{affectedRows:1,warningStatus:0}];}
   if(sql.startsWith('UPDATE ist_loja_notificacoes SET estado=?')){row.estado=args[0];row.proxima_tentativa_em=args[2];return [{affectedRows:1,warningStatus:0}];}
   assert(readOnly,'Dados do recibo fora de snapshot READ ONLY');return f.c.query(sql,args);
  }})};
- const make=(send,opcoes={})=>criarProcessadorNotificacoes({...opcoes,db,ambiente:'sandbox',origemPublica:'https://localhost:8443',enviar:async m=>{assert.equal(tx,false);envios++;return send?.(m);}});
+ const make=(send,opcoes={})=>criarProcessadorNotificacoes({...opcoes,db,ambiente,origemPublica:'https://localhost:8443',enviar:async m=>{assert.equal(tx,false);envios++;return send?.(m);}});
  return {...f,make,row,envios:()=>envios};
 };
 test('worker real gera recibo completo e nao duplica reprocessamento',async()=>{
@@ -202,4 +202,18 @@ test('descricao editorial JSON do snapshot fica legivel e segura em HTML e texto
 });
 for(const descricao of ['Descrição textual histórica','{JSON inválido',JSON.stringify({desconhecido:'<img src=x onerror=alert(1)>'}),JSON.stringify(['texto'])])test('descricao comum ou JSON nao editorial preservado: '+descricao,async()=>{
  const f=fixture();f.itens[0].descricao_snapshot=descricao;const m=await f.compor();assert(m.text.includes(descricao));assert(!m.html.includes('<img'));
+});
+
+for(const ambiente of ['sandbox','live'])test('agendador de recibos isola ambiente '+ambiente,async()=>{
+ let recebido;const h=iniciarNotificacoesLoja({db:{},env:{NODE_ENV:'production',LOJA_AMBIENTE:ambiente,IST_LOJA_PAYPAL_ENV:ambiente,IST_LOJA_NOTIFICACOES_ATIVAS:'true',IST_LOJA_RECUPERACAO_ORIGEM_PUBLICA:'https://istbrasil.org.br'},criarEnvio:()=>()=>assert.fail('sem envio na inicializacao'),criarProcessador:o=>{recebido=o;return {processar:async()=>({})};},agendar:()=>1,cancelar:()=>{}});
+ assert.equal(h.ativo,true);assert.equal(recebido.ambiente,ambiente);await h.parar();
+});
+test('agendador recusa mistura de ambientes antes de criar transporte',()=>{
+ const h=iniciarNotificacoesLoja({db:{},env:{NODE_ENV:'production',LOJA_AMBIENTE:'live',IST_LOJA_PAYPAL_ENV:'sandbox',IST_LOJA_NOTIFICACOES_ATIVAS:'true'},criarEnvio:()=>assert.fail(),registrar:()=>{}});assert.equal(h.ativo,false);
+});
+
+test('worker Live usa outbox Live, recibo historico e nao reenvia resultado incerto',async()=>{
+ const f=workerFixture('live');const w=f.make(m=>{assert(!m.text.includes('Sandbox'));assert(m.text.includes('Produção'));});
+ assert.equal((await w.processar({limite:1})).enviadas,1);assert.equal((await w.processar()).reservadas,0);assert.equal(f.envios(),1);
+ const g=workerFixture('live'),incerto=g.make(()=>{throw Error('fixture');});assert.equal((await incerto.processar({limite:1})).incertas,1);assert.equal((await incerto.processar()).reservadas,0);assert.equal(g.envios(),1);
 });

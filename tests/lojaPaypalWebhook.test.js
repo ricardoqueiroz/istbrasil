@@ -94,3 +94,14 @@ test('rota Express recebe bytes originais sem servidor HTTP e sem sessao', async
     });
     assert.equal(recebidos, 1);
 });
+
+for(const tipo of ['PAYMENT.CAPTURE.DECLINED','PAYMENT.CAPTURE.DENIED'])test(tipo+' verifica assinatura antes de reconciliar sem confiar em estado do payload',async()=>{
+ let reconciliacoes=0;const m=montar();await processador(m,{async reconciliarWebhook(w){assert.equal(w.tipo,tipo);reconciliacoes++;}})({corpo:corpo(tipo),cabecalhos});assert.equal(reconciliacoes,1);
+ await assert.rejects(processador(montar({status:'FAILURE'}),{async reconciliarWebhook(){assert.fail();}})({corpo:corpo(tipo),cabecalhos}));
+});
+for(const ambiente of ['sandbox','live'])test('webhook '+ambiente+' usa ID e verificador no mesmo ambiente',async()=>{
+ const calls=[],host=ambiente==='live'?'https://api-m.paypal.com':'https://api-m.sandbox.paypal.com';
+ const a=criarPaypalProvider({env:{...env,IST_LOJA_PAYPAL_ENV:ambiente,LOJA_AMBIENTE:ambiente},http:{async request(c){calls.push(c);assert(c.url.startsWith(host+'/'));return c.url.endsWith('/token')?{status:200,data:{access_token:'fixture-token',token_type:'Bearer',expires_in:3600}}:{status:200,data:{verification_status:'SUCCESS'}};}}});
+ assert.equal(await a.verificarWebhook({corpo:corpo().toString(),webhookId:'WH-'+ambiente,cabecalhos:{...cabecalhos,'paypal-cert-url':host+'/v1/notifications/certs/CERT-fixture'}}),true);
+ assert.equal(JSON.parse(calls[1].data).webhook_id,'WH-'+ambiente);
+});

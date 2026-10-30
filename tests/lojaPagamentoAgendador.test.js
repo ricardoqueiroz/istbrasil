@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { iniciarRecuperacaoLoja } from '../src/services/lojaPagamentoAgendador.js';
+import { iniciarRecuperacaoLoja, comporFinanceiroLoja } from '../src/services/lojaPagamentoAgendador.js';
 
 const ambiente = { IST_LOJA_RECUPERACAO_ATIVA: 'true', IST_LOJA_PAYPAL_ENV: 'sandbox',
     IST_LOJA_PAYPAL_CONTA_RECEBEDORA: 'QYR5Z8XDVJNXQ',
@@ -89,4 +89,9 @@ test('falha de composicao ou agendamento nao propaga nem vaza erro', () => {
         const m = montar(extra); assert.equal(m.controle.ativo, false);
         assert.equal(m.logs.length, 1); assert.doesNotMatch(m.logs[0], /fixture-secret/);
     }
+});
+
+for(const tipo of ['sandbox','live'])test('composicao financeira '+tipo+' valida e contexto coerente, sem HTTP',()=>{
+ let config,contexto;const r=comporFinanceiroLoja({db:{getConnection(){}},env:{...ambiente,LOJA_AMBIENTE:tipo,IST_LOJA_PAYPAL_ENV:tipo},criarAdaptador:o=>{config=o.env;return {};},criarServico:o=>{contexto=o.contexto;return {};}});
+ assert.equal(config.IST_LOJA_PAYPAL_ENV,tipo);assert.equal(config.LOJA_AMBIENTE,tipo);assert.equal(contexto.ambiente,tipo);assert(r.service);
 });

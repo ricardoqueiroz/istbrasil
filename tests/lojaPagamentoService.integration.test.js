@@ -25,7 +25,7 @@ const comReconciliacaoTeste = adaptador => ({ ...adaptador,
 // Double em memoria da conexao mysql2. Nao interpreta SQL em um servidor,
 // nao simula locks InnoDB e nao comprova concorrencia real/compatibilidade SQL.
 const montarSemBanco = (opcoes = {}) => {
-    const contextoLocal = opcoes.direitos ? { ...contexto, provedor: 'paypal' } : contexto;
+    const contextoLocal = { ...contexto, ...(opcoes.direitos?{provedor:'paypal'}:{}), ambiente:opcoes.ambiente??contexto.ambiente };
     let instante = Date.parse('2026-10-18T12:00:00.000Z');
     const inicio = '2026-10-18T11:59:00.000Z', fim = '2026-10-18T12:20:00.000Z';
     const pgPublicId = randomUUID(), pedidoPublicId = randomUUID();
@@ -38,7 +38,7 @@ const montarSemBanco = (opcoes = {}) => {
             { id: 2, criada_em: inicio, expira_em: '2026-10-19T11:59:00.000Z', revogada_em: null }],
         ist_loja_pedidos: [{ id: 1, public_id: pedidoPublicId, sessao_id: 1, estado: 'AGUARDANDO_PAGAMENTO',
             comprador_email:'comprador.real@example.invalid',
-            ambiente: 'sandbox', moeda: 'BRL', total_centavos: '19000', versao: 1,
+            ambiente: contextoLocal.ambiente, moeda: 'BRL', total_centavos: '19000', versao: 1,
             criado_em: inicio, atualizado_em: inicio, expira_em: fim, pagamento_confirmado_em: null, motivo_revisao:null }],
         ist_loja_pagamentos: [{ id: 1, public_id: pgPublicId, pedido_id: 1, ...contextoLocal,
             conta_recebedora: contextoLocal.contaRecebedora, estado: 'PENDENTE', reserva_ativa: 1,
@@ -175,7 +175,7 @@ const montarSemBanco = (opcoes = {}) => {
             }
         };
     } };
-    const resultado = (extras = {}) => ({ estado: 'CAPTURADO', referencia: pgPublicId, ambiente: 'sandbox',
+    const resultado = (extras = {}) => ({ estado: 'CAPTURADO', referencia: pgPublicId, ambiente: contextoLocal.ambiente,
         ordemId: 'ORDEMTESTE', capturaId: 'CAPTURATESTE', valorCentavos: '19000', moeda: 'BRL',
         contaRecebedora: contextoLocal.contaRecebedora, capturadoEm: '2026-10-18T12:00:00.000Z', ...extras });
     const chamadas = { reconciliar: [], consultar: 0, capturar: 0, criar: 0 };
@@ -1635,4 +1635,12 @@ test('Fase A MariaDB 10.3.39: transacao financeira compartilhada e direitos',{
         await a.query('UPDATE ist_loja_pagamentos SET reembolsado_centavos=50 WHERE pedido_id=?',[x.pedidoId]);
         await x.reconciliar();const d=await pendente(x);assert.equal(d.pedido.estado,'PAGO');assert.equal(x.sim.chamadas.capturar,1);
     });
+});
+
+test('Live: nucleo financeiro confirma uma vez sem POST adicional e preserva contexto',async()=>{
+ const m=montarSemBanco({ambiente:'live',direitos:true});
+ const a=await m.reconciliar();assert.equal(a.estado,'CAPTURADO');assert.equal(m.pedido().estado,'PAGO');
+ await m.reconciliar();assert.equal(m.chamadas.capturar,0);assert.equal(m.chamadas.criar,0);
+ assert(m.chamadas.reconciliar.every(x=>x.ambiente==='live'));
+ const ns=m.estado.ist_loja_notificacoes;assert.equal(ns.length,1);assert.equal(ns[0].ambiente,'live');
 });

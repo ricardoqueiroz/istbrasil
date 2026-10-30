@@ -37,9 +37,9 @@ const falha = (categoria, envio, conferir = () => {}) => e => {
     assert.equal(e.cause, undefined); assert.equal(e.response, undefined); conferir(r); return true;
 };
 
-test('configuracao aceita apenas Sandbox explicito e nao usa variaveis legadas', () => {
+test('configuracao aceita ambientes explicitos e nao usa variaveis legadas', () => {
     assert.ok(criarPaypalProvider({ env, http: { request() { assert.fail(); } } }));
-    for (const ambiente of ['live', 'production', '', undefined, 'Sandbox']) {
+    for (const ambiente of ['production', '', undefined, 'Sandbox']) {
         assert.throws(() => criarPaypalProvider({ env: { ...env, IST_LOJA_PAYPAL_ENV: ambiente } }), { codigo: 'CONFIGURACAO_INVALIDA' });
     }
     for (const k of ['IST_LOJA_PAYPAL_CLIENT_ID', 'IST_LOJA_PAYPAL_CLIENT_SECRET']) {
@@ -480,4 +480,21 @@ test('adaptador HTTP simulado com nucleo real e MariaDB descartavel', {
         assert.equal(p.captura_externa_id, `ISTCAPTURE${sequencia}`); assert.equal(p.recebido, modo === 'DECLINED' ? '0' : '19000');
         assert.equal(efeitos, modo === 'DECLINED' ? 0 : 1); if (modo === 'DECLINED') assert.equal(p.capturado_em, null);
     });
+});
+
+for(const ambiente of ['sandbox','live'])test('ambiente '+ambiente+': captura, idempotencia e credenciais isoladas sem fallback',async()=>{
+ const host=ambiente==='live'?'https://api-m.paypal.com':HOST,a=args({ambiente}),chamadas=[];let capturado=false;
+ const credentials={...env,LOJA_AMBIENTE:ambiente,IST_LOJA_PAYPAL_ENV:ambiente,IST_LOJA_PAYPAL_CLIENT_ID:'fixture-'+ambiente,IST_LOJA_PAYPAL_CLIENT_SECRET:'secret-'+ambiente};
+ const provider=criarPaypalProvider({env:credentials,http:{async request(c){chamadas.push(c);assert.equal(new URL(c.url).origin,host);
+  if(c.url.endsWith('/token')){assert.equal(c.auth.username,credentials.IST_LOJA_PAYPAL_CLIENT_ID);assert.equal(c.auth.password,credentials.IST_LOJA_PAYPAL_CLIENT_SECRET);return token();}
+  if(c.method==='GET')return {status:200,data:ordem(a,capturado?'COMPLETED':'APPROVED',capturado?captura():null)};
+  assert.equal(c.headers['PayPal-Request-Id'],a.requestId);capturado=true;return {status:201,data:ordem(a,'COMPLETED',captura())};
+ }}});
+ assert.equal((await provider.capturar(a)).estado,'CAPTURADO');assert.equal((await provider.capturar(a)).ambiente,ambiente);
+ assert.equal(chamadas.filter(c=>c.method==='POST'&&!c.url.endsWith('/token')).length,1);
+ await assert.rejects(provider.consultar({...a,ambiente:ambiente==='live'?'sandbox':'live'}));
+ const antes=chamadas.length;await assert.rejects(provider.verificarWebhook({corpo:'{}',webhookId:'WH-FIXTURE',cabecalhos:{'paypal-transmission-id':'T','paypal-transmission-time':'2026-10-18T12:00:00Z','paypal-transmission-sig':'S','paypal-auth-algo':'SHA256withRSA','paypal-cert-url':(ambiente==='live'?HOST:'https://api-m.paypal.com')+'/v1/notifications/certs/CERT'}}));assert.equal(chamadas.length,antes);
+});
+test('ambientes divergentes sao rejeitados antes de HTTP e nao usam credenciais legadas',()=>{
+ for(const ambiente of ['sandbox','live'])assert.throws(()=>criarPaypalProvider({env:{...env,IST_LOJA_PAYPAL_ENV:ambiente,LOJA_AMBIENTE:ambiente==='live'?'sandbox':'live'},http:{request(){assert.fail();}}}),{codigo:'CONFIGURACAO_INVALIDA'});
 });

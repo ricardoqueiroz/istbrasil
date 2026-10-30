@@ -4,11 +4,10 @@ import { projetarRecursoAdversoPaypal, idAdverso } from '../lojaPagamentoAdverso
 import { centavosPagamento, criarFalhaPagamento, classificarFalhaPagamento, erroPagamento, idExterno,
     instantePagamento, normalizarResultadoPagamento, normalizarReconciliacaoPagamento, uuidPagamento } from '../lojaPagamentoContratos.js';
 
-const HOST = 'https://api-m.sandbox.paypal.com';
-// Somente metadados HATEOAS: nao configura nem altera o destino REST.
-const ORIGENS_HATEOAS_SANDBOX = Object.freeze([
-    'https://api-m.sandbox.paypal.com', 'https://api.sandbox.paypal.com'
-]);
+const ORIGENS_PAYPAL = Object.freeze({
+    sandbox: Object.freeze(['https://api-m.sandbox.paypal.com', 'https://api.sandbox.paypal.com']),
+    live: Object.freeze(['https://api-m.paypal.com', 'https://api.paypal.com'])
+});
 const ordemValida = v => typeof v === 'string' && /^[A-Z0-9]{1,36}$/.test(v);
 const recebedorValido = v => typeof v === 'string' && /^[2-9A-HJ-NP-Z]{13}$/.test(v);
 const objeto = v => v !== null && typeof v === 'object' && Object.getPrototypeOf(v) === Object.prototype;
@@ -29,7 +28,7 @@ const lerInstante = v => {
 };
 
 // Projecao diagnostica de Payments v2. Nao e resultado financeiro do contrato IST.
-const diagnosticoCaptura = d => {
+const diagnosticoCaptura = (d, origensPermitidas) => {
     if (!objeto(d)) falhar('RESPOSTA_INVALIDA', 'ENVIADO');
     let respostaInvalida = false;
     const lerOpcional = (valor, validar) => {
@@ -77,7 +76,7 @@ const diagnosticoCaptura = d => {
             const u = new URL(l.href);
             const ordem = /^\/v2\/checkout\/orders\/([A-Z0-9]{1,36})$/.exec(u.pathname);
             const autorizacao = /^\/v2\/payments\/authorizations\/([A-Z0-9]{1,36})$/.test(u.pathname);
-            const origemPermitida = ORIGENS_HATEOAS_SANDBOX.includes(u.origin);
+            const origemPermitida = origensPermitidas.includes(u.origin);
             const representacaoCanonica = origemPermitida && l.href === `${u.origin}${u.pathname}`;
             diagnostico.protocolo = ['https:', 'http:'].includes(u.protocol) ? u.protocol : 'DESCONHECIDO';
             diagnostico.hostname = u.hostname.length <= 253 && /^[a-z0-9.\-\[\]:]+$/.test(u.hostname) ? u.hostname : null;
@@ -128,10 +127,11 @@ export const criarPaypalProvider = ({ env = process.env, http = axios.create(), 
     const ambiente = env?.IST_LOJA_PAYPAL_ENV;
     const clientId = env?.IST_LOJA_PAYPAL_CLIENT_ID;
     const clientSecret = env?.IST_LOJA_PAYPAL_CLIENT_SECRET;
-    if (ambiente !== 'sandbox' || typeof clientId !== 'string' || !/^[A-Za-z0-9_-]{1,2048}$/.test(clientId)
+    if (!Object.hasOwn(ORIGENS_PAYPAL, ambiente) || (env.LOJA_AMBIENTE !== undefined && env.LOJA_AMBIENTE !== ambiente) || typeof clientId !== 'string' || !/^[A-Za-z0-9_-]{1,2048}$/.test(clientId)
         || typeof clientSecret !== 'string' || !/^[\x21-\x7e]{1,4096}$/.test(clientSecret)
         || typeof http?.request !== 'function' || typeof agora !== 'function'
         || !Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 60000) throw erroPagamento('CONFIGURACAO_INVALIDA');
+    const HOST = ORIGENS_PAYPAL[ambiente][0], origensHateoas = ORIGENS_PAYPAL[ambiente], ambienteConfigurado = ambiente;
     let token = null, validoAte = 0, renovacao = null;
 
     const requisitar = config => http.request({ ...config, url: `${HOST}${config.url}`,
@@ -164,7 +164,7 @@ export const criarPaypalProvider = ({ env = process.env, http = axios.create(), 
     };
     const validar = (args, metodo) => {
         try {
-            if (!objeto(args) || args.ambiente !== 'sandbox' || !recebedorValido(args.contaRecebedora)
+            if (!objeto(args) || args.ambiente !== ambienteConfigurado || !recebedorValido(args.contaRecebedora)
                 || args.moeda !== 'BRL' || (args.signal && typeof args.signal.addEventListener !== 'function')) throw new Error();
             uuidPagamento(args.referencia);
             const valorCentavos = centavosPagamento(args.valorCentavos);
@@ -173,12 +173,12 @@ export const criarPaypalProvider = ({ env = process.env, http = axios.create(), 
             if (metodo === 'capturar' && !ordemValida(args.ordemId)) throw new Error();
             if (args.ordemId != null && !ordemValida(args.ordemId)) throw new Error();
             if (args.capturaId != null && !ordemValida(args.capturaId)) throw new Error();
-            return { referencia: args.referencia, ambiente: 'sandbox', valorCentavos, moeda: args.moeda,
+            return { referencia: args.referencia, ambiente: ambienteConfigurado, valorCentavos, moeda: args.moeda,
                 contaRecebedora: args.contaRecebedora, ordemId: args.ordemId ?? null, capturaId: args.capturaId ?? null,
                 requestId: args.requestId, signal: args.signal };
         } catch { falhar('VALIDACAO_LOCAL', 'NAO_ENVIADO'); }
     };
-    const parcial = a => ({ estado: 'DESCONHECIDO', referencia: a.referencia, ambiente: 'sandbox',
+    const parcial = a => ({ estado: 'DESCONHECIDO', referencia: a.referencia, ambiente: ambienteConfigurado,
         ordemId: a.ordemId, capturaId: null, valorCentavos: null, moeda: null, contaRecebedora: null, capturadoEm: null });
 
     // Projeta somente fatos permitidos; nunca retorna payer, payment_source, links ou payload bruto.
@@ -348,7 +348,7 @@ export const criarPaypalProvider = ({ env = process.env, http = axios.create(), 
         }
         const c = await lerRecursoReconciliacao(a, `/v2/payments/captures/${capturaId}`);
         if (!c) return concluir();
-        const diag = diagnosticoCaptura(c);
+        const diag = diagnosticoCaptura(c, origensHateoas);
         obs.statusCaptura = diag.statusFinanceiro;
         obs.motivoPendencia = diag.motivoPendencia;
         if (diag.capturaId !== capturaId) return contradicao(diag.capturaId ? 'DIVERGENTE' : 'INVALIDA');
@@ -445,14 +445,14 @@ export const criarPaypalProvider = ({ env = process.env, http = axios.create(), 
                     if(d?.status===429||d?.status>=500)throw erroDescoberta('D9_DESCOBERTA_TRANSITORIA');
                     if(d?.status!==200||d.data?.dispute_id!==item.dispute_id)throw erroDescoberta('D9_DESCOBERTA_CONTRATO');raw=d.data;
                 }
-                const o=observarRecursoPaypal(fonte,raw);if(o)observacoes.push(o);
+                const o=observarRecursoPaypal(fonte,raw,ambienteConfigurado);if(o)observacoes.push(o);
             }
             return {observacoes,proxima};
         },
         // D8: GETs fixos; resposta projetada sem dados pessoais. Sem efeito financeiro.
         async consultarEvidenciaAdversa({ tipo, recursoId, ambiente, signal } = {}) {
             const caminhos = { REEMBOLSO: '/v2/payments/refunds/', DISPUTA: '/v1/customer/disputes/', CAPTURA: '/v2/payments/captures/' };
-            if (!Object.hasOwn(caminhos, tipo) || ambiente !== 'sandbox' || !idAdverso(recursoId)
+            if (!Object.hasOwn(caminhos, tipo) || ambiente !== ambienteConfigurado || !idAdverso(recursoId)
                 || (signal && typeof signal.addEventListener !== 'function')) falhar('VALIDACAO_LOCAL', 'NAO_ENVIADO');
             if (signal?.aborted) falhar('INFRAESTRUTURA', 'NAO_ENVIADO');
             const acesso = await obterToken();
@@ -467,7 +467,7 @@ export const criarPaypalProvider = ({ env = process.env, http = axios.create(), 
             }
             if (resposta?.status === 404 || (resposta?.status >= 400 && resposta?.status < 500 && resposta?.status !== 429)) falhar('RESPOSTA_INVALIDA','ENVIADO');
             if (resposta?.status !== 200) falhar('INFRAESTRUTURA', 'ENVIADO');
-            try { return projetarRecursoAdversoPaypal(tipo, resposta.data); }
+            try { return projetarRecursoAdversoPaypal(tipo, resposta.data,ambienteConfigurado); }
             catch { falhar('RESPOSTA_INVALIDA', 'ENVIADO'); }
         },
         async verificarWebhook({ corpo, cabecalhos, webhookId } = {}) {
@@ -482,7 +482,7 @@ export const criarPaypalProvider = ({ env = process.env, http = axios.create(), 
                 if (!objeto(JSON.parse(corpo)) || cabecalhos['paypal-auth-algo'] !== 'SHA256withRSA'
                     || !Number.isFinite(Date.parse(cabecalhos['paypal-transmission-time']))) throw new Error();
                 const cert = new URL(cabecalhos['paypal-cert-url']);
-                if (cert.protocol !== 'https:' || !['api.sandbox.paypal.com', 'api-m.sandbox.paypal.com'].includes(cert.hostname)
+                if (cert.protocol !== 'https:' || !origensHateoas.some(o=>new URL(o).hostname===cert.hostname)
                     || cert.username || cert.password || cert.port || cert.search || cert.hash
                     || !/^\/v1\/notifications\/certs\/[A-Za-z0-9-]+$/.test(cert.pathname)
                     || cert.href !== cabecalhos['paypal-cert-url']) throw new Error();
@@ -511,7 +511,7 @@ export const criarPaypalProvider = ({ env = process.env, http = axios.create(), 
         // Leitura auxiliar: sem normalizar para CAPTURADO/PAGO, sem consultar banco
         // e sem criar operacao financeira. OAuth compartilha cache e single-flight.
         async consultarCaptura({ capturaId, ambiente, signal } = {}) {
-            if (ambiente !== 'sandbox' || !ordemValida(capturaId) || (signal && typeof signal.addEventListener !== 'function')) {
+            if (ambiente !== ambienteConfigurado || !ordemValida(capturaId) || (signal && typeof signal.addEventListener !== 'function')) {
                 falhar('VALIDACAO_LOCAL', 'NAO_ENVIADO');
             }
             if (signal?.aborted) falhar('INFRAESTRUTURA', 'NAO_ENVIADO');
@@ -526,7 +526,7 @@ export const criarPaypalProvider = ({ env = process.env, http = axios.create(), 
                 else falhar(e?.code === 'ERR_BAD_RESPONSE' || e instanceof SyntaxError ? 'RESPOSTA_INVALIDA' : 'INFRAESTRUTURA', 'INDETERMINADO');
             }
             const d = resposta?.data;
-            if (resposta?.status === 200) return diagnosticoCaptura(d);
+            if (resposta?.status === 200) return diagnosticoCaptura(d, origensHateoas);
             if (resposta?.status === 404 && d?.name === 'RESOURCE_NOT_FOUND') return { recursoDisponivel: false };
             if (d?.name === 'AUTHENTICATION_FAILURE' || ['invalid_client', 'invalid_token'].includes(d?.error)) {
                 if (token === acesso) { token = null; validoAte = 0; }

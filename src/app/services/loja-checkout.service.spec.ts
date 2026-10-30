@@ -1,3 +1,4 @@
+import { urlSdkPayPal } from './loja-checkout.service';
 import { provideHttpClient } from '@angular/common/http';
 import { provideHttpClientTesting, HttpTestingController } from '@angular/common/http/testing';
 import { TestBed, fakeAsync, tick, flushMicrotasks } from '@angular/core/testing';
@@ -52,9 +53,9 @@ describe('Checkout da Loja', () => {
         r.flush(dto('AGUARDANDO_APROVACAO')); await micro(); return { p };
     };
     it('nao carrega SDK nem inicia HTTP ao ser importado ou instanciado', () => { expect(carregar).not.toHaveBeenCalled(); expect(service.ocupado()).toBeFalse(); });
-    it('rejeita estado Live sem carregar SDK ou apresentar confirmacao Sandbox', async () => {
+    it('rejeita ambiente desconhecido sem carregar SDK', async () => {
         const p = service.preparar(id); await sessao();
-        http.expectOne('/api/loja/checkout/estado').flush({ ...dto('CAPTURADO'), ambiente: 'live' }); await p;
+        http.expectOne('/api/loja/checkout/estado').flush({ ...dto('CAPTURADO'), ambiente: 'invalido' }); await p;
         expect(service.estado()).toBeNull(); expect(service.confirmado()).toBeFalse();
         expect(carregar).not.toHaveBeenCalled(); http.expectNone('/api/loja/checkout/configuracao');
     });
@@ -63,6 +64,17 @@ describe('Checkout da Loja', () => {
         http.expectOne('/api/loja/checkout/estado').flush(dto()); await micro();
         http.expectOne('/api/loja/checkout/configuracao').flush({ ambiente: 'live', clientId: 'public-id' }); await p;
         expect(service.estado()).toBeNull(); expect(service.pronto()).toBeFalse(); expect(carregar).not.toHaveBeenCalled();
+    });
+    it('prepara Live somente com contrato backend consistente e client ID publico',async()=>{
+        const p=service.preparar(id);await sessao();
+        http.expectOne('/api/loja/checkout/estado').flush({...dto(),ambiente:'live'});await micro();
+        http.expectOne('/api/loja/checkout/configuracao').flush({ambiente:'live',clientId:'fixture-live-public'});await p;
+        expect(carregar).toHaveBeenCalledOnceWith('live');expect(service.pronto()).toBeTrue();
+    });
+    it('rejeita configuracao com campos privados antes de carregar SDK',async()=>{
+        const p=service.preparar(id);await sessao();http.expectOne('/api/loja/checkout/estado').flush(dto());await micro();
+        http.expectOne('/api/loja/checkout/configuracao').flush({ambiente:'sandbox',clientId:'public-id',clientSecret:'fixture-private'});await p;
+        expect(carregar).not.toHaveBeenCalled();expect(service.pronto()).toBeFalse();
     });
     it('prepara sem criar ordem, guarda apenas UUIDs e validade da sessao', async () => {
         await preparar(); expect(service.pronto()).toBeTrue();
@@ -220,7 +232,7 @@ describe('Checkout da Loja', () => {
         const e=dto('CAPTURADO');
         if(campo==='pedido')e.pedido={...e.pedido,publicId:pedidoB};
         if(campo==='pagamento')e.pagamento!.pedidoPublicId=pedidoB;
-        if(campo==='ambiente')e.ambiente='live';
+        if(campo==='ambiente')e.ambiente='invalido' as 'live';
         if(campo==='valor')e.pagamento!.valorCentavos++;
         if(campo==='moeda')e.pagamento!.moeda='USD' as 'BRL';
         if(campo==='data')e.pagamento!.pagamentoConfirmadoEm='invalida';
@@ -309,7 +321,7 @@ describe('Checkout da Loja', () => {
         await preparar();const original=dados.get(CHECKOUT_STORAGE_KEY);const p=service.consultarAnterior();await sessao();const e=continuidadeDto('APROVADO');
         if(campo==='pedido')e.pedido={...e.pedido,publicId:pedidoB};
         if(campo==='pagamento')e.pagamento!.pedidoPublicId=pedidoB;
-        if(campo==='ambiente')e.ambiente='live';
+        if(campo==='ambiente')e.ambiente='invalido' as 'live';
         if(campo==='valor')e.pagamento!.valorCentavos++;
         if(campo==='moeda')e.pagamento!.moeda='USD' as 'BRL';
         http.expectOne('/api/loja/checkout/estado').flush(e);expect(await p).toBeNull();expect(dados.get(CHECKOUT_STORAGE_KEY)).toBe(original);
@@ -334,4 +346,28 @@ describe('Checkout da Loja', () => {
         http.expectOne('/api/loja/checkout/estado').flush(e);expect(await p).toBeNull();expect(dados.get(CHECKOUT_STORAGE_KEY)).toBe(original);
     });
 
+});
+
+describe('SDK PayPal por ambiente',()=>{
+ it('usa somente os dois destinos oficiais',()=>{
+  expect(urlSdkPayPal('sandbox')).toBe('https://www.sandbox.paypal.com/web-sdk/v6/core');
+  expect(urlSdkPayPal('live')).toBe('https://www.paypal.com/web-sdk/v6/core');
+  expect(()=>urlSdkPayPal('outro' as any)).toThrow();
+ });
+});
+
+describe('Carregador SDK real com DOM simulado, sem rede',()=>{
+ let anterior: any;
+ beforeEach(()=>{anterior=(window as any).paypal;delete (window as any).paypal;TestBed.configureTestingModule({});});
+ afterEach(()=>{if(anterior===undefined)delete (window as any).paypal;else (window as any).paypal=anterior;});
+ for(const ambiente of ['sandbox','live'] as const)it('carrega '+ambiente+' e rejeita mistura na mesma pagina',async()=>{
+  const scripts:HTMLScriptElement[]=[];spyOn(document.head,'appendChild').and.callFake((n:any)=>{scripts.push(n);return n;});
+  const carregar=TestBed.inject(CARREGAR_PAYPAL_V6),p=carregar(ambiente);expect(scripts.length).toBe(1);expect(scripts[0].src).toBe(urlSdkPayPal(ambiente));
+  (window as any).paypal={createInstance:()=>Promise.resolve({})};scripts[0].onload!(new Event('load'));await p;
+  await carregar(ambiente);expect(scripts.length).toBe(1);
+  await expectAsync(carregar(ambiente==='live'?'sandbox':'live')).toBeRejected();expect(scripts.length).toBe(1);
+ });
+ it('nao reutiliza SDK legado ou global preexistente',async()=>{
+  (window as any).paypal={Buttons:()=>({})};const append=spyOn(document.head,'appendChild');await expectAsync(TestBed.inject(CARREGAR_PAYPAL_V6)('live')).toBeRejected();expect(append).not.toHaveBeenCalled();
+ });
 });

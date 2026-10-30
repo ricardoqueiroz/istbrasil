@@ -28,7 +28,7 @@ test('68.2 configuracao desativada nao cria transporte, timer, SQL ou PayPal Liv
     for(const flag of [undefined,'false','TRUE','1'])assert.equal(iniciarNotificacoesLoja({db,
         env:{NODE_ENV:'production',IST_LOJA_NOTIFICACOES_ATIVAS:flag},criarEnvio:proibido,agendar:proibido}).ativo,false);
     assert.equal(iniciarNotificacoesLoja({db,env:{NODE_ENV:'test',IST_LOJA_NOTIFICACOES_ATIVAS:'true'},criarEnvio:proibido,agendar:proibido}).ativo,false);
-    assert.throws(()=>criarProcessadorNotificacoes({db,enviar:proibido,ambiente:'live'}));
+    assert.throws(()=>criarProcessadorNotificacoes({db,enviar:proibido,ambiente:'invalido'}));
 });
 
 test('68.3 reserva usa UUID publico persistido, envia fora da transacao e nao escreve financeiro',async()=>{

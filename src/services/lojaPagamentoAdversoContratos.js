@@ -36,7 +36,8 @@ export const projetarDetalhesDisputaPaypal = d => {
         identidadeEconomica:'NAO_COMPROVADA'
     };
 };
-export const projetarRecursoAdversoPaypal = (tipo, d) => {
+export const projetarRecursoAdversoPaypal = (tipo, d, ambiente = 'sandbox') => {
+    if (!['sandbox','live'].includes(ambiente)) throw Error('RECURSO_INVALIDO');
     if (!d || typeof d !== 'object' || Array.isArray(d)) throw Error('RECURSO_INVALIDO');
     const recursoId = tipo === 'DISPUTA' ? d.dispute_id : d.id;
     const r = { tipo, recursoId: idAdverso(recursoId) ? recursoId : null, estado: codigo(d.status),
@@ -46,8 +47,9 @@ export const projetarRecursoAdversoPaypal = (tipo, d) => {
         let vinculoInvalido = !Array.isArray(links) || links.length > 10;
         for (const l of (Array.isArray(links) ? links.slice(0, 10) : [])) if (l?.rel === 'up') {
             const m = l.method === 'GET' && typeof l.href === 'string'
-                && /^https:\/\/(?:api-m\.sandbox\.paypal\.com|api\.sandbox\.paypal\.com)\/v2\/payments\/captures\/([A-Za-z0-9-]{1,128})$/.exec(l.href);
-            if (!m) vinculoInvalido = true; else ids.push(m[1]);
+                && /^https:\/\/([^/]+)\/v2\/payments\/captures\/([A-Za-z0-9-]{1,128})$/.exec(l.href);
+            const hosts=ambiente==='live'?['api-m.paypal.com','api.paypal.com']:['api-m.sandbox.paypal.com','api.sandbox.paypal.com'];
+            if (!m || !hosts.includes(m[1])) vinculoInvalido = true; else ids.push(m[2]);
         }
         const unicos = [...new Set(ids)];
         return { ...r, capturaId: !vinculoInvalido && unicos.length === 1 ? unicos[0] : null, vinculoInvalido };

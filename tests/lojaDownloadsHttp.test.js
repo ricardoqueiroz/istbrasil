@@ -165,3 +165,9 @@ test('B2 controller aceita filtro publico sem servidor e preserva ausencia do fi
     await assert.rejects(c.listar({query:{pedidoId:'1'}},res),{codigo:'SOLICITACAO_INVALIDA'});
     assert.equal(chamadas.length,2);
 });
+
+test('composicao HTTP Live usa contexto do servidor e rejeita configuracao misturada',async t=>{
+ const env={IST_LOJA_PAYPAL_ENV:'live',LOJA_AMBIENTE:'live',IST_LOJA_PAYPAL_CONTA_RECEBEDORA:'QYR5Z8XDVJNXQ'};
+ const f=await fixture(t,{opcoes:{contextoEsperado:undefined,env}});assert.equal((await f.enviar('/direitos')).status,200);
+ const g=await fixture(t,{opcoes:{contextoEsperado:undefined,env:{...env,LOJA_AMBIENTE:'sandbox'}}});assert.equal((await g.enviar('/direitos')).status,503);
+});

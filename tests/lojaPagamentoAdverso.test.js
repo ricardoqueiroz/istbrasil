@@ -1,3 +1,4 @@
+import { projetarRecursoAdversoPaypal as projetarPorAmbiente } from '../src/services/lojaPagamentoAdversoContratos.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { criarPaypalProvider } from '../src/services/pagamentos/paypalProvider.js';
@@ -70,4 +71,10 @@ test('contrato persistido rejeita contexto, captura, moeda e valor contraditorio
     assert.equal(validarEvidenciaAdversa(f,pg,ctx),f);
     for(const extras of [{contexto:{...ctx,ambiente:'live'}},{capturaId:'OUTRA'},{moeda:'USD'},{valorCentavos:'0'},
         {valorCentavos:'9007199254740992'},{hashOrigem:null},{tipo:'CAPTURA'}])assert.throws(()=>validarEvidenciaAdversa({...f,...extras},pg,ctx));
+});
+
+for(const ambiente of ['sandbox','live'])test('reembolso '+ambiente+' rejeita vinculo do ambiente oposto',()=>{
+ const host=ambiente==='live'?'api-m.paypal.com':'api-m.sandbox.paypal.com';
+ const d={id:'REFUND1',status:'COMPLETED',amount:{currency_code:'BRL',value:'95.00'},links:[{rel:'up',method:'GET',href:'https://'+host+'/v2/payments/captures/CAPTURE1'}]};
+ assert.equal(projetarPorAmbiente('REEMBOLSO',d,ambiente).capturaId,'CAPTURE1');assert.equal(projetarPorAmbiente('REEMBOLSO',d,ambiente==='live'?'sandbox':'live').vinculoInvalido,true);
 });

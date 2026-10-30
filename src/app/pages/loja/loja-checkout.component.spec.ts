@@ -49,11 +49,11 @@ describe('LojaCheckoutComponent', () => {
         expect(f.nativeElement.textContent).not.toContain('Pagamento confirmado.');
         expect(f.nativeElement.querySelector('a')).toBeNull();
     });
-    it('ambiente Live nao recebe identificacao Sandbox nem sucesso', () => {
+    it('ambiente Live confirmado nao recebe identificacao Sandbox', () => {
         const f = montar('CAPTURADO', true), service = TestBed.inject(LojaCheckoutService);
         service.estado.update(e => ({ ...e!, ambiente: 'live' })); f.detectChanges();
         expect(f.nativeElement.textContent).not.toContain('Homologação — PayPal Sandbox');
-        expect(f.nativeElement.textContent).not.toContain('Pagamento confirmado.');
+        expect(f.nativeElement.textContent).toContain('Pagamento confirmado.');
     });
     it('B5 apresenta verificacao explicita sem preparar ou pagar automaticamente', () => {
         const service=TestBed.inject(LojaCheckoutService);

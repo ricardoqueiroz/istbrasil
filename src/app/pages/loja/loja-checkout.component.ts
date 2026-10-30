@@ -46,7 +46,7 @@ import { CheckoutEstado, LojaCheckoutService } from '../../services/loja-checkou
                         } @else if (checkout.estado()?.pagamento?.estado === 'APROVADO') {
                             <p-button label="Concluir captura autorizada" [disabled]="checkout.ocupado()" (onClick)="checkout.concluirCaptura()" />
                         } @else if (podePagar()) {
-                            <p-button label="Pagar com PayPal Sandbox" [disabled]="checkout.ocupado()" (onClick)="checkout.pagar()" />
+                            <p-button [label]="estadoAtual()?.ambiente === 'sandbox' ? 'Pagar com PayPal Sandbox' : 'Pagar com PayPal'" [disabled]="checkout.ocupado()" (onClick)="checkout.pagar()" />
                         }
                         @if (checkout.confirmado() && !checkout.bibliotecaLiberada() && !checkout.acompanhamento()) {
                             <p-button label="Retomar acompanhamento" [outlined]="true"

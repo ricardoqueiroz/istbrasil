@@ -20,7 +20,7 @@ export const criarProcessadorWebhookPayPal = ({ obterFinanceiro, obterWebhookId 
     try { evento = JSON.parse(texto); } catch { throw erro(400, 'WEBHOOK_INVALIDO'); }
     if (!evento || typeof evento.id !== 'string' || !/^[A-Za-z0-9-]{1,128}$/.test(evento.id)
         || typeof evento.event_type !== 'string' || !/^[A-Z0-9_.]{1,128}$/.test(evento.event_type)) throw erro(400, 'WEBHOOK_INVALIDO');
-    if (!['PAYMENT.CAPTURE.COMPLETED', 'PAYMENT.CAPTURE.PENDING', 'PAYMENT.CAPTURE.DENIED'].includes(evento.event_type)) {
+    if (!['PAYMENT.CAPTURE.COMPLETED', 'PAYMENT.CAPTURE.PENDING', 'PAYMENT.CAPTURE.DENIED', 'PAYMENT.CAPTURE.DECLINED'].includes(evento.event_type)) {
         try { await financeiro.service.receberEventoAdverso({ evento, corpo }); }
         catch { throw erro(503, 'WEBHOOK_PERSISTENCIA_PENDENTE'); }
         return;

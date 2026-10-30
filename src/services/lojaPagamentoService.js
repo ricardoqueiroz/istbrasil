@@ -444,7 +444,7 @@ export const criarLojaPagamentoService = ({ db, adaptador, contexto, agora = () 
     };
     // Chamador interno deve verificar assinatura antes de fornecer esta projecao.
     const reconciliarWebhook = async w => {
-        if (!w || !idExterno(w.eventoId) || !['PAYMENT.CAPTURE.COMPLETED', 'PAYMENT.CAPTURE.PENDING', 'PAYMENT.CAPTURE.DENIED'].includes(w.tipo)
+        if (!w || !idExterno(w.eventoId) || !['PAYMENT.CAPTURE.COMPLETED', 'PAYMENT.CAPTURE.PENDING', 'PAYMENT.CAPTURE.DENIED', 'PAYMENT.CAPTURE.DECLINED'].includes(w.tipo)
             || !Buffer.isBuffer(w.hash) || w.hash.length !== 32 || (!w.ordemId && !w.capturaId)
             || (w.ordemId !== null && !idExterno(w.ordemId)) || (w.capturaId !== null && !idExterno(w.capturaId))) falhar('SOLICITACAO_INVALIDA');
         if (typeof adaptador.reconciliar !== 'function') falhar('CONFIGURACAO_INVALIDA');
@@ -502,7 +502,7 @@ export const criarLojaPagamentoService = ({ db, adaptador, contexto, agora = () 
         if (!original || !idExterno(original.id) || typeof original.event_type !== 'string'
             || !/^[A-Z0-9_.]{1,128}$/.test(original.event_type) || evento?.id !== original.id
             || evento?.event_type !== original.event_type
-            || ['PAYMENT.CAPTURE.COMPLETED','PAYMENT.CAPTURE.PENDING','PAYMENT.CAPTURE.DENIED'].includes(original.event_type)) falhar('SOLICITACAO_INVALIDA');
+            || ['PAYMENT.CAPTURE.COMPLETED','PAYMENT.CAPTURE.PENDING','PAYMENT.CAPTURE.DENIED', 'PAYMENT.CAPTURE.DECLINED'].includes(original.event_type)) falhar('SOLICITACAO_INVALIDA');
         return persistencia.receberEventoAdverso(contexto, normalizarEventoAdversoPaypal(original, corpo));
     };
     const { reconciliarEventoAdverso } = criarLojaPagamentoAdversoService({ db, adaptador, contexto, agora });

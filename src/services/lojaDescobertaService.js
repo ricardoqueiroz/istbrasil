@@ -8,7 +8,7 @@ const proj=datas.map(k=>`DATE_FORMAT(${k},'%Y-%m-%dT%H:%i:%s.%fZ') ${k}_iso`).jo
 export const criarLojaDescobertaService=({db,adaptador,contexto,desde,agora=()=>new Date()}={})=>{
     const inicial=isoDescoberta(desde);
     if(!db?.getConnection||typeof adaptador?.listarObservacoesAdversas!=='function'||!inicial
-        ||contexto?.provedor!=='paypal'||contexto.ambiente!=='sandbox'||!contexto.contaRecebedora)throw erro('D9_DESCOBERTA_CONFIGURACAO');
+        ||contexto?.provedor!=='paypal'||!['sandbox','live'].includes(contexto.ambiente)||!contexto.contaRecebedora)throw erro('D9_DESCOBERTA_CONFIGURACAO');
     const ctx=[contexto.provedor,contexto.ambiente,contexto.contaRecebedora];
     const confiavel=Object.freeze({provedor:contexto.provedor,ambiente:contexto.ambiente,contaRecebedora:contexto.contaRecebedora});
     const sql=v=>sqlUtcPagamento(v),hoje=()=>agora().toISOString();

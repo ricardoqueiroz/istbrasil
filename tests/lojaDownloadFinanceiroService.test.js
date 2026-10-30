@@ -227,3 +227,10 @@ test('avaliador em MariaDB descartavel: SQL real, somente leitura e integridade'
     });
     t.diagnostic(`Avaliador somente SELECT homologado em ${versao}; nenhum pedido real ou PDF acessado.`);
 });
+
+test('Live exige captura integral consistente e bloqueia resultado Sandbox',async()=>{
+ const b=base();b.p.ambiente=b.pagamentos[0].ambiente=b.r.ambiente='live';b.ops[0].resultado_json=JSON.stringify(b.r);
+ const esperado={...ctx,ambiente:'live'};assert.equal((await avaliar(banco(b),1,esperado)).elegivel,true);
+ b.ops[0].resultado_json=JSON.stringify({...b.r,ambiente:'sandbox'});assert.equal((await avaliar(banco(b),1,esperado)).elegivel,false);
+ b.ops[0].resultado_json=JSON.stringify({...b.r,valorCentavos:'99'});assert.equal((await avaliar(banco(b),1,esperado)).elegivel,false);
+});

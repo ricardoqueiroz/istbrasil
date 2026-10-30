@@ -13,10 +13,10 @@ export const iniciarNotificacoesLoja=({db,env=process.env,agendar=setInterval,ca
     if(ativos.has(db))return ativos.get(db);
     let timer,emCurso=null,encerrado=false,controle,parada;
     try{
-        if(!['production','development'].includes(env.NODE_ENV)||env.LOJA_AMBIENTE!=='sandbox'
-            ||env.IST_LOJA_PAYPAL_ENV!=='sandbox')throw Error();
+        if(!['production','development'].includes(env.NODE_ENV)||!['sandbox','live'].includes(env.LOJA_AMBIENTE)
+            ||env.IST_LOJA_PAYPAL_ENV!==env.LOJA_AMBIENTE)throw Error();
         const enviar=criarEnvio({env,classificarNaoAceito:true});
-        const worker=criarProcessador({db,enviar,ambiente:'sandbox',origemPublica:env.IST_LOJA_RECUPERACAO_ORIGEM_PUBLICA});
+        const worker=criarProcessador({db,enviar,ambiente:env.LOJA_AMBIENTE,origemPublica:env.IST_LOJA_RECUPERACAO_ORIGEM_PUBLICA});
         const ciclo=()=>{
             if(encerrado||emCurso)return;
             controle=new AbortController();

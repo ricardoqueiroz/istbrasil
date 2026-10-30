@@ -10,7 +10,8 @@ const referenciaRelatorio=v=>typeof v==='string'&&/^[A-Za-z0-9_-]{1,24}$/.test(v
 const sha=v=>createHash('sha256').update(v).digest('hex');
 
 // Origem API, nao e evento WEBHOOK nem assinatura/verificacao de corpo original.
-export const observarRecursoPaypal=(fonte,raw)=>{
+export const observarRecursoPaypal=(fonte,raw,ambiente='sandbox')=>{
+    if(!['sandbox','live'].includes(ambiente))throw erroDescoberta('D9_DESCOBERTA_CONFIGURACAO');
     let recurso=null,tipoRecurso=null,notificacaoId=null,relatorio=null;
     if(fonte==='NOTIFICACOES'){
         if(!idAdverso(raw?.id)||typeof raw.event_type!=='string')throw erroDescoberta('D9_DESCOBERTA_CONTRATO');
@@ -18,10 +19,10 @@ export const observarRecursoPaypal=(fonte,raw)=>{
         if(raw.event_type==='PAYMENT.CAPTURE.REFUNDED'&&raw.resource_type==='refund'&&raw.resource_version==='2.0')tipoRecurso='REEMBOLSO';
         else if(['CUSTOMER.DISPUTE.CREATED','CUSTOMER.DISPUTE.UPDATED','CUSTOMER.DISPUTE.RESOLVED'].includes(raw.event_type))tipoRecurso='DISPUTA';
         else if(!['PAYMENT.CAPTURE.REVERSED','PAYMENT.CAPTURE.REFUNDED'].includes(raw.event_type))return null;
-        if(tipoRecurso)recurso=projetarRecursoAdversoPaypal(tipoRecurso,raw.resource);
+        if(tipoRecurso)recurso=projetarRecursoAdversoPaypal(tipoRecurso,raw.resource,ambiente);
         else relatorio={notificacaoTipo:raw.event_type};
     }else if(fonte==='DISPUTAS'){
-        tipoRecurso='DISPUTA';recurso=projetarRecursoAdversoPaypal('DISPUTA',raw);
+        tipoRecurso='DISPUTA';recurso=projetarRecursoAdversoPaypal('DISPUTA',raw,ambiente);
     }else if(fonte==='TRANSACOES'){
         const r=raw?.transaction_info;
         if(!r||!idRelatorio(r.transaction_id))throw erroDescoberta('D9_DESCOBERTA_CONTRATO');

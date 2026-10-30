@@ -14,12 +14,12 @@ export const criarLojaCheckoutRouter = ({ obterFinanceiro, env = process.env, se
     router.use(protecao.protegerEscritaLoja, express.json({ limit: '8kb' }));
     router.post('/configuracao', (req, res) => {
         if (!req.body || Object.keys(req.body).length || Array.isArray(req.body)) throw erroPagamento('SOLICITACAO_INVALIDA');
-        if (env.IST_LOJA_PAYPAL_ENV !== 'sandbox' || !/^[A-Za-z0-9_-]{1,2048}$/.test(env.IST_LOJA_PAYPAL_CLIENT_ID ?? '')) {
+        if (!['sandbox','live'].includes(env.IST_LOJA_PAYPAL_ENV) || (env.LOJA_AMBIENTE ?? 'sandbox') !== env.IST_LOJA_PAYPAL_ENV || !/^[A-Za-z0-9_-]{1,2048}$/.test(env.IST_LOJA_PAYPAL_CLIENT_ID ?? '')) {
             throw erroPagamento('CONFIGURACAO_INVALIDA');
         }
         obterFinanceiro(); // Falhar antes de oferecer checkout se a composicao nao estiver configurada.
         // Identificador PUBLICO do SDK, nunca o Client Secret ou o token OAuth.
-        res.json({ ambiente: 'sandbox', clientId: env.IST_LOJA_PAYPAL_CLIENT_ID });
+        res.json({ ambiente: env.IST_LOJA_PAYPAL_ENV, clientId: env.IST_LOJA_PAYPAL_CLIENT_ID });
     });
     router.post('/iniciar', async (req, res) => {
         const entrada = camposExatos(req.body, ['pedidoPublicId']);

@@ -17,7 +17,7 @@ export const criarLojaDownloadsRouter=({db,env=process.env,agora,agoraMs,
     const obterServicos=()=>{
         if(servicos)return servicos;
         const contexto=contextoEsperado??{provedor:'paypal',ambiente:env.IST_LOJA_PAYPAL_ENV,contaRecebedora:env.IST_LOJA_PAYPAL_CONTA_RECEBEDORA};
-        if(!contextoEsperado&&(contexto.ambiente!=='sandbox'||carregarConfiguracaoLojaPedido(env).ambiente!==contexto.ambiente
+        if(!contextoEsperado&&(!['sandbox','live'].includes(contexto.ambiente)||carregarConfiguracaoLojaPedido(env).ambiente!==contexto.ambiente
             ||!/^[2-9A-HJ-NP-Z]{13}$/.test(contexto.contaRecebedora??'')))throw Error('CONFIGURACAO_INVALIDA');
         servicos={contexto:Object.freeze({...contexto}),
             autorizacao:autorizacaoService??criarLojaDownloadAutorizacaoService({db,contextoEsperado:contexto,agora}),
