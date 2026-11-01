@@ -13,7 +13,7 @@ import { CheckoutEstado, LojaCheckoutService } from '../../services/loja-checkou
     selector: 'app-loja-checkout', standalone: true, imports: [RouterLink, ButtonModule, MessageModule, DialogModule],
     template: `
         @if (pedidoId()) {
-            <section aria-labelledby="checkout-titulo" [attr.aria-busy]="checkout.ocupado()">
+            <section aria-labelledby="checkout-titulo" [attr.aria-busy]="checkout.ocupado() || iniciandoPagamento()">
                 <h2 id="checkout-titulo">Pagamento PayPal</h2>
                 @if (conflito()) {
                     <p-message class="block my-3" severity="warn">Existe uma tentativa anterior para o pedido {{ checkout.pedidoSalvo() }}. Verifique sua conclusão antes de preparar o pedido atual. As chaves serão preservadas se o pagamento não estiver comprovadamente concluído.</p-message>
@@ -36,24 +36,26 @@ import { CheckoutEstado, LojaCheckoutService } from '../../services/loja-checkou
                             <p>A confirmação por e-mail será processada separadamente. O acesso aos arquivos exige autorização na biblioteca.</p>
                         }
                     }
-                    @if (!estadoAtual()) { <p role="status">Pedido {{ pedidoId() }} criado. Aguardando pagamento; prepare o pagamento para consultar este pedido.</p> }
+                    @if (!estadoAtual()) { <p role="status">Pedido {{ pedidoId() }}. Pague com PayPal ou consulte uma tentativa anterior deste pedido.</p> }
                     @if (aviso()) { <p role="status">{{ aviso() }}</p> }
                     @if (erroConsulta()) { <p-message class="block my-3" severity="warn">{{ erroConsulta() }}</p-message> }
                     @if (checkout.erro(); as erro) { <p-message class="block my-3" severity="warn">{{ erro }}</p-message> }
                     <div class="acoes">
-                        @if (!checkout.pronto()) {
-                            <p-button label="Preparar pagamento" [disabled]="checkout.ocupado()" (onClick)="checkout.preparar(pedidoId()!)" />
-                        } @else if (checkout.estado()?.pagamento?.estado === 'APROVADO') {
-                            <p-button label="Concluir captura autorizada" [disabled]="checkout.ocupado()" (onClick)="checkout.concluirCaptura()" />
-                        } @else if (podePagar()) {
-                            <p-button [label]="estadoAtual()?.ambiente === 'sandbox' ? 'Pagar com PayPal Sandbox' : 'Pagar com PayPal'" [disabled]="checkout.ocupado()" (onClick)="checkout.pagar()" />
+                        @if (podePagar()) {
+                            @if (checkout.aberturaPronta()) {
+                                <p-button label="Continuar no PayPal" [loading]="checkout.ocupado()"
+                                    [disabled]="checkout.ocupado() || iniciandoPagamento() || manualEmCurso()" (onClick)="checkout.pagar()" />
+                            } @else {
+                                <p-button label="Preparar pagamento" [loading]="iniciandoPagamento() || checkout.ocupado()"
+                                    [disabled]="checkout.ocupado() || iniciandoPagamento() || manualEmCurso()" (onClick)="iniciarPagamento()" />
+                            }
                         }
-                        @if (checkout.confirmado() && !checkout.bibliotecaLiberada() && !checkout.acompanhamento()) {
+                        @if (checkout.podeAcompanhar() && !checkout.acompanhamento()) {
                             <p-button label="Retomar acompanhamento" [outlined]="true"
-                                [disabled]="checkout.ocupado() || manualEmCurso() || checkout.pedidoSalvo() !== pedidoId()"
+                                [disabled]="checkout.ocupado() || iniciandoPagamento() || manualEmCurso() || checkout.pedidoSalvo() !== pedidoId()"
                                 (onClick)="retomarAcompanhamento()" />
                         }
-                        <p-button label="Consultar estado do pedido" [outlined]="true" [disabled]="checkout.ocupado() || manualEmCurso() || checkout.pedidoSalvo() !== pedidoId()" (onClick)="consultarManual()" />
+                        <p-button label="Consultar estado do pedido" [outlined]="true" [disabled]="checkout.ocupado() || iniciandoPagamento() || manualEmCurso() || checkout.pedidoSalvo() !== pedidoId()" (onClick)="consultarManual()" />
                     </div>
                     @if (checkout.ocupado()) { <p role="status">Processando. Aguarde sem iniciar outra tentativa.</p> }
                 }
@@ -64,9 +66,14 @@ import { CheckoutEstado, LojaCheckoutService } from '../../services/loja-checkou
             <p>Pedido: {{ pedidoId() }}</p>
             @if (estadoAtual(); as e) {
                 <p>Valor: {{ preco(e.pedido.totalCentavos) }}</p>
-                <p>Estado financeiro: {{ e.pagamento?.estado ?? 'Sem pagamento iniciado' }}</p>
                 <p>{{ situacao() }}</p>
                 <p>{{ situacaoDireitos() }}</p>
+                @if (e.pagamento?.estado === 'APROVADO') {
+                    <p>Se a confirmação não avançar, retome o pagamento já aprovado. O pedido e suas chaves serão preservados.</p>
+                    <p-button label="Retomar confirmação do pagamento" [outlined]="true"
+                        [disabled]="checkout.ocupado() || iniciandoPagamento() || manualEmCurso() || conflito()"
+                        (onClick)="retomarConfirmacao()" />
+                }
             } @else { <p>Ainda não há informação confirmada para este pedido.</p> }
             @if (manualEmCurso()) { <p role="status">Consultando…</p> }
             @if (erroConsulta()) { <p-message class="block my-3" severity="warn">{{ erroConsulta() }} A última informação conhecida foi preservada.</p-message> }
@@ -81,25 +88,30 @@ export class LojaCheckoutComponent {
     readonly conflito = computed(() => !!this.checkout.pedidoSalvo() && this.checkout.pedidoSalvo() !== this.pedidoId());
     readonly estadoAtual = computed(() => this.checkout.estado()?.pedido.publicId === this.pedidoId() ? this.checkout.estado() : null);
     readonly preco = (n: number) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(n / 100);
-    readonly podePagar = computed(() => !this.estadoAtual()?.pagamento
-        || ['AGUARDANDO_APROVACAO', 'APROVADO'].includes(this.estadoAtual()?.pagamento?.estado ?? ''));
+    readonly iniciandoPagamento = signal(false);
+    readonly podePagar = computed(() => {
+        const e = this.estadoAtual();
+        return !e || (['CRIADO', 'AGUARDANDO_PAGAMENTO'].includes(e.pedido.estado)
+            && (!e.pagamento || e.pagamento.estado === 'AGUARDANDO_APROVACAO'));
+    });
     readonly situacao = computed(() => {
         const pg = this.estadoAtual()?.pagamento;
+        const d = this.checkout.direitosConsultados();
+        if (this.checkout.confirmado() && d?.estado === this.estadoAtual()
+            && d?.direitos.some(x => ['SUSPENSO', 'REVOGADO'].includes(x.estado)))
+            return 'Pagamento confirmado. O acesso digital está indisponível. Procure o atendimento com o código do pedido. Não efetue outro pagamento.';
         if (this.estadoAtual() && this.checkout.confirmado()) return this.checkout.bibliotecaLiberada()
-            ? 'Pagamento confirmado. Seu livro digital está disponível.'
-            : 'Pagamento confirmado. O acesso digital ainda está pendente de confirmação. Retome o acompanhamento ou consulte o pedido. Se a pendência persistir, procure o atendimento com o código do pedido. Não efetue outro pagamento.';
+            ? 'Livro disponível. Pagamento confirmado. Acesse sua biblioteca digital.'
+            : 'Pagamento confirmado. Estamos liberando seu livro digital. Retome o acompanhamento ou consulte o pedido. Se a pendência persistir, procure o atendimento com o código do pedido. Não efetue outro pagamento.';
         if (!pg) return this.estadoAtual()?.pedido.estado === 'AGUARDANDO_PAGAMENTO'
             ? 'Aguardando pagamento.' : this.estadoAtual()?.pedido.estado === 'CRIADO'
                 ? 'Pedido criado. Pagamento ainda não realizado.' : 'Pedido sem captura integral confirmada. Consulte o estado ou procure o atendimento.';
-        if (pg.estado === 'CRIANDO') return 'Pagamento em preparação. Aguarde.';
         if (['REEMBOLSADO','PARCIALMENTE_REEMBOLSADO','ESTORNADO'].includes(pg.estado)) return 'Pagamento reembolsado ou estornado. Procure o atendimento para verificar o acesso digital.';
-        if (pg.estado === 'AGUARDANDO_APROVACAO') return 'Aguardando aprovação PayPal do comprador.';
-        if (pg.estado === 'APROVADO') return 'Aprovação recebida. A captura ainda não foi confirmada.';
-        if (pg.estado === 'CAPTURANDO') return 'Captura em processamento. Pagamento ainda não confirmado.';
-        if (pg.estado === 'RECUSADO') return 'Pagamento recusado.';
-        if (pg?.estado === 'PENDENTE') return 'Pagamento pendente de confirmacao. Nao efetue outro pagamento.';
+        if (pg.estado === 'AGUARDANDO_APROVACAO') return 'Conclua a aprovação no PayPal. Se já aprovou, acompanhe a confirmação ou consulte o pedido antes de tentar novamente.';
+        if (['CRIANDO', 'APROVADO', 'CAPTURANDO', 'PENDENTE', 'DESCONHECIDO'].includes(pg.estado))
+            return 'Confirmando pagamento. Aguarde ou retome o acompanhamento. Não efetue outro pagamento.';
+        if (pg.estado === 'RECUSADO') return 'Pagamento recusado. Consulte o pedido ou procure o atendimento antes de tentar novamente.';
         if (['CANCELADO', 'EXPIRADO', 'REVISAO'].includes(pg.estado)) return 'Pagamento nao confirmado. Consulte o estado ou procure o atendimento.';
-        if (pg.estado === 'DESCONHECIDO') return 'Resultado financeiro pendente de reconciliacao. Consulte o estado; nao inicie outro pagamento.';
         return 'Aguardando aprovacao e confirmacao do pagamento.';
     });
     private readonly biblioteca = inject(LojaBibliotecaService);
@@ -112,7 +124,8 @@ export class LojaCheckoutComponent {
     readonly situacaoDireitos = computed(() => {
         const d = this.checkout.direitosConsultados();
         if (!d || d.estado !== this.estadoAtual()) return 'Direitos digitais ainda não confirmados para este estado do pedido.';
-        return d.direitos.length ? d.direitos.map(x => `${x.titulo}: ${x.estado}`).join('; ')
+        return d.direitos.length ? d.direitos.map(x => `${x.titulo}: ${x.estado === 'ATIVO' && x.podeSolicitarArquivo
+            ? 'disponível' : ['SUSPENSO', 'REVOGADO'].includes(x.estado) ? 'acesso indisponível; procure o atendimento' : 'em liberação'}`).join('; ')
             : 'Direitos digitais ainda não disponíveis.';
     });
     private retomarEm = 0;
@@ -149,8 +162,20 @@ export class LojaCheckoutComponent {
             });
         });
     }
+    async iniciarPagamento(): Promise<void> {
+        const id = this.pedidoId();
+        if (!id || this.destruido || this.conflito() || !this.podePagar() || this.checkout.ocupado()
+            || this.iniciandoPagamento() || this.manualEmCurso()) return;
+        this.iniciandoPagamento.set(true);
+        try {
+            if (!this.checkout.pronto()) await this.checkout.preparar(id);
+            if (this.destruido || this.pedidoId() !== id || this.conflito() || !this.checkout.pronto()) return;
+            if (this.podePagar()) await this.checkout.prepararAbertura();
+            if (!this.podePagar()) this.checkout.retomarAcompanhamento(id);
+        } finally { this.iniciandoPagamento.set(false); }
+    }
     private encerrarPorPrazo(id: string): void {
-        this.aviso.set('O acompanhamento automático terminou. Você pode consultar o estado manualmente. Isso não cancela o pagamento.');
+        this.aviso.set('O acompanhamento automático terminou. Retome por até dois minutos ou consulte o estado do pedido. Isso não cancela o pagamento. Não pague novamente enquanto a confirmação estiver pendente.');
         this.checkout.encerrarAcompanhamento(id);
     }
     private lerDireitos(id: string, apos?: string, anteriores: DireitoBiblioteca[] = [], vistos = new Set<string>()): Observable<DireitoBiblioteca[]> {
@@ -216,13 +241,25 @@ export class LojaCheckoutComponent {
     }
     retomarAcompanhamento(): void {
         const id = this.pedidoId();
-        if (!id || this.conflito() || this.manualEmCurso() || Date.now() < this.retomarEm) return;
+        if (!id || this.conflito() || this.iniciandoPagamento() || this.manualEmCurso() || Date.now() < this.retomarEm) return;
         this.checkout.retomarAcompanhamento(id);
         if (this.checkout.acompanhamento()?.pedidoPublicId === id) this.aviso.set('Acompanhamento retomado por até dois minutos. Não efetue outro pagamento.');
     }
+    async retomarConfirmacao(): Promise<void> {
+        const id = this.pedidoId();
+        if (!id || this.destruido || this.conflito() || !this.dialogoAberto() || this.iniciandoPagamento()
+            || this.manualEmCurso() || this.checkout.ocupado() || Date.now() < this.retomarEm
+            || this.estadoAtual()?.pagamento?.estado !== 'APROVADO') return;
+        this.manualEmCurso.set(true);
+        await this.checkout.concluirCaptura();
+        if (this.destruido || this.pedidoId() !== id) return;
+        this.manualEmCurso.set(false);
+        if (this.checkout.erro()) this.tratarErro(this.checkout.falhaConsulta(), id);
+        else this.consultarUmaVez(id);
+    }
     async consultarManual(): Promise<void> {
         const id = this.pedidoId();
-        if (!id || this.conflito() || this.checkout.ocupado() || this.manualEmCurso()) return;
+        if (!id || this.conflito() || this.iniciandoPagamento() || this.checkout.ocupado() || this.manualEmCurso()) return;
         this.dialogoAberto.set(true);
         if (Date.now() < this.retomarEm) return;
         this.manualEmCurso.set(true);

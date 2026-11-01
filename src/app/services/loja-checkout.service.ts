@@ -65,6 +65,10 @@ export class LojaCheckoutService {
     private consultaManual = false;
     private leituraEmCurso = false;
     private sequencia = 0;
+    private capturaEmCurso: { tentativa: TentativaCheckout; pagamentoPublicId: string; promessa: Promise<void> } | null = null;
+    private aprovacaoAcompanhada: TentativaCheckout | null = null;
+    private abertura: { tentativa: TentativaCheckout; ordemId: string; pagamentoPublicId: string; sessao: SessaoPayPal } | null = null;
+    readonly aberturaPronta = signal(false);
     readonly acompanhamento = signal<{ pedidoPublicId: string; inicio: number; sequencia: number } | null>(null);
     readonly direitosConsultados = signal<{ pedidoPublicId: string; estado: CheckoutEstado; direitos: DireitoBiblioteca[] } | null>(null);
     readonly bibliotecaLiberada = computed(() => {
@@ -153,7 +157,7 @@ export class LojaCheckoutService {
     restaurarAnterior(e: CheckoutEstado): boolean {
         if (!this.podeRetomar(e)) return false;
         this.encerrarAcompanhamento(e.pedido.publicId); this.interromperLeituras();
-        this.receberEstado(e); this.direitosConsultados.set(null); this.pronto.set(false); this.sdk = null;
+        this.receberEstado(e); this.direitosConsultados.set(null); this.pronto.set(false); this.sdk = null; this.limparAbertura();
         this.continuidade = null;
         return true;
     }
@@ -185,7 +189,7 @@ export class LojaCheckoutService {
             this.encerrarAcompanhamento(anterior.pedidoPublicId);
             this.interromperLeituras();
             this.tentativa = null; this.pedidoSalvo.set(null); this.estado.set(null);
-            this.direitosConsultados.set(null); this.pronto.set(false); this.sdk = null; this.csrf = '';
+            this.direitosConsultados.set(null); this.pronto.set(false); this.sdk = null; this.csrf = ''; this.limparAbertura();
         } catch (e) { this.mensagem(e); }
         finally { this.verificandoAnterior.set(false); this.ocupado.set(false); }
     }
@@ -219,9 +223,18 @@ export class LojaCheckoutService {
         this.interromperLeituras();
         this.acompanhamento.set({ pedidoPublicId: this.tentativa.pedidoPublicId, inicio: Date.now(), sequencia: ++this.sequencia });
     }
+    readonly podeAcompanhar = computed(() => {
+        const e = this.estado();
+        const d = this.direitosConsultados();
+        if (d?.estado === e && d?.direitos.some(x => ['SUSPENSO', 'REVOGADO'].includes(x.estado))) return false;
+        return !!e && e.pedido.publicId === this.pedidoSalvo() && !this.bibliotecaLiberada()
+            && !['CANCELADO', 'EXPIRADO', 'REVISAO', 'REEMBOLSADO', 'PARCIALMENTE_REEMBOLSADO', 'ESTORNADO'].includes(e.pedido.estado)
+            && (this.confirmado() || ['CRIANDO', 'AGUARDANDO_APROVACAO', 'APROVADO', 'CAPTURANDO', 'PENDENTE', 'DESCONHECIDO']
+                .includes(e.pagamento?.estado ?? ''));
+    });
     retomarAcompanhamento(pedidoPublicId: string): void {
         if (this.ocupado() || this.acompanhamento() || this.tentativa?.pedidoPublicId !== pedidoPublicId
-            || this.estado()?.pedido.publicId !== pedidoPublicId || !this.confirmado() || this.bibliotecaLiberada()) return;
+            || this.estado()?.pedido.publicId !== pedidoPublicId || !this.podeAcompanhar() || this.armazenamentoInvalido) return;
         // Somente leituras observacionais: nao chama reconciliar, criar ou capturar.
         this.iniciarAcompanhamento();
     }
@@ -274,7 +287,7 @@ export class LojaCheckoutService {
     }
     async preparar(pedidoPublicId: string): Promise<void> {
         if (this.ocupado() || this.armazenamentoInvalido) return;
-        this.ocupado.set(true); this.erro.set(null); this.pronto.set(false);
+        this.ocupado.set(true); this.erro.set(null); this.pronto.set(false); this.limparAbertura();
         try {
             if (!uuid.test(pedidoPublicId) || (this.tentativa && this.tentativa.pedidoPublicId !== pedidoPublicId)) throw new Error('TENTATIVA_ATIVA');
             const expiraSessao = await this.sessao();
@@ -304,8 +317,10 @@ export class LojaCheckoutService {
     private receberEstado(e: CheckoutEstado): void {
         if(!e || !['sandbox','live'].includes(e.ambiente)||e.pedido?.publicId!==this.tentativa?.pedidoPublicId
             ||(e.pagamento&&e.pagamento.pedidoPublicId!==e.pedido.publicId)) {
-            this.estado.set(null);this.pronto.set(false);this.sdk=null;throw new Error('CONFIGURACAO_INVALIDA');
+            this.estado.set(null);this.pronto.set(false);this.sdk=null;this.limparAbertura();throw new Error('CONFIGURACAO_INVALIDA');
         }
+        if (this.abertura && (e.pagamento?.publicId !== this.abertura.pagamentoPublicId
+            || e.ordemId !== this.abertura.ordemId || e.pagamento.estado !== 'AGUARDANDO_APROVACAO')) this.limparAbertura();
         this.revisaoLeitura++;
         this.estado.set(e);
     }
@@ -334,43 +349,90 @@ export class LojaCheckoutService {
             await this.sessao(); await this.atualizar();
             const pg = this.estado()?.pagamento;
             if (pg?.estado !== 'APROVADO') throw new Error('APROVACAO_PENDENTE');
-            try { await this.post('capturar', { pagamentoPublicId: pg.publicId }, this.tentativa.captura); }
-            finally { await this.atualizar(); }
+            await this.continuarCaptura(this.tentativa, pg.publicId);
         } catch (e) { this.mensagem(e); } finally { this.ocupado.set(false); }
     }
-    // Chamado diretamente pelo gesto do comprador: start abre popup antes do POST resolver.
-    pagar(): Promise<void> {
-        if (this.ocupado() || !this.sdk || !this.pronto() || !this.tentativa) return Promise.resolve();
+    private continuarCaptura(tentativa: TentativaCheckout, pagamentoPublicId: string): Promise<void> {
+        if (this.tentativa !== tentativa) return Promise.resolve();
+        const pg = this.estado()?.pagamento;
+        if (!pg || pg.publicId !== pagamentoPublicId || pg.pedidoPublicId !== tentativa.pedidoPublicId)
+            return Promise.reject(new Error('TENTATIVA_ATIVA'));
+        if (this.capturaEmCurso?.tentativa === tentativa && this.capturaEmCurso.pagamentoPublicId === pagamentoPublicId)
+            return this.capturaEmCurso.promessa;
+        // Pendente/incerto: acompanhar o backend, sem outro envio pelo navegador.
+        if (!['AGUARDANDO_APROVACAO', 'APROVADO'].includes(pg.estado)) return Promise.resolve();
+        const promessa = (async () => {
+            try { await this.post('capturar', { pagamentoPublicId }, tentativa.captura); }
+            finally { await this.atualizar(tentativa); }
+        })().finally(() => {
+            if (this.capturaEmCurso?.promessa === promessa) this.capturaEmCurso = null;
+        });
+        this.capturaEmCurso = { tentativa, pagamentoPublicId, promessa };
+        return promessa;
+    }
+    private limparAbertura(): void { this.abertura = null; this.aberturaPronta.set(false); }
+    // Primeiro gesto: terminar HTTP, SDK e intencao duravel, sem abrir janela.
+    async prepararAbertura(): Promise<void> {
+        if (this.ocupado() || this.capturaEmCurso || !this.sdk || !this.pronto() || !this.tentativa) return;
+        if (this.estado()?.pagamento && this.estado()?.pagamento?.estado !== 'AGUARDANDO_APROVACAO') return;
         this.ocupado.set(true); this.erro.set(null);
         const tentativa = this.tentativa;
-        this.iniciarAcompanhamento();
+        this.limparAbertura();
         try {
-        let ordemEsperada: string | null = null;
+        await this.sessao(); await this.atualizar(tentativa);
+        if (this.tentativa !== tentativa) return;
+        let atual = this.estado()!;
+        if (!atual.pagamento) atual = await this.post<CheckoutEstado>('iniciar', { pedidoPublicId: tentativa.pedidoPublicId }, tentativa.criacao);
+        if (this.tentativa !== tentativa) return;
+        this.receberEstado(atual);
+        if (atual.pagamento?.estado !== 'AGUARDANDO_APROVACAO') return;
+        if (!atual.ordemId || Date.parse(atual.pedido.expiraEm) <= Date.now()) throw new Error('PEDIDO_EXPIRADO');
+        const ordemEsperada = atual.ordemId, pagamentoPublicId = atual.pagamento.publicId;
+        await this.post('preparar-captura', { pagamentoPublicId }, tentativa.captura);
+        if (this.tentativa !== tentativa) return;
+        if (Date.parse(atual.pedido.expiraEm) <= Date.now() || Date.parse(tentativa.expiraSessao) <= Date.now())
+            throw new Error('PEDIDO_EXPIRADO');
         const sessao = this.sdk.createPayPalOneTimePaymentSession({
             onApprove: async data => {
                 if (this.tentativa !== tentativa) return;
                 if (!ordemEsperada || data.orderId !== ordemEsperada) throw new Error('APROVACAO_INVALIDA');
                 const pg = this.estado()?.pagamento;
                 if (!pg) throw new Error();
+                if (this.aprovacaoAcompanhada !== tentativa) {
+                    this.aprovacaoAcompanhada = tentativa;
+                    this.iniciarAcompanhamento();
+                }
                 // Nenhum ID externo do callback e enviado como autoridade ao backend.
-                try { await this.post('capturar', { pagamentoPublicId: pg.publicId }, tentativa.captura); }
-                finally { await this.atualizar(tentativa); }
+                await this.continuarCaptura(tentativa, pg.publicId);
             },
-            onCancel: () => { if (this.tentativa !== tentativa) return; this.encerrarAcompanhamento(tentativa.pedidoPublicId); this.erro.set('Aprovacao interrompida. O pagamento nao foi confirmado; consulte o estado antes de repetir.'); },
+            onCancel: () => { if (this.tentativa !== tentativa || this.confirmado()) return;
+                this.erro.set('A janela PayPal foi fechada. Vamos verificar o pagamento. Consulte o pedido antes de tentar novamente.'); },
             onError: () => { if (this.tentativa === tentativa) this.mensagem(null); }
         });
-        const ordem = this.sessao().then(async () => {
-            // Recuperar tentativa existente evita criar outra apos recarregar a pagina.
-            await this.atualizar();
-            let atual = this.estado()!;
-            if (!atual.pagamento) atual = await this.post<CheckoutEstado>('iniciar', { pedidoPublicId: tentativa.pedidoPublicId }, tentativa.criacao);
-            this.receberEstado(atual);
-            if (!atual.ordemId || !['AGUARDANDO_APROVACAO', 'APROVADO'].includes(atual.pagamento?.estado ?? '')) throw new Error('TENTATIVA_ATIVA');
-            ordemEsperada = atual.ordemId; return { orderId: ordemEsperada };
-        });
-        void ordem.catch(() => {}); // SDK indisponivel nao deixa rejeicao sem observador.
-        return sessao.start({ presentationMode: 'popup' }, ordem).catch(e => this.mensagem(e)).finally(() => this.ocupado.set(false));
-        } catch (e) { this.mensagem(e); this.ocupado.set(false); return Promise.resolve(); }
+        this.abertura = { tentativa, ordemId: ordemEsperada, pagamentoPublicId, sessao };
+        this.aberturaPronta.set(true);
+        } catch (e) { this.mensagem(e); } finally { this.ocupado.set(false); }
+    }
+    // Segundo gesto: start e chamado nesta pilha, sem HTTP/await/then anterior.
+    pagar(): Promise<void> {
+        const a = this.abertura, e = this.estado();
+        if (this.ocupado() || this.capturaEmCurso || !a || !this.aberturaPronta() || this.tentativa !== a.tentativa) return Promise.resolve();
+        if (e?.pagamento?.publicId !== a.pagamentoPublicId || e.pagamento.estado !== 'AGUARDANDO_APROVACAO'
+            || e.ordemId !== a.ordemId || Date.parse(a.tentativa.expiraSessao) <= Date.now()
+            || Date.parse(e.pedido.expiraEm) <= Date.now()) {
+            this.limparAbertura(); this.mensagem(new Error('TENTATIVA_ATIVA')); return Promise.resolve();
+        }
+        this.ocupado.set(true); this.erro.set(null); this.aprovacaoAcompanhada = null;
+        this.iniciarAcompanhamento();
+        try {
+            return a.sessao.start({ presentationMode: 'popup' }, Promise.resolve({ orderId: a.ordemId }))
+                .catch(erro => this.mensagem(erro)).finally(() => {
+                    if (this.abertura === a) this.limparAbertura();
+                    this.ocupado.set(false);
+                });
+        } catch (erro) {
+            this.limparAbertura(); this.mensagem(erro); this.ocupado.set(false); return Promise.resolve();
+        }
     }
     private chave(): string {
         const b = crypto.getRandomValues(new Uint8Array(16)); b[6] = (b[6] & 15) | 64; b[8] = (b[8] & 63) | 128;

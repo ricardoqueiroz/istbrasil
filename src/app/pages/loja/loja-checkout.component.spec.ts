@@ -31,14 +31,14 @@ describe('LojaCheckoutComponent', () => {
         expect(f.nativeElement.textContent).toContain('<img src=x onerror=alert(1)>');
         expect(f.nativeElement.textContent).toContain('Homologação — PayPal Sandbox — sem cobrança real');
         expect(f.nativeElement.querySelector('a')).toBeNull();
-        expect(f.nativeElement.textContent).toContain('O acesso digital ainda está pendente de confirmação.');
+        expect(f.nativeElement.textContent).toContain('Estamos liberando seu livro digital.');
     });
     it('CAPTURADO isolado nao e confirmacao publica', () => {
         const f = montar('CAPTURADO'); expect(f.nativeElement.textContent).not.toContain('Pagamento confirmado.');
     });
     it('pendencia nao oferece outra cobranca, pagamento ou download ficticio', () => {
-        const f = montar('PENDENTE'); expect(f.nativeElement.textContent).toContain('Nao efetue outro pagamento');
-        expect(f.nativeElement.textContent).not.toContain('Pagar com PayPal'); expect(f.nativeElement.querySelector('a[download]')).toBeNull();
+        const f = montar('PENDENTE'); expect(f.nativeElement.textContent).toContain('Não efetue outro pagamento');
+        expect(f.nativeElement.textContent).not.toContain('Preparar pagamento'); expect(f.nativeElement.querySelector('a[download]')).toBeNull();
     });
     it('recusa nao e apresentada como pagamento confirmado', () => {
         const f = montar('RECUSADO'); expect(f.nativeElement.textContent).toContain('Pagamento recusado');
@@ -122,6 +122,49 @@ describe('B2 acompanhamento do checkout', () => {
         service.retomarAcompanhamento(outro);expect(service.acompanhamento()).toBeNull();
         service.retomarAcompanhamento(id);expect(service.acompanhamento()).toBeNull();
     });
+    for(const pg of ['APROVADO','CAPTURANDO','PENDENTE','DESCONHECIDO']){
+        it(`S3 ${pg} mostra confirmacao e retoma somente acompanhamento limitado`,fakeAsync(()=>{
+            const e=estado();e.pagamento!.estado=pg;service.estado.set(e);f.detectChanges();
+            expect(f.nativeElement.textContent).toContain('Confirmando pagamento.');
+            expect(f.nativeElement.textContent).not.toContain('Preparar pagamento');
+            expect(f.nativeElement.textContent).not.toContain('Concluir captura autorizada');
+            expect(f.nativeElement.textContent).not.toContain(pg);
+            const pagar=spyOn(service,'pagar'),capturar=spyOn(service,'concluirCaptura');
+            f.componentInstance.retomarAcompanhamento();f.detectChanges();tick(5000);
+            expect(observar).toHaveBeenCalledTimes(1);tick(115000);f.detectChanges();
+            expect(service.acompanhamento()).toBeNull();expect(navegar).not.toHaveBeenCalled();
+            expect(pagar).not.toHaveBeenCalled();expect(capturar).not.toHaveBeenCalled();
+        }));
+    }
+    it('preparar nao abre PayPal; segundo gesto chama pagar diretamente',fakeAsync(()=>{
+        const preparar=spyOn(service,'preparar').and.callFake(async()=>{service.pronto.set(true);});
+        const prepararAbertura=spyOn(service,'prepararAbertura').and.callFake(async()=>{service.aberturaPronta.set(true);});
+        const pagar=spyOn(service,'pagar').and.resolveTo(),capturar=spyOn(service,'concluirCaptura');
+        void f.componentInstance.iniciarPagamento();void f.componentInstance.iniciarPagamento();flushMicrotasks();
+        expect(preparar).toHaveBeenCalledOnceWith(id);expect(prepararAbertura).toHaveBeenCalledTimes(1);
+        expect(pagar).not.toHaveBeenCalled();f.detectChanges();
+        const botao=[...f.nativeElement.querySelectorAll('button')].find((x:any)=>x.textContent.includes('Continuar no PayPal')) as HTMLButtonElement;
+        expect(botao.disabled).toBeFalse();botao.click();expect(pagar).toHaveBeenCalledTimes(1);
+        expect(capturar).not.toHaveBeenCalled();expect(f.componentInstance.iniciandoPagamento()).toBeFalse();
+    }));
+    it('S3 estado incerto descoberto na preparacao nao abre pagamento',fakeAsync(()=>{
+        spyOn(service,'preparar').and.callFake(async()=>{const e=estado();e.pagamento!.estado='DESCONHECIDO';service.estado.set(e);service.pronto.set(true);});
+        const pagar=spyOn(service,'pagar');void f.componentInstance.iniciarPagamento();flushMicrotasks();f.detectChanges();
+        expect(pagar).not.toHaveBeenCalled();expect(service.acompanhamento()?.pedidoPublicId).toBe(id);
+        expect(f.nativeElement.textContent).not.toContain('Preparar pagamento');
+    }));
+    it('S3 alternativa de conclusao fica no dialogo e exige aprovacao, nunca consulta manual',fakeAsync(()=>{
+        const e=estado();e.pagamento!.estado='APROVADO';service.estado.set(e);f.detectChanges();
+        const capturar=spyOn(service,'concluirCaptura').and.resolveTo();
+        const consultar=spyOn(service,'consultar').and.resolveTo();
+        observar.and.callFake(()=>of(e).pipe(tap(x=>service.estado.set(x))));
+        void f.componentInstance.consultarManual();flushMicrotasks();f.detectChanges();
+        expect(consultar).toHaveBeenCalledOnceWith(id);expect(capturar).not.toHaveBeenCalled();
+        void f.componentInstance.retomarConfirmacao();void f.componentInstance.retomarConfirmacao();flushMicrotasks();
+        expect(capturar).toHaveBeenCalledTimes(1);expect(navegar).not.toHaveBeenCalled();
+        e.pagamento!.estado='DESCONHECIDO';service.estado.set({...e});f.detectChanges();
+        void f.componentInstance.retomarConfirmacao();flushMicrotasks();expect(capturar).toHaveBeenCalledTimes(1);
+    }));
     it('nao sobrepoe consultas, cancela HTTP na destruicao e nao navega',fakeAsync(()=>{acompanhar();
         const pendente=new Subject<CheckoutEstado>();observar.and.returnValue(pendente);
         tick(5000);tick(15000);expect(observar).toHaveBeenCalledTimes(1);expect(pendente.observed).toBeTrue();
@@ -140,7 +183,8 @@ describe('B2 acompanhamento do checkout', () => {
     for(const s of ['AGUARDANDO_CONFIRMACAO','SUSPENSO','REVOGADO'])it(`pagamento confirmado com direito ${s} nao navega`,fakeAsync(()=>{acompanhar();
         observar.and.callFake(()=>of(estado(true)).pipe(tap(e=>service.estado.set(e))));
         listar.and.returnValue(of({direitos:[direito(s)],proximoCursor:null}));tick(5000);f.detectChanges();
-        expect(navegar).not.toHaveBeenCalled();expect(f.nativeElement.textContent).toContain('O acesso digital ainda está pendente de confirmação.');
+        expect(navegar).not.toHaveBeenCalled();expect(f.nativeElement.textContent).toContain(s==='AGUARDANDO_CONFIRMACAO'
+            ?'Estamos liberando seu livro digital.':'O acesso digital está indisponível.');
     }));
     it('lista vazia, outro pedido e captura sem confirmacao nao navegam',fakeAsync(()=>{acompanhar();
         observar.and.callFake(()=>of(estado(true)).pipe(tap(e=>service.estado.set(e))));

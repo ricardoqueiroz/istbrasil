@@ -169,7 +169,11 @@ describe('LojaCarrinhoComponent', () => {
         const original=gravar();carregar();await verificarAnterior(antigo(estado));
         expect(texto()).toContain('Retomar pedido anterior');fixture.componentInstance.retomarPedidoAnterior();fixture.detectChanges();
         expect(fixture.componentInstance.pedidos.confirmado()?.publicId).toBe(anteriorId);
-        expect(texto()).toContain('Preparar pagamento');expect(dados.get(CHECKOUT_STORAGE_KEY)).toBe(original);
+        if (estado === 'APROVADO') {
+            expect(texto()).toContain('Confirmando pagamento.');
+            expect(texto()).not.toContain('Preparar pagamento');
+        } else expect(texto()).toContain('Preparar pagamento');
+        expect(dados.get(CHECKOUT_STORAGE_KEY)).toBe(original);
         expect(fixture.componentInstance.checkout.pronto()).toBeFalse();
         http.expectNone('/api/loja/pedidos');http.expectNone('/api/loja/checkout/iniciar');http.expectNone('/api/loja/checkout/capturar');http.expectNone('/api/loja/checkout/reconciliar');
     });

@@ -42,16 +42,73 @@ describe('Checkout da Loja', () => {
         http.expectOne('/api/loja/checkout/estado').flush(dto(estado)); await micro();
         http.expectOne('/api/loja/checkout/configuracao').flush({ ambiente: 'sandbox', clientId: 'public-id' }); await p;
     };
-    const iniciar = async () => {
-        const p = service.pagar(); await sessao();
+    const iniciar = async (duploClique = false, abrir = true) => {
+        const preparacao = service.prepararAbertura();
+        if (duploClique) await service.prepararAbertura();
+        await sessao();
         http.expectOne('/api/loja/checkout/estado').flush(dto()); await micro();
         const r = http.expectOne('/api/loja/checkout/iniciar');
         expect(r.request.body).toEqual({ pedidoPublicId: id });
         expect(r.request.headers.get('Idempotency-Key')).toMatch(/^[a-f0-9-]{36}$/);
         expect(r.request.headers.get('X-CSRF-Token')).toBe('csrf-fixture');
         expect(r.request.headers.get('X-IST-Loja')).toBe('1'); expect(r.request.withCredentials).toBeTrue();
-        r.flush(dto('AGUARDANDO_APROVACAO')); await micro(); return { p };
+        r.flush(dto('AGUARDANDO_APROVACAO')); await micro();
+        expect(inicio).not.toHaveBeenCalled();
+        const intencao = http.expectOne('/api/loja/checkout/preparar-captura');
+        expect(intencao.request.body).toEqual({ pagamentoPublicId: pgId });
+        expect(intencao.request.headers.get('Idempotency-Key')).toBe(JSON.parse(dados.get(CHECKOUT_STORAGE_KEY)!).captura);
+        expect(service.aberturaPronta()).toBeFalse();
+        intencao.flush(null, { status: 204, statusText: 'No Content' }); await preparacao;
+        expect(service.aberturaPronta()).toBeTrue();expect(inicio).not.toHaveBeenCalled();
+        if (!abrir) return {p:Promise.resolve()};
+        const p=service.pagar();expect(inicio).toHaveBeenCalledTimes(1); // mesma pilha do segundo gesto
+        if (duploClique) await service.pagar();
+        await micro();return {p};
     };
+    it('popup exige preparacao pronta; segundo gesto abre sincronamente sem HTTP de preparacao',async()=>{
+        await preparar();await service.pagar();expect(inicio).not.toHaveBeenCalled();
+        await iniciar(false,false);const salvo=dados.get(CHECKOUT_STORAGE_KEY);let gestoAtivo=true;
+        inicio.and.callFake(async()=>{expect(gestoAtivo).toBeTrue();callbacks.onCancel();});
+        const p=service.pagar();expect(inicio).toHaveBeenCalledTimes(1);gestoAtivo=false;
+        http.expectNone('/api/loja/checkout/iniciar');http.expectNone('/api/loja/checkout/preparar-captura');
+        http.expectNone('/api/loja/checkout/capturar');http.expectNone('/api/loja/sessao');
+        await p;expect(dados.get(CHECKOUT_STORAGE_KEY)).toBe(salvo);expect(service.aberturaPronta()).toBeFalse();
+    });
+    it('recarga restaura as chaves, mas exige preparar SDK e intencao antes de abrir',async()=>{
+        await preparar();await iniciar(false,false);const salvo=dados.get(CHECKOUT_STORAGE_KEY);
+        service=TestBed.runInInjectionContext(()=>new LojaCheckoutService());
+        await service.pagar();expect(inicio).not.toHaveBeenCalled();expect(service.aberturaPronta()).toBeFalse();
+        const sdk=service.preparar(id);await sessao();
+        http.expectOne('/api/loja/checkout/estado').flush(dto('AGUARDANDO_APROVACAO'));await micro();
+        http.expectOne('/api/loja/checkout/configuracao').flush({ambiente:'sandbox',clientId:'public-id'});await sdk;
+        const prep=service.prepararAbertura();await sessao();
+        http.expectOne('/api/loja/checkout/estado').flush(dto('AGUARDANDO_APROVACAO'));await micro();
+        const r=http.expectOne('/api/loja/checkout/preparar-captura');
+        expect(r.request.headers.get('Idempotency-Key')).toBe(JSON.parse(salvo!).captura);
+        r.flush(null,{status:204,statusText:'No Content'});await prep;
+        expect(service.aberturaPronta()).toBeTrue();expect(dados.get(CHECKOUT_STORAGE_KEY)).toBe(salvo);
+        http.expectNone('/api/loja/checkout/iniciar');expect(inicio).not.toHaveBeenCalled();
+    });
+    it('nao habilita abertura se o pedido vencer durante a persistencia',async()=>{
+        await preparar('AGUARDANDO_APROVACAO');const prep=service.prepararAbertura();await sessao();
+        const e=dto('AGUARDANDO_APROVACAO');http.expectOne('/api/loja/checkout/estado').flush(e);await micro();
+        (service.estado()!.pedido as {expiraEm:string}).expiraEm=new Date(Date.now()-1000).toISOString();
+        http.expectOne('/api/loja/checkout/preparar-captura').flush(null,{status:204,statusText:'No Content'});await prep;
+        expect(service.aberturaPronta()).toBeFalse();await service.pagar();expect(inicio).not.toHaveBeenCalled();
+        http.expectNone('/api/loja/checkout/capturar');
+    });
+    it('S1 falha ao persistir intencao nao abre PayPal nem captura e preserva chaves', async () => {
+        await preparar('AGUARDANDO_APROVACAO'); const original = dados.get(CHECKOUT_STORAGE_KEY);
+        for (let i = 0; i < 2; i++) {
+            const p = service.prepararAbertura(); await sessao();
+            http.expectOne('/api/loja/checkout/estado').flush(dto('AGUARDANDO_APROVACAO')); await micro();
+            const r = http.expectOne('/api/loja/checkout/preparar-captura');
+            expect(r.request.headers.get('Idempotency-Key')).toBe(JSON.parse(original!).captura);
+            r.error(new ProgressEvent('error')); await p;
+        }
+        expect(inicio).not.toHaveBeenCalled(); http.expectNone('/api/loja/checkout/capturar');
+        expect(dados.get(CHECKOUT_STORAGE_KEY)).toBe(original); expect(service.ocupado()).toBeFalse();
+    });
     it('nao carrega SDK nem inicia HTTP ao ser importado ou instanciado', () => { expect(carregar).not.toHaveBeenCalled(); expect(service.ocupado()).toBeFalse(); });
     it('rejeita ambiente desconhecido sem carregar SDK', async () => {
         const p = service.preparar(id); await sessao();
@@ -93,14 +150,20 @@ describe('Checkout da Loja', () => {
         expect(service.estado()?.pagamento?.estado).toBe(estado); expect(service.estado()?.pagamento?.valorCentavos).toBe(19000);
     });
     it('duplo clique nao inicia segundo fluxo', async () => {
-        await preparar(); const p = service.pagar(); await service.pagar(); expect(inicio).toHaveBeenCalledTimes(1);
+        await preparar(); const p = service.prepararAbertura(); await service.prepararAbertura(); expect(inicio).not.toHaveBeenCalled();
         await sessao(); http.expectOne('/api/loja/checkout/estado').flush(dto('PENDENTE')); await p;
         http.expectNone('/api/loja/checkout/capturar');
+    });
+    it('S1 duplo clique persiste uma intencao, abre um popup e solicita uma captura', async () => {
+        await preparar(); const { p } = await iniciar(true);
+        http.expectOne('/api/loja/checkout/capturar').flush(dto('CAPTURADO').pagamento); await micro();
+        http.expectOne('/api/loja/checkout/estado').flush(dto('CAPTURADO')); await p;
+        expect(inicio).toHaveBeenCalledTimes(1); expect(service.confirmado()).toBeTrue();
     });
     it('falha de rede preserva chave e repetir criacao utiliza mesma chave', async () => {
         await preparar(); const chave = JSON.parse(dados.get(CHECKOUT_STORAGE_KEY)!).criacao;
         for (let i = 0; i < 2; i++) {
-            const p = service.pagar(); await sessao(); http.expectOne('/api/loja/checkout/estado').flush(dto()); await micro();
+            const p = service.prepararAbertura(); await sessao(); http.expectOne('/api/loja/checkout/estado').flush(dto()); await micro();
             const r = http.expectOne('/api/loja/checkout/iniciar'); expect(r.request.headers.get('Idempotency-Key')).toBe(chave);
             r.error(new ProgressEvent('error')); await p;
         }
@@ -108,12 +171,14 @@ describe('Checkout da Loja', () => {
     });
     it('tentativa existente e reutilizada sem criar outra ordem', async () => {
         await preparar('AGUARDANDO_APROVACAO'); aprovar = false;
-        const p = service.pagar(); await sessao(); http.expectOne('/api/loja/checkout/estado').flush(dto('AGUARDANDO_APROVACAO')); await p;
+        const p = service.prepararAbertura(); await sessao(); http.expectOne('/api/loja/checkout/estado').flush(dto('AGUARDANDO_APROVACAO')); await micro();
+        http.expectOne('/api/loja/checkout/preparar-captura').flush(null, { status: 204, statusText: 'No Content' }); await p;
+        const abrir=service.pagar();expect(inicio).toHaveBeenCalledTimes(1);await abrir;
         http.expectNone('/api/loja/checkout/iniciar'); http.expectNone('/api/loja/checkout/capturar');
         expect(inicio).toHaveBeenCalledTimes(1); expect(service.estado()?.pagamento?.publicId).toBe(pgId);
     });
     it('sessao substituida impede criar ou capturar', async () => {
-        await preparar(); const p = service.pagar(); await sessao(201); await p;
+        await preparar(); const p = service.prepararAbertura(); await sessao(201); await p;
         http.expectNone('/api/loja/checkout/estado'); http.expectNone('/api/loja/checkout/capturar'); expect(service.erro()).toContain('sessao original');
     });
     it('consulta posterior reconcilia sem criar ordem ou capturar', async () => {
@@ -142,7 +207,9 @@ describe('Checkout da Loja', () => {
         await preparar(); inicio.and.callFake(async (_: unknown, ordem: Promise<unknown>) => {
             await ordem; await callbacks.onApprove({ orderId: 'OTHERORDER' });
         });
-        const p = service.pagar(); await sessao(); http.expectOne('/api/loja/checkout/estado').flush(dto('AGUARDANDO_APROVACAO')); await p;
+        const p = service.prepararAbertura(); await sessao(); http.expectOne('/api/loja/checkout/estado').flush(dto('AGUARDANDO_APROVACAO')); await micro();
+        http.expectOne('/api/loja/checkout/preparar-captura').flush(null, { status: 204, statusText: 'No Content' }); await p;
+        const abrir=service.pagar();expect(inicio).toHaveBeenCalledTimes(1);await abrir;
         http.expectNone('/api/loja/checkout/capturar'); expect(service.erro()).toBeTruthy();
     });
     it('apos recarregar conserva identificador do pedido e chaves sem tokens', async () => {
@@ -187,14 +254,60 @@ describe('Checkout da Loja', () => {
         expect(service.bibliotecaLiberada()).toBeFalse();
     });
 
-    it('B2 cancelar popup encerra acompanhamento e preserva chaves sem capturar', async () => {
+    it('S3 fechar popup preserva acompanhamento e chaves sem presumir cancelamento', async () => {
         await preparar();aprovar=false;
         const sub=service.observar(id).subscribe();const leitura=http.expectOne('/api/loja/checkout/estado');
         const {p}=await iniciar();expect(leitura.cancelled).toBeTrue();await p;
-        expect(service.acompanhamento()).toBeNull();expect(dados.has(CHECKOUT_STORAGE_KEY)).toBeTrue();
+        expect(service.acompanhamento()?.pedidoPublicId).toBe(id);expect(dados.has(CHECKOUT_STORAGE_KEY)).toBeTrue();
         http.expectNone('/api/loja/checkout/capturar');sub.unsubscribe();
     });
 
+    for (const estado of ['APROVADO','CRIANDO','CAPTURANDO','PENDENTE','DESCONHECIDO','CAPTURADO','RECUSADO','REVISAO']) {
+        it(`S3 pagar nao abre popup ou nova operacao com estado ${estado}`,async()=>{
+            await preparar(estado);const original=dados.get(CHECKOUT_STORAGE_KEY);
+            await service.pagar();expect(inicio).not.toHaveBeenCalled();
+            for(const acao of ['iniciar','preparar-captura','capturar'])http.expectNone(`/api/loja/checkout/${acao}`);
+            expect(dados.get(CHECKOUT_STORAGE_KEY)).toBe(original);
+        });
+    }
+    it('S3 callbacks duplicados compartilham uma captura e a chave original',async()=>{
+        await preparar();inicio.and.callFake(async(_:unknown,ordem:Promise<{orderId:string}>)=>{
+            const r=await ordem;await Promise.all([callbacks.onApprove(r),callbacks.onApprove(r)]);
+        });
+        const {p}=await iniciar();const r=http.expectOne('/api/loja/checkout/capturar');
+        expect(r.request.headers.get('Idempotency-Key')).toBe(JSON.parse(dados.get(CHECKOUT_STORAGE_KEY)!).captura);
+        r.flush(dto('CAPTURADO').pagamento);await micro();
+        http.expectOne('/api/loja/checkout/estado').flush(dto('CAPTURADO'));await p;
+        expect(service.confirmado()).toBeTrue();http.expectNone('/api/loja/checkout/capturar');
+    });
+    it('S3 callback perdido termina popup, permite acompanhar e nao captura pelo navegador',async()=>{
+        await preparar();inicio.and.callFake(async(_:unknown,ordem:Promise<unknown>)=>{await ordem;});
+        const {p}=await iniciar();await p;const original=dados.get(CHECKOUT_STORAGE_KEY);
+        service.encerrarAcompanhamento(id);service.retomarAcompanhamento(id);
+        expect(service.acompanhamento()?.pedidoPublicId).toBe(id);
+        http.expectNone('/api/loja/checkout/capturar');expect(dados.get(CHECKOUT_STORAGE_KEY)).toBe(original);
+    });
+    it('S3 aprovacao apos encerrar primeiro prazo inicia uma unica janela de confirmacao',async()=>{
+        await preparar();inicio.and.callFake(async(_:unknown,ordem:Promise<unknown>)=>{await ordem;});
+        const {p}=await iniciar();await p;service.encerrarAcompanhamento(id);
+        const confirmar=callbacks.onApprove({orderId:'ORDER123'});const fase=service.acompanhamento();
+        const duplicado=callbacks.onApprove({orderId:'ORDER123'});expect(service.acompanhamento()).toBe(fase);
+        expect(fase?.pedidoPublicId).toBe(id);
+        http.expectOne('/api/loja/checkout/capturar').flush(dto('CAPTURADO').pagamento);await micro();
+        http.expectOne('/api/loja/checkout/estado').flush(dto('CAPTURADO'));await Promise.all([confirmar,duplicado]);
+        http.expectNone('/api/loja/checkout/iniciar');expect(service.confirmado()).toBeTrue();
+    });
+    it('S3 recarga e consulta de estado incerto preservam chaves sem nova captura',async()=>{
+        await preparar('DESCONHECIDO');const original=dados.get(CHECKOUT_STORAGE_KEY);
+        service=TestBed.runInInjectionContext(()=>new LojaCheckoutService());
+        const p=service.consultar(id);await sessao();
+        http.expectOne('/api/loja/checkout/estado').flush(dto('DESCONHECIDO'));await micro();
+        http.expectOne('/api/loja/checkout/reconciliar').flush(dto('PENDENTE').pagamento);await micro();
+        http.expectOne('/api/loja/checkout/estado').flush(dto('PENDENTE'));await p;
+        service.retomarAcompanhamento(id);expect(service.acompanhamento()?.pedidoPublicId).toBe(id);
+        expect(dados.get(CHECKOUT_STORAGE_KEY)).toBe(original);http.expectNone('/api/loja/checkout/capturar');
+        http.expectNone('/api/loja/checkout/iniciar');
+    });
     const pedidoB = '40404040-4040-4040-8040-404040404040';
     const verificar = async (resposta: CheckoutEstado, recarga = false) => {
         await preparar();
