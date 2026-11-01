@@ -1,6 +1,6 @@
 import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
-import { provideZoneChangeDetection } from '@angular/core';
+import { provideZoneChangeDetection, signal } from '@angular/core';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
 import { environment } from '../../../environments/environment';
@@ -8,20 +8,119 @@ import { CARRINHO_STORAGE, CarrinhoService } from '../../services/carrinho.servi
 import { pedidosEquivalentes, LojaCarrinhoComponent } from './loja-carrinho.component';
 import { CHECKOUT_STORAGE_KEY, CheckoutEstado } from '../../services/loja-checkout.service';
 import { LojaCotacao } from './models/loja.model';
+import { AuthService, UsuarioLogado } from '../../shared/auth.service';
+import { PerfilService } from '../perfil/services/perfil.service';
+import { PerfilResponse } from '../perfil/models/perfil.model';
+import { LojaPedidoService, PEDIDO_PENDENTE_STORAGE_KEY } from '../../services/loja-pedido.service';
 
 describe('LojaCarrinhoComponent', () => {
     let fixture: ComponentFixture<LojaCarrinhoComponent>;
     let http: HttpTestingController;
     let carrinho: CarrinhoService;
     let dados: Map<string, string>;
+    let auth: Pick<AuthService, 'usuario'> & { verificarSessao: jasmine.Spy };
+    let perfil: jasmine.SpyObj<PerfilService>;
     const url = `${environment.apiUrl}/loja/cotacao`;
     const dto = (ids = [1, 2], totalCentavos = 19000): LojaCotacao => ({ moeda: 'BRL', totalCentavos, geradaEm: '2026-10-15T12:00:00Z', itens: ids.map((id) => ({ produtoId: id, quantidade: 1, precoUnitarioCentavos: 9500, subtotalCentavos: 9500,
         produto: { id, sku: `SKU${id}`, titulo: `Livro ${id}`, descricao: null, categoria: { id: 2, nome: 'Música', slug: 'musica', categoriaPaiId: 1, ordem: 1 }, idioma: 'pt-br', imagemUrl: null, precoCentavos: 9500, moeda: 'BRL', disponivel: true, tipo: 'DIGITAL', livroId: 1, formatoEditorial: 'E-Book', quantidadeMaxima: 1 } })) });
-    beforeEach(() => { dados = new Map(); TestBed.configureTestingModule({ imports: [LojaCarrinhoComponent], providers: [provideZoneChangeDetection(), provideRouter([]), provideHttpClient(), provideHttpClientTesting(), { provide: CARRINHO_STORAGE, useValue: { getItem: (k: string) => dados.get(k) ?? null, setItem: (k: string, v: string) => dados.set(k, v), removeItem: (k: string) => dados.delete(k) } }] }); http = TestBed.inject(HttpTestingController); carrinho = TestBed.inject(CarrinhoService); });
+    beforeEach(() => { dados = new Map();
+        auth = { usuario: signal<UsuarioLogado | null>(null), verificarSessao: jasmine.createSpy('verificarSessao').and.resolveTo() };
+        perfil = jasmine.createSpyObj<PerfilService>('PerfilService', ['obterPerfil']);
+        TestBed.configureTestingModule({ imports: [LojaCarrinhoComponent], providers: [{ provide: AuthService, useValue: auth }, { provide: PerfilService, useValue: perfil }, provideZoneChangeDetection(), provideRouter([]), provideHttpClient(), provideHttpClientTesting(), { provide: CARRINHO_STORAGE, useValue: { getItem: (k: string) => dados.get(k) ?? null, setItem: (k: string, v: string) => dados.set(k, v), removeItem: (k: string) => dados.delete(k) } }] }); http = TestBed.inject(HttpTestingController); carrinho = TestBed.inject(CarrinhoService); });
     afterEach(() => http.verify());
     const pagina = (ids = [1, 2]) => { ids.forEach((id) => carrinho.adicionar(id)); fixture = TestBed.createComponent(LojaCarrinhoComponent); fixture.detectChanges(); };
     const carregar = () => { pagina(); http.expectOne(url).flush(dto()); fixture.detectChanges(); };
     const texto = () => fixture.nativeElement.textContent as string;
+    const usuario = (id = 7): UsuarioLogado => ({ id_usuario: id, id_tipo_usuario: 1, nome: 'Usuario sintetico', foto_url: null });
+    const respostaPerfil = (email: unknown = 'titular@example.invalid', id = 7) => ({
+        usuario: { idUsuario: id, email, cpf: 'DADO_PRIVADO_NAO_RENDERIZAR' }, concorrente: null
+    } as unknown as PerfilResponse);
+    const concluirPerfil = async () => { for (let i = 0; i < 8; i++) await Promise.resolve(); fixture.detectChanges(); };
+    const adiarPerfil = () => { let resolver!: (p: PerfilResponse) => void;
+        const promise = new Promise<PerfilResponse>(resolve => { resolver = resolve; });
+        perfil.obterPerfil.and.returnValue(promise); return (p = respostaPerfil()) => resolver(p);
+    };
+    it('email autenticado vem do perfil do servidor e permanece editavel', async () => {
+        auth.usuario.set(usuario()); perfil.obterPerfil.and.resolveTo(respostaPerfil(' titular@example.invalid '));
+        carregar(); await concluirPerfil();
+        const input: HTMLInputElement = fixture.nativeElement.querySelector('#comprador-email');
+        expect(auth.verificarSessao).toHaveBeenCalledTimes(1); expect(perfil.obterPerfil).toHaveBeenCalledOnceWith();
+        expect(input.value).toBe('titular@example.invalid'); expect(input.readOnly).toBeFalse();
+        expect(input.disabled).toBeFalse(); expect(fixture.componentInstance.email.pristine).toBeTrue();
+        expect(texto()).not.toContain('DADO_PRIVADO_NAO_RENDERIZAR');
+        http.expectNone('/api/loja/sessao'); http.expectNone('/api/loja/pedidos');
+    });
+    it('visitante nao usa email arbitrario de storage nem consulta perfil', async () => {
+        dados.set('usuario', JSON.stringify({ email: 'outro@example.invalid', id_usuario: 7 }));
+        carregar(); await concluirPerfil(); expect(perfil.obterPerfil).not.toHaveBeenCalled();
+        expect(fixture.componentInstance.email.value).toBe('');
+        expect(fixture.nativeElement.querySelector('#comprador-email').readOnly).toBeFalse();
+    });
+    for (const email of ['', 'invalido', 'titular@localhost', null, 7, 'a'.repeat(255) + '@example.invalid']) {
+        it(`perfil sem email valido (${String(email).slice(0,15)}) mantem preenchimento manual`, async () => {
+            auth.usuario.set(usuario()); perfil.obterPerfil.and.resolveTo(respostaPerfil(email));
+            carregar(); await concluirPerfil(); expect(fixture.componentInstance.email.value).toBe('');
+            expect(fixture.nativeElement.querySelector('#comprador-email').readOnly).toBeFalse();
+        });
+    }
+    it('falha do perfil nao bloqueia visitante ou preenchimento manual', async () => {
+        auth.usuario.set(usuario()); perfil.obterPerfil.and.rejectWith(new Error('Falha sintetica'));
+        carregar(); await concluirPerfil(); expect(fixture.componentInstance.email.value).toBe('');
+        fixture.componentInstance.email.setValue('manual@example.invalid');
+        expect(fixture.componentInstance.email.valid).toBeTrue(); expect(fixture.componentInstance.bloqueado()).toBeFalse();
+    });
+    it('falha ao verificar sessao nao consulta perfil nem bloqueia o carrinho', async () => {
+        auth.verificarSessao.and.rejectWith(new Error('Rede sintetica'));
+        carregar(); await concluirPerfil(); expect(perfil.obterPerfil).not.toHaveBeenCalled();
+        expect(fixture.componentInstance.email.value).toBe(''); expect(fixture.componentInstance.bloqueado()).toBeFalse();
+    });
+    for (const apagar of [false, true]) it(`digitar antes da resposta preserva a escolha manual, apagar=${apagar}`, async () => {
+        auth.usuario.set(usuario()); const resolver = adiarPerfil(); carregar(); await concluirPerfil();
+        const input: HTMLInputElement = fixture.nativeElement.querySelector('#comprador-email');
+        input.value = 'manual@example.invalid'; input.dispatchEvent(new Event('input'));
+        if (apagar) { input.value = ''; input.dispatchEvent(new Event('input')); }
+        resolver(); await concluirPerfil();
+        expect(fixture.componentInstance.email.value).toBe(apagar ? '' : 'manual@example.invalid');
+    });
+    it('email alterado depois do preenchimento nao e reaplicado', async () => {
+        auth.usuario.set(usuario()); perfil.obterPerfil.and.resolveTo(respostaPerfil()); carregar(); await concluirPerfil();
+        const input: HTMLInputElement = fixture.nativeElement.querySelector('#comprador-email');
+        input.value = 'alterado@example.invalid'; input.dispatchEvent(new Event('input')); await concluirPerfil();
+        expect(fixture.componentInstance.email.value).toBe('alterado@example.invalid'); expect(perfil.obterPerfil).toHaveBeenCalledTimes(1);
+    });
+    it('retomada preserva email da tentativa, pedido e suas chaves', async () => {
+        auth.usuario.set(usuario());
+        const tentativa = JSON.stringify({ chave: '20202020-2020-4020-8020-202020202020',
+            entrada: { produtoIds: [1,2], compradorEmail: 'preservado@example.invalid' },
+            totalCotado: 19000, expiraEm: new Date(Date.now()+86400000).toISOString() });
+        dados.set(PEDIDO_PENDENTE_STORAGE_KEY, tentativa);
+        const chaveCheckout = JSON.stringify({ pedidoPublicId: '30303030-3030-4030-8030-303030303030',
+            criacao: '40404040-4040-4040-8040-404040404040', captura: '50505050-5050-4050-8050-505050505050',
+            expiraSessao: new Date(Date.now()+86400000).toISOString() });
+        dados.set(CHECKOUT_STORAGE_KEY, chaveCheckout); carregar(); await concluirPerfil();
+        expect(fixture.componentInstance.email.value).toBe('preservado@example.invalid'); expect(perfil.obterPerfil).not.toHaveBeenCalled();
+        expect(dados.get(PEDIDO_PENDENTE_STORAGE_KEY)).toBe(tentativa); expect(dados.get(CHECKOUT_STORAGE_KEY)).toBe(chaveCheckout);
+        http.expectNone('/api/loja/checkout/capturar'); http.expectNone('/api/loja/pedidos');
+    });
+    it('email ja confirmado em memoria nao e sobrescrito', async () => {
+        auth.usuario.set(usuario()); TestBed.inject(LojaPedidoService).emailConfirmado.set('anterior@example.invalid');
+        carregar(); await concluirPerfil(); expect(fixture.componentInstance.email.value).toBe('anterior@example.invalid');
+        expect(perfil.obterPerfil).not.toHaveBeenCalled();
+    });
+    for (const trocar of [false, true]) it(`resposta antiga nao preenche apos logout ou troca de conta, trocar=${trocar}`, async () => {
+        auth.usuario.set(usuario()); const resolver = adiarPerfil(); carregar(); await concluirPerfil();
+        auth.usuario.set(trocar ? usuario(8) : null); resolver(); await concluirPerfil();
+        expect(fixture.componentInstance.email.value).toBe('');
+    });
+    it('perfil de outro titular nao preenche o campo', async () => {
+        auth.usuario.set(usuario()); perfil.obterPerfil.and.resolveTo(respostaPerfil('outro@example.invalid',8));
+        carregar(); await concluirPerfil(); expect(fixture.componentInstance.email.value).toBe('');
+    });
+    it('resposta depois da destruicao nao altera o formulario', async () => {
+        auth.usuario.set(usuario()); const resolver = adiarPerfil(); carregar(); await concluirPerfil();
+        const controle = fixture.componentInstance.email; fixture.destroy(); resolver();
+        for (let i = 0; i < 8; i++) await Promise.resolve(); expect(controle.value).toBe('');
+    });
     it('identifica email real persistido sem associar conta PayPal', () => {
         carregar();
         expect(fixture.nativeElement.querySelector('label[for="comprador-email"]').textContent).toBe('E-mail real para confirmação da compra');

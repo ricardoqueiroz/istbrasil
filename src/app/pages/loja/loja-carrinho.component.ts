@@ -1,4 +1,4 @@
-import { Component, DestroyRef, computed, effect, inject, signal, untracked } from '@angular/core';
+import { Component, DestroyRef, OnInit, computed, effect, inject, signal, untracked } from '@angular/core';
 import { RouterLink } from '@angular/router';
 import { FormControl, ReactiveFormsModule, Validators } from '@angular/forms';
 import { ButtonModule } from 'primeng/button';
@@ -10,6 +10,8 @@ import { LojaPedidoService } from '../../services/loja-pedido.service';
 import { LojaCheckoutComponent } from './loja-checkout.component';
 import { CheckoutEstado, LojaCheckoutService } from '../../services/loja-checkout.service';
 import { LojaCotacao, LojaPedido } from './models/loja.model';
+import { AuthService } from '../../shared/auth.service';
+import { PerfilService } from '../perfil/services/perfil.service';
 
 export const pedidosEquivalentes = (pedido: LojaPedido, cotacao: LojaCotacao): boolean => {
     const dinheiro = (n: number) => Number.isSafeInteger(n) && n > 0;
@@ -34,7 +36,10 @@ export const pedidosEquivalentes = (pedido: LojaPedido, cotacao: LojaCotacao): b
     imports: [RouterLink, ReactiveFormsModule, ButtonModule, InputTextModule, SkeletonModule, MessageModule, LojaCheckoutComponent],
     templateUrl: './loja-carrinho.component.html', styleUrl: './loja-carrinho.component.scss'
 })
-export class LojaCarrinhoComponent {
+export class LojaCarrinhoComponent implements OnInit {
+    private readonly auth = inject(AuthService);
+    private readonly perfil = inject(PerfilService);
+    private readonly destroyRef = inject(DestroyRef);
     readonly carrinho = inject(CarrinhoService);
     readonly pedidos = inject(LojaPedidoService);
     readonly checkout = inject(LojaCheckoutService);
@@ -65,7 +70,7 @@ export class LojaCarrinhoComponent {
     readonly preco = (centavos: number) => this.formato.format(centavos / 100);
 
     constructor() {
-        inject(DestroyRef).onDestroy(() => { if (this.cotacaoAnterior) this.checkout.cancelarContinuidade(); });
+        this.destroyRef.onDestroy(() => { if (this.cotacaoAnterior) this.checkout.cancelarContinuidade(); });
         effect(() => {
             this.carrinho.ids();
             // Somente mudancas nos IDs disparam cotacao; os estados da resposta nao.
@@ -79,6 +84,31 @@ export class LojaCarrinhoComponent {
                 }
             });
         });
+    }
+
+    ngOnInit(): void { void this.preencherEmailAutenticado(); }
+
+    private podePreencherEmail(): boolean {
+        return !this.destroyRef.destroyed && !this.email.dirty && this.email.value === ''
+            && !this.bloqueado() && !this.pedidos.confirmado() && !this.pedidos.emailConfirmado();
+    }
+
+    private async preencherEmailAutenticado(): Promise<void> {
+        try {
+            await this.auth.verificarSessao();
+            const usuario = this.auth.usuario();
+            if (!usuario || !Number.isSafeInteger(usuario.id_usuario) || usuario.id_usuario <= 0 || !this.podePreencherEmail()) return;
+            // Sem ID na requisicao: o endpoint identifica o titular pelo cookie JWT.
+            const perfil = await this.perfil.obterPerfil();
+            if (!this.podePreencherEmail() || this.auth.usuario()?.id_usuario !== usuario.id_usuario
+                || perfil?.usuario?.idUsuario !== usuario.id_usuario || typeof perfil.usuario.email !== 'string') return;
+            const email = perfil.usuario.email.trim();
+            const candidato = new FormControl(email, { nonNullable: true, validators: this.email.validator });
+            if (!email || candidato.invalid || !/^[\x21-\x7e]+$/.test(email) || !email.split('@')[1]?.includes('.')) return;
+            this.email.setValue(email);
+        } catch {
+            // Visitante, sessao expirada ou perfil indisponivel: compra manual preservada.
+        }
     }
 
     async consultarPedidoAnterior(): Promise<void> {
