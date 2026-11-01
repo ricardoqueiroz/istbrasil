@@ -175,6 +175,10 @@ export const criarLojaPagamentoService = ({ db, adaptador, contexto, agora = () 
         }
         if (pedidoDivergente(ctx, pg)) return revisar(ctx, pg, op, 'PEDIDO_DIVERGENTE', r);
         if (divergencia(pg, r)) return revisar(ctx, pg, op, 'DIVERGENCIA_FINANCEIRA', r);
+        if (r.estado === 'DESCONHECIDO' && falha?.categoria === 'RESPOSTA_INVALIDA'
+            && r.capturaId && Object.hasOwn(r, 'capturaCriadaEm') && !r.capturadoEm) {
+            return revisar(ctx, pg, op, 'CAPTURA_CRONOLOGIA_INDETERMINADA', evidencia);
+        }
         if (r.estado === 'DESCONHECIDO') {
             // IDs vem apenas da resposta normalizada da chamada injetada, vinculada
             // a referencia/ambiente e aos fatos observados acima. Ausencia nao confirma valores.
@@ -190,9 +194,19 @@ export const criarLojaPagamentoService = ({ db, adaptador, contexto, agora = () 
         }
         if (r.estado === 'CAPTURADO') {
             const outros = ctx.pagamentos.some(p => p.id !== pg.id && BigInt(p.capturado_centavos) > 0n);
+            const cronologiaPresente = Object.hasOwn(r, 'capturaCriadaEm');
+            const cronologiaCoerente = r.capturaCriadaEm && r.capturaAtualizadaEm
+                && r.capturaCriadaEm >= pg.criado_em && r.capturaCriadaEm >= op.envio_iniciado_em
+                && r.capturaCriadaEm <= r.capturaAtualizadaEm && r.capturaAtualizadaEm === r.capturadoEm;
+            // Confirmacao tardia exige proveniencia temporal explicita. Datas do
+            // recurso COMPLETED delimitam a conclusao, sem inventar seu instante exato.
+            const confirmacaoTardia = ctx.instante >= ctx.pedido.expira_em;
             if (fechado(pg) || op.acao !== 'CAPTURAR' || !op.envio_iniciado_em || outros
                 || !['CRIADO', 'AGUARDANDO_PAGAMENTO'].includes(ctx.pedido.estado)
-                || ctx.pedido.expira_em <= ctx.instante || r.capturadoEm < pg.criado_em || r.capturadoEm > ctx.instante) {
+                || op.envio_iniciado_em >= ctx.pedido.expira_em || r.capturadoEm >= ctx.pedido.expira_em
+                || r.capturadoEm < pg.criado_em || r.capturadoEm < op.envio_iniciado_em || r.capturadoEm > ctx.instante
+                || (cronologiaPresente && r.capturaCriadaEm && r.capturaAtualizadaEm && !cronologiaCoerente)
+                || (confirmacaoTardia && !cronologiaCoerente)) {
                 return revisar(ctx, pg, op, 'CAPTURA_TARDIA_OU_INESPERADA', evidencia);
             }
             await mudar(ctx, pg, 'CAPTURADO', { ordem_externa_id: r.ordemId, captura_externa_id: r.capturaId,
@@ -236,6 +250,13 @@ export const criarLojaPagamentoService = ({ db, adaptador, contexto, agora = () 
     const executar = async (job, reconciliar = false) => {
         const etapa = await transacao(job.referencia, async ctx => {
             const { pg, op } = operacaoCtx(ctx, job);
+            // O marco e persistido ANTES de chamar o provider e nunca e apagado.
+            // Lease vencida nao prova ausencia de envio; somente NULL permite continuar.
+            const continuarCaptura = job.recuperacao && op.acao === 'CAPTURAR' && op.envio_iniciado_em === null
+                && ['AGUARDANDO_APROVACAO', 'APROVADO', 'DESCONHECIDO'].includes(pg.estado)
+                && pg.captura_externa_id === null && pg.capturado_em === null && BigInt(pg.capturado_centavos) === 0n
+                && (op.estado === 'PREPARADA' || op.estado === 'DESCONHECIDA'
+                    || (op.estado === 'EM_EXECUCAO' && op.execucao_ate <= ctx.instante));
             let eventoRecebido;
             if (job.webhook) {
                 const w = job.webhook;
@@ -272,10 +293,13 @@ export const criarLojaPagamentoService = ({ db, adaptador, contexto, agora = () 
                 const prazo = new Date(Math.max(Date.parse(op.proxima_tentativa_em ?? op.atualizado_em),
                     Date.parse(op.atualizado_em) + 60000)).toISOString();
                 const elegivel = op.estado === 'DESCONHECIDA' || (op.estado === 'EM_EXECUCAO' && op.execucao_ate <= ctx.instante)
-                    || (pg.estado === 'PENDENTE' && op.estado === 'SUCESSO');
-                if (preferida?.id !== op.id || fechado(pg) || !['CRIANDO', 'CAPTURANDO', 'DESCONHECIDO', 'PENDENTE'].includes(pg.estado)
+                    || (pg.estado === 'PENDENTE' && op.estado === 'SUCESSO') || continuarCaptura;
+                if (preferida?.id !== op.id || fechado(pg) || !['CRIANDO', 'CAPTURANDO', 'DESCONHECIDO', 'PENDENTE',
+                    ...(continuarCaptura ? ['AGUARDANDO_APROVACAO', 'APROVADO'] : [])].includes(pg.estado)
                     || !elegivel || prazo > ctx.instante
                     || ['RECUPERACAO_LIMITE', 'RECUPERACAO_SEM_ORDEM'].includes(op.codigo_erro)) return { ignorada: true };
+                if (continuarCaptura && (ctx.pedido.expira_em <= ctx.instante
+                    || !['CRIADO', 'AGUARDANDO_PAGAMENTO'].includes(ctx.pedido.estado))) return { ignorada: true };
                 const usadas = await persistencia.contarRecuperacoes(ctx, pg, op);
                 if (!pg.ordem_externa_id || usadas >= 10 || op.tentativas >= 65535) {
                     const motivo = !pg.ordem_externa_id ? 'RECUPERACAO_SEM_ORDEM' : 'RECUPERACAO_LIMITE';
@@ -293,7 +317,7 @@ export const criarLojaPagamentoService = ({ db, adaptador, contexto, agora = () 
                 return { dto: pagamentoPublico(pg, ctx.pedido) };
             }
             if (op.estado === 'EM_EXECUCAO' && op.execucao_ate > ctx.instante) falhar('OPERACAO_EM_ANDAMENTO');
-            const consulta = reconciliar || ['DESCONHECIDA', 'EM_EXECUCAO'].includes(op.estado);
+            const consulta = !continuarCaptura && (reconciliar || ['DESCONHECIDA', 'EM_EXECUCAO'].includes(op.estado));
             if (!consulta) conferirPedido(ctx);
             const token = randomBytes(16);
             if (eventoRecebido) {
@@ -306,7 +330,7 @@ export const criarLojaPagamentoService = ({ db, adaptador, contexto, agora = () 
                 execucao_ate: new Date(Date.parse(ctx.instante) + execucaoMs).toISOString(), tentativas: op.tentativas + 1,
                 ...agendamento,
                 ...(!consulta && op.acao === 'CRIAR' ? { envio_iniciado_em: ctx.instante } : {}) });
-            return { token, consulta, acao: op.acao, args: { ...argsAdaptador(ctx, pg, op),
+            return { token, consulta, reconciliar: reconciliar && !continuarCaptura, acao: op.acao, args: { ...argsAdaptador(ctx, pg, op),
                 ...(reconciliar ? { provedor: pg.provedor } : {}) } };
         });
         if (etapa.ignorada || etapa.intervencao) return etapa;
@@ -333,7 +357,7 @@ export const criarLojaPagamentoService = ({ db, adaptador, contexto, agora = () 
             return ultimoResultado;
         };
         try {
-            if (reconciliar) {
+            if (etapa.reconciliar) {
                 const resultado = await obter('reconciliar', etapa.args);
                 return await aplicar(job, token, resultado, true, null, ultimaObservacao);
             }
@@ -341,8 +365,10 @@ export const criarLojaPagamentoService = ({ db, adaptador, contexto, agora = () 
             if (etapa.acao === 'CRIAR') return await aplicar(job, token, await obter('criar', etapa.args), false);
             const aprovado = await obter('consultar', etapa.args);
             if (aprovado.estado !== 'APROVADO') {
-                const dto = await aplicar(job, token, aprovado, true);
-                if (aprovado.estado === 'AGUARDANDO_APROVACAO') {
+                // Preflight desta tentativa, nao uma reconciliacao financeira.
+                // consultar() nao devolve o envelope observacional de reconciliar().
+                const dto = await aplicar(job, token, aprovado, false);
+                if (aprovado.estado === 'AGUARDANDO_APROVACAO' && !job.recuperacao) {
                     aprovacaoPendente = true;
                     falhar('APROVACAO_PENDENTE');
                 }
@@ -415,7 +441,8 @@ export const criarLojaPagamentoService = ({ db, adaptador, contexto, agora = () 
         });
         return executar(job);
     };
-    const capturar = async (sessao, entrada, chave) => {
+    // Chamado pelo gesto de pagar, antes da abertura do PayPal. Nao faz chamadas externas.
+    const prepararCaptura = async (sessao, entrada, chave) => {
         entrada = camposExatos(entrada, ['pagamentoPublicId']); chave = uuidPagamento(chave);
         const hash = hashPagamento({ versao: 1, acao: 'CAPTURAR', ...entrada, ...contexto });
         const job = await transacao(referencia(sessao, entrada), async ctx => {
@@ -428,7 +455,13 @@ export const criarLojaPagamentoService = ({ db, adaptador, contexto, agora = () 
             const op = await novoOp(ctx, pg, 'CAPTURAR', chave, hash);
             return trabalho(ctx, pg, op);
         });
-        return executar(job);
+        return job;
+    };
+    const capturar = async (sessao, entrada, chave) => {
+        return executar(await prepararCaptura(sessao, entrada, chave));
+    };
+    const registrarIntencaoCaptura = async (sessao, entrada, chave) => {
+        await prepararCaptura(sessao, entrada, chave);
     };
     const reconciliar = async (sessao, entrada) => {
         entrada = camposExatos(entrada, ['pagamentoPublicId']);
@@ -516,6 +549,6 @@ export const criarLojaPagamentoService = ({ db, adaptador, contexto, agora = () 
         if(!descoberta){descoberta=criarLojaDescobertaService({db,adaptador,contexto,desde,agora});inicioDescoberta=desde;}
         return descoberta.executar({fonte,signal});
     };
-    return Object.freeze({ criarTentativa, capturar, reconciliar, recuperarPendencias, reconciliarWebhook, consultarCheckout, receberEventoAdverso, reconciliarEventoAdverso,
+    return Object.freeze({ criarTentativa, registrarIntencaoCaptura, capturar, reconciliar, recuperarPendencias, reconciliarWebhook, consultarCheckout, receberEventoAdverso, reconciliarEventoAdverso,
         processarEventosAdversos,diagnosticarEventosAdversos,descobrirEventosAdversos });
 };

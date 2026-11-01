@@ -70,6 +70,21 @@ test('checkout HTTP protege sessao, CSRF, contrato e nao aceita dinheiro do clie
     assert.equal(r.status, 401);
 });
 
+test('S1 intencao de captura exige sessao, CSRF e chave, nao executa captura', async () => {
+    const token=randomBytes(32).toString('base64url'),sessao={id:1},chave=randomUUID(),pagamentoPublicId=randomUUID();
+    const chamadas=[];
+    const enviar=ambienteHttp({async registrarIntencaoCaptura(...args){chamadas.push(args);}},new Map([[token,sessao]]));
+    let r=await enviar('preparar-captura',{pagamentoPublicId},token,chave,{'x-csrf-token':'invalido'});
+    assert.equal(r.status,403);assert.equal(chamadas.length,0);
+    r=await enviar('preparar-captura',{pagamentoPublicId},token);assert.equal(r.status,400);
+    r=await enviar('preparar-captura',{pagamentoPublicId,total:1},token,chave);assert.equal(r.status,400);
+    r=await enviar('preparar-captura',{pagamentoPublicId},randomBytes(32).toString('base64url'),chave);
+    assert.equal(r.status,401);assert.equal(chamadas.length,0);
+    r=await enviar('preparar-captura',{pagamentoPublicId},token,chave);
+    assert.equal(r.status,204);assert.equal(r.body,null);
+    assert.deepEqual(chamadas,[[sessao,{pagamentoPublicId},chave]]);
+});
+
 test('checkout com pedidos, catalogo e financeiro reais em MariaDB descartavel; PayPal simulado',
     { skip: !process.env.IST_LOJA_PAGAMENTOS_MARIADB_BIN }, async t => {
     process.env.NODE_ENV = 'test';

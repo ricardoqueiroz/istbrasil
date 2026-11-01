@@ -498,3 +498,43 @@ for(const ambiente of ['sandbox','live'])test('ambiente '+ambiente+': captura, i
 test('ambientes divergentes sao rejeitados antes de HTTP e nao usam credenciais legadas',()=>{
  for(const ambiente of ['sandbox','live'])assert.throws(()=>criarPaypalProvider({env:{...env,IST_LOJA_PAYPAL_ENV:ambiente,LOJA_AMBIENTE:ambiente==='live'?'sandbox':'live'},http:{request(){assert.fail();}}}),{codigo:'CONFIGURACAO_INVALIDA'});
 });
+
+// S2: transporte HTTP em memoria; nenhum acesso a PayPal/Sandbox/Live.
+test('S2 preserva datas do recurso e nao usa horario da consulta',async()=>{
+    const a=args();const c={...captura(),update_time:'2026-10-16T12:01:00Z'};
+    const m=montar(()=>({status:200,data:ordem(a,'COMPLETED',c)}));
+    const r=await m.provider.consultar(a);
+    assert.equal(r.capturaCriadaEm,'2026-10-16T12:00:00.000Z');
+    assert.equal(r.capturaAtualizadaEm,'2026-10-16T12:01:00.000Z');
+    assert.equal(r.capturadoEm,r.capturaAtualizadaEm);assert.equal(m.financeiras().length,0);
+});
+test('S2 create_time isolado nao e promovido a evidencia de ultima atualizacao',async()=>{
+    const a=args(),m=montar(()=>({status:200,data:ordem(a,'COMPLETED',captura())}));
+    const r=await m.provider.consultar(a);assert.equal(r.capturaAtualizadaEm,null);
+    assert.equal(r.capturaCriadaEm,r.capturadoEm);
+});
+test('S2 reconciliacao usa datas do recurso de captura, nao da ordem',async()=>{
+    const a=args();const m=montarReconciliacao(a,f=>{
+        f.captura.update_time='2026-10-16T12:05:00Z';
+        f.ordem.update_time='2026-10-17T12:00:00Z';
+    });
+    const r=await m.provider.reconciliar(a);assert.equal(r.resultado.capturaAtualizadaEm,'2026-10-16T12:05:00.000Z');
+    assert.equal(r.resultado.capturaCriadaEm,'2026-10-16T12:00:00.000Z');assert.equal(m.financeiras().length,0);
+});
+test('S2 ausencia total de horario nao inventa capturadoEm',async()=>{
+    const a=args(),c=captura();delete c.create_time;
+    const m=montar(()=>({status:200,data:ordem(a,'COMPLETED',c)}));
+    await assert.rejects(m.provider.consultar(a),falha('RESPOSTA_INVALIDA','ENVIADO',f=>{
+        assert.equal(f.resultado.capturadoEm,null);assert.equal(f.resultado.capturaCriadaEm,null);
+        assert.equal(f.resultado.capturaAtualizadaEm,null);
+    }));
+});
+
+test('S2 datas contraditorias da captura nao sao reconciliadas como CONSISTENTE',async()=>{
+    const a=args();const m=montarReconciliacao(a,f=>{
+        f.captura.update_time='2026-10-16T11:59:00Z';
+    });
+    const r=await m.provider.reconciliar(a);
+    assert.equal(r.observacao.evidencia,'CONTRADITORIA');assert.notEqual(r.resultado.estado,'CAPTURADO');
+    assert.equal(m.financeiras().length,0);
+});

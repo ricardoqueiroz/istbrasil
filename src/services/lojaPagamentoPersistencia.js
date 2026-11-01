@@ -86,12 +86,15 @@ export const criarPersistenciaPagamento = ({ db, agora }) => {
                 FROM ist_loja_pagamentos p JOIN ist_loja_pedidos d ON d.id=p.pedido_id
                 JOIN ist_loja_pagamento_operacoes o ON o.pagamento_id=p.id AND o.pedido_id=d.id
                 WHERE p.provedor=? AND p.ambiente=? AND p.conta_recebedora=? AND p.reserva_ativa=1
-                AND p.estado IN ('CRIANDO','CAPTURANDO','DESCONHECIDO','PENDENTE')
+                AND (p.estado IN ('CRIANDO','CAPTURANDO','DESCONHECIDO','PENDENTE')
+                    OR (p.estado IN ('AGUARDANDO_APROVACAO','APROVADO') AND o.acao='CAPTURAR'
+                        AND o.envio_iniciado_em IS NULL AND o.estado IN ('PREPARADA','DESCONHECIDA','EM_EXECUCAO')))
                 AND (o.acao='CAPTURAR' OR NOT EXISTS (SELECT 1 FROM ist_loja_pagamento_operacoes x
                     WHERE x.pagamento_id=p.id AND x.acao='CAPTURAR'))
                 AND (o.codigo_erro IS NULL OR o.codigo_erro NOT IN ('RECUPERACAO_LIMITE','RECUPERACAO_SEM_ORDEM'))
                 AND (o.estado='DESCONHECIDA' OR (o.estado='EM_EXECUCAO' AND o.execucao_ate<=?)
-                    OR (p.estado='PENDENTE' AND o.estado='SUCESSO'))
+                    OR (p.estado='PENDENTE' AND o.estado='SUCESSO')
+                    OR (o.acao='CAPTURAR' AND o.estado='PREPARADA' AND o.envio_iniciado_em IS NULL))
                 AND GREATEST(COALESCE(o.proxima_tentativa_em,o.atualizado_em),DATE_ADD(o.atualizado_em,INTERVAL 1 MINUTE))<=?
                 ORDER BY COALESCE(o.proxima_tentativa_em,DATE_ADD(o.atualizado_em,INTERVAL 1 MINUTE)),o.id LIMIT ?`,
             [contexto.provedor, contexto.ambiente, contexto.contaRecebedora,

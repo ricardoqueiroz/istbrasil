@@ -227,6 +227,12 @@ export const criarPaypalProvider = ({ env = process.env, http = axios.create(), 
                 const completa = ref != null && ordemValida(d.id) && r.valorCentavos !== null && r.moeda && r.contaRecebedora;
                 if (c.status === 'COMPLETED' && d.status === 'COMPLETED' && completa && r.capturaId && capturado?.valor !== null && capturado?.valor !== undefined
                     && capturado.moeda && c.final_capture === true) {
+                    // update_time e ultima alteracao do recurso, nao a data do GET.
+                    // Com status COMPLETED, serve de limite superior conservador
+                    // da conclusao; create_time isolado nao prova essa conclusao.
+                    r.capturaCriadaEm = null; r.capturaAtualizadaEm = null;
+                    r.capturaCriadaEm = c.create_time == null ? null : lerInstante(c.create_time);
+                    r.capturaAtualizadaEm = c.update_time == null ? null : lerInstante(c.update_time);
                     r.capturadoEm = lerInstante(c.update_time ?? c.create_time); r.estado = 'CAPTURADO';
                 } else if (c.status === 'PENDING' && completa) r.estado = 'PENDENTE';
                 else if (c.status === 'DECLINED' && completa) r.estado = 'RECUSADO';

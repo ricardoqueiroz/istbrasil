@@ -87,7 +87,8 @@ export const validarTransicaoPagamento = (de, para) => {
  */
 export const normalizarResultadoPagamento = r => {
     if (!r || Object.getPrototypeOf(r) !== Object.prototype
-        || ['estado', 'referencia', 'ordemId', 'capturaId', 'valorCentavos', 'moeda', 'contaRecebedora', 'ambiente', 'capturadoEm']
+        || ['estado', 'referencia', 'ordemId', 'capturaId', 'valorCentavos', 'moeda', 'contaRecebedora', 'ambiente', 'capturadoEm',
+            'capturaCriadaEm', 'capturaAtualizadaEm']
             .some(k => { const d = Object.getOwnPropertyDescriptor(r, k); return d && !Object.hasOwn(d, 'value'); })) {
         throw erroPagamento('ERRO_INTERNO');
     }
@@ -109,7 +110,13 @@ export const normalizarResultadoPagamento = r => {
     return { estado: r.estado, referencia: r.referencia, ordemId: r.ordemId ?? null, capturaId: r.capturaId ?? null,
         valorCentavos: parcial && ausente(r.valorCentavos) ? null : centavosPagamento(r.valorCentavos), moeda: r.moeda ?? null,
         contaRecebedora: r.contaRecebedora ?? null, ambiente: r.ambiente,
-        capturadoEm: ausente(r.capturadoEm) ? null : instantePagamento(r.capturadoEm) };
+        capturadoEm: ausente(r.capturadoEm) ? null : instantePagamento(r.capturadoEm),
+        // Opcionais para compatibilidade com evidencias anteriores. Nao inferir
+        // a origem temporal de capturadoEm nos registros legados.
+        ...(Object.hasOwn(r, 'capturaCriadaEm') || Object.hasOwn(r, 'capturaAtualizadaEm') ? {
+            capturaCriadaEm: ausente(r.capturaCriadaEm) ? null : instantePagamento(r.capturaCriadaEm),
+            capturaAtualizadaEm: ausente(r.capturaAtualizadaEm) ? null : instantePagamento(r.capturaAtualizadaEm)
+        } : {}) };
 };
 
 /** Extensao interna para o futuro adaptador.reconciliar(contextoPersistido).
@@ -133,7 +140,8 @@ export const normalizarReconciliacaoPagamento = entrada => {
     };
     const envelope = registro(entrada, ['resultado', 'observacao']);
     const resultado = normalizarResultadoPagamento(registro(envelope.resultado,
-        ['estado', 'referencia', 'ordemId', 'capturaId', 'valorCentavos', 'moeda', 'contaRecebedora', 'ambiente', 'capturadoEm'],
+        ['estado', 'referencia', 'ordemId', 'capturaId', 'valorCentavos', 'moeda', 'contaRecebedora', 'ambiente', 'capturadoEm',
+            'capturaCriadaEm', 'capturaAtualizadaEm'],
         ['estado', 'referencia', 'ambiente']));
     const observacao = registro(envelope.observacao,
         ['evidencia', 'associacaoOrdem', 'validacao', 'statusOrdem', 'statusCaptura', 'motivoPendencia']);

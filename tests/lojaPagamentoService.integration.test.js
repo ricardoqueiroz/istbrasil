@@ -1476,7 +1476,7 @@ test('Fase A MariaDB 10.3.39: transacao financeira compartilhada e direitos',{
         beginTransaction:()=>c.beginTransaction(),commit:()=>commit?commit(c):c.commit(),
         rollback:()=>c.rollback(),release:()=>c.release(),destroy:()=>c.destroy()
     };}});
-    const compra=async(db=pool)=>{
+    const compra=async(db=pool,agora=()=>new Date(),aprovar=true)=>{
         const x=await novaCompra();x.direitos=[];
         for(const id of [1,2]){
             const [i]=await a.execute(`INSERT INTO ist_loja_pedido_itens(pedido_id,produto_id,posicao,sku_snapshot,titulo_snapshot,tipo_snapshot,
@@ -1486,9 +1486,9 @@ test('Fase A MariaDB 10.3.39: transacao financeira compartilhada e direitos',{
             await a.execute(`INSERT INTO ist_loja_download_direito_eventos(direito_id,direito_versao,estado_anterior,estado_novo,origem,motivo_codigo,ocorrido_em)
                 VALUES(?,1,NULL,'AGUARDANDO_CONFIRMACAO','PEDIDO','DIREITO_CRIADO',UTC_TIMESTAMP(3))`,[d.insertId]);
         }
-        x.sim=criarPagamentoSimulado();x.service=criarLojaPagamentoService({db,contexto:ctx,adaptador:comReconciliacaoTeste(x.sim.adaptador)});
+        x.sim=criarPagamentoSimulado({agora});x.service=criarLojaPagamentoService({db,contexto:ctx,agora,adaptador:comReconciliacaoTeste(x.sim.adaptador)});
         x.pg=await x.service.criarTentativa(x.sessao,{pedidoPublicId:x.pedidoPublicId},randomUUID());
-        x.sim.aprovado(x.pg.publicId);x.chave=randomUUID();
+        if(aprovar)x.sim.aprovado(x.pg.publicId);x.chave=randomUUID();
         x.capturar=()=>x.service.capturar(x.sessao,{pagamentoPublicId:x.pg.publicId},x.chave);
         x.reconciliar=()=>x.service.reconciliar(x.sessao,{pagamentoPublicId:x.pg.publicId});
         return x;
@@ -1522,6 +1522,145 @@ test('Fase A MariaDB 10.3.39: transacao financeira compartilhada e direitos',{
         await t.test(nome,async()=>{try{await fn();}catch(e){falha=e;throw e;}});
         if(falha)throw new Error('VALIDACAO_CRITICA_INTERROMPIDA',{cause:falha});
     };
+    // S1: provider simulado, banco/socket privados e relogio compartilhado; nenhuma API externa.
+    const continuidade=async(aprovar=true)=>{
+        let deslocamento=0; const agora=()=>new Date(Date.now()+deslocamento);
+        const x=await compra(pool,agora,aprovar);
+        x.agora=agora;
+        x.intencao=()=>x.service.registrarIntencaoCaptura(x.sessao,{pagamentoPublicId:x.pg.publicId},x.chave);
+        x.avancar=(ms=120000)=>{deslocamento+=ms;};
+        return x;
+    };
+    await caso('S1 callback normal reutiliza intencao e conserva chaves e request ID',async()=>{
+        const x=await continuidade();await x.intencao();const antes=await dados(x);
+        assert.equal(antes.ops[1].estado,'PREPARADA');assert.equal(antes.ops[1].envio_iniciado_em,null);
+        assert(antes.ds.every(d=>d.estado==='AGUARDANDO_CONFIRMACAO'));assert.equal(antes.outbox.length,0);
+        await x.intencao();await x.capturar();await x.capturar();const depois=await ativo(x);
+        assert.equal(depois.ops.length,2);assert.equal(depois.ops[1].chave_idempotencia,antes.ops[1].chave_idempotencia);
+        assert.equal(depois.ops[1].request_id_provedor,antes.ops[1].request_id_provedor);
+        assert.equal(x.sim.chamadas.capturar,1);assert.equal(x.sim.efeitosCaptura,1);
+    });
+    await caso('S1 callback perdido: worker captura intencao preparada e ativa uma vez',async()=>{
+        const x=await continuidade();await x.intencao();x.avancar();
+        await x.service.recuperarPendencias();await ativo(x);
+        await x.service.recuperarPendencias();assert.equal(x.sim.efeitosCaptura,1);assert.equal(x.sim.chamadas.capturar,1);
+    });
+    await caso('S1 callback e worker concorrentes compartilham a reserva InnoDB',async()=>{
+        const x=await continuidade();await x.intencao();x.avancar();
+        const entrou=adiar(),liberar=adiar();const original=x.sim.adaptador;
+        const servico=criarLojaPagamentoService({db:pool,contexto:ctx,agora:x.agora,
+            adaptador:comReconciliacaoTeste({...original,async capturar(args){entrou.resolver();await liberar.promessa;return original.capturar(args);}})});
+        const worker=servico.recuperarPendencias();await entrou.promessa;
+        await assert.rejects(x.capturar(),codigo('OPERACAO_EM_ANDAMENTO'));liberar.resolver();await worker;
+        await ativo(x);assert.equal(x.sim.chamadas.capturar,1);assert.equal(x.sim.efeitosCaptura,1);
+    });
+    await caso('S1 sem aprovacao nao captura; aprovacao posterior permite continuidade',async()=>{
+        const x=await continuidade(false);await x.intencao();x.avancar();
+        await x.service.recuperarPendencias();await pendente(x);assert.equal(x.sim.chamadas.capturar,0);
+        assert.equal((await dados(x)).ops[1].envio_iniciado_em,null);
+        x.sim.aprovado(x.pg.publicId);x.avancar();const r=await x.service.recuperarPendencias();
+        const d=await dados(x);assert.equal(d.pg[0].estado,'CAPTURADO',JSON.stringify({r,ops:d.ops}));await ativo(x);
+    });
+    await caso('S1 envio incerto sem efeito nao e retransmitido',async()=>{
+        const x=await continuidade();await x.intencao();x.sim.modos.captura='timeoutAntes';
+        await assert.rejects(x.capturar(),codigo('RESULTADO_DESCONHECIDO'));x.avancar();
+        await x.service.recuperarPendencias();await pendente(x);assert.equal(x.sim.chamadas.capturar,1);
+    });
+    await caso('S1 lease vencida antes do envio permite continuar sem trocar identidade',async()=>{
+        const x=await continuidade();await x.intencao();const antes=await dados(x);
+        await a.execute(`UPDATE ist_loja_pagamento_operacoes SET estado='EM_EXECUCAO',execucao_token=?,
+            execucao_ate=DATE_ADD(atualizado_em,INTERVAL 30 SECOND) WHERE id=?`,[Buffer.alloc(16,3),antes.ops[1].id]);
+        x.avancar();await x.service.recuperarPendencias();const depois=await ativo(x);
+        assert.equal(depois.ops[1].request_id_provedor,antes.ops[1].request_id_provedor);
+        assert.equal(x.sim.chamadas.capturar,1);
+    });
+    await caso('S1 captura pendente e resposta perdida sao reconciliadas sem repetir POST',async()=>{
+        for(const modo of ['pendente','respostaPerdida']){
+            const x=await continuidade();await x.intencao();x.sim.modos.captura=modo;
+            try{await x.capturar();}catch(e){assert.equal(e.codigo,'RESULTADO_DESCONHECIDO');}
+            if(modo==='pendente'){await pendente(x);x.sim.concluirPendente(x.pg.publicId);}
+            x.avancar();await x.service.recuperarPendencias();await ativo(x);
+            assert.equal(x.sim.chamadas.capturar,1);assert.equal(x.sim.efeitosCaptura,1);
+        }
+    });
+    await caso('S1 historico APROVADO sem intencao nunca e capturado automaticamente',async()=>{
+        const x=await continuidade();await x.reconciliar();x.avancar();
+        await x.service.recuperarPendencias();const d=await pendente(x);
+        assert.equal(d.pg[0].estado,'APROVADO');assert.equal(d.ops.length,1);assert.equal(x.sim.chamadas.capturar,0);
+    });
+    await caso('S1 captura parcial continua bloqueando pedido e direitos',async()=>{
+        const x=await continuidade();await x.intencao();
+        x.service=criarLojaPagamentoService({db:pool,contexto:ctx,agora:x.agora,adaptador:comReconciliacaoTeste({
+            ...x.sim.adaptador,async capturar(args){return {...await x.sim.adaptador.capturar(args),valorCentavos:'9500'};}
+        })});x.avancar();
+        await x.service.recuperarPendencias();const d=await pendente(x);
+        assert.equal(d.pg[0].estado,'REVISAO');assert.notEqual(d.pedido.estado,'PAGO');assert.equal(d.outbox.length,0);
+    });
+    // S2: datas observadas do recurso COMPLETED, nunca horario da consulta.
+    const temporal=async(alterar=r=>r)=>{
+        const x=await continuidade();
+        const projetar=r=>r.estado==='CAPTURADO'?alterar({...r,capturaCriadaEm:r.capturadoEm,capturaAtualizadaEm:r.capturadoEm}):r;
+        x.adaptadorTemporal={...x.sim.adaptador,
+            async consultar(args){return projetar(await x.sim.adaptador.consultar(args));},
+            async capturar(args){return projetar(await x.sim.adaptador.capturar(args));},
+            async reconciliar(args){return envelopeTeste(projetar(await x.sim.adaptador.consultar(args)));}
+        };
+        x.service=criarLojaPagamentoService({db:pool,contexto:ctx,agora:x.agora,adaptador:x.adaptadorTemporal});
+        await x.intencao();x.sim.modos.captura='pendente';await x.capturar();await pendente(x);
+        return x;
+    };
+    await caso('S2 captura no prazo e confirmacao depois reconhecem pagamento e ativam uma vez',async()=>{
+        const x=await temporal();x.sim.concluirPendente(x.pg.publicId);
+        const instanteCaptura=x.agora().toISOString();x.avancar(31*60000);
+        await x.service.recuperarPendencias();const d=await ativo(x);
+        assert(Date.parse(d.pg[0].capturado_em.replace(' ','T')+'Z')<=Date.parse(instanteCaptura));
+        assert(Date.parse(d.pg[0].capturado_em)<Date.parse(d.pedido.expira_em));
+        await x.reconciliar();await x.capturar();assert.equal((await dados(x)).ev.length,4);
+        assert.equal(x.sim.chamadas.capturar,1);assert.equal(x.sim.efeitosCaptura,1);
+    });
+    await caso('S2 captura realmente tardia conserva REVISAO e nao libera direitos',async()=>{
+        const x=await temporal();x.avancar(31*60000);x.sim.concluirPendente(x.pg.publicId);
+        await x.service.recuperarPendencias();const d=await pendente(x);
+        assert.equal(d.pg[0].estado,'REVISAO');assert.notEqual(d.pedido.estado,'PAGO');assert.equal(d.outbox.length,0);
+    });
+    for(const modo of ['semDatas','soCriacao','semHorarioFinanceiro','contraditoria','futura','atualizacaoPosterior']){
+        await caso(`S2 cronologia ${modo} nao confirma pedido expirado`,async()=>{
+            const x=await temporal(r=>{
+                if(modo==='semDatas'){delete r.capturaCriadaEm;delete r.capturaAtualizadaEm;}
+                if(modo==='soCriacao')r.capturaAtualizadaEm=null;
+                if(modo==='semHorarioFinanceiro')throw criarFalhaPagamento({categoria:'RESPOSTA_INVALIDA',envio:'ENVIADO',
+                    resultado:{...r,estado:'DESCONHECIDO',capturadoEm:null,capturaCriadaEm:null,capturaAtualizadaEm:null}});
+                if(modo==='contraditoria')r.capturaCriadaEm=new Date(Date.parse(r.capturaAtualizadaEm)+1000).toISOString();
+                if(modo==='futura')r.capturadoEm=r.capturaAtualizadaEm=new Date(x.agora().getTime()+60000).toISOString();
+                if(modo==='atualizacaoPosterior')r.capturadoEm=r.capturaAtualizadaEm=x.agora().toISOString();
+                return r;
+            });
+            x.sim.concluirPendente(x.pg.publicId);x.avancar(31*60000);await x.service.recuperarPendencias();
+            const d=await pendente(x);assert.equal(d.pg[0].estado,'REVISAO');assert.equal(d.outbox.length,0);
+            assert.equal(x.sim.chamadas.capturar,1);
+        });
+    }
+    await caso('S2 valor divergente nao e aceito por ter cronologia valida',async()=>{
+        const x=await temporal(r=>({...r,valorCentavos:'9500'}));x.sim.concluirPendente(x.pg.publicId);x.avancar(31*60000);
+        await x.service.recuperarPendencias();const d=await pendente(x);assert.equal(d.pg[0].estado,'REVISAO');assert.equal(d.outbox.length,0);
+    });
+    await caso('S2 intencao ainda nao enviada nao inicia captura apos vencer pedido',async()=>{
+        const x=await continuidade();await x.intencao();x.avancar(31*60000);
+        await x.service.recuperarPendencias();await pendente(x);assert.equal(x.sim.chamadas.capturar,0);
+        await assert.rejects(x.capturar(),codigo('PEDIDO_EXPIRADO'));assert.equal(x.sim.chamadas.capturar,0);
+    });
+    await caso('S2 webhook e recuperador concorrentes nao duplicam confirmacao, direito ou recibo',async()=>{
+        const x=await temporal();x.sim.concluirPendente(x.pg.publicId);x.avancar(31*60000);
+        const entrou=adiar(),liberar=adiar(),w=await webhook(x);
+        const servico=criarLojaPagamentoService({db:pool,contexto:ctx,agora:x.agora,adaptador:{...x.adaptadorTemporal,
+            async reconciliar(args){if(args.referencia===x.pg.publicId){entrou.resolver();await liberar.promessa;}return x.adaptadorTemporal.reconciliar(args);}
+        }});
+        const worker=servico.recuperarPendencias();await entrou.promessa;
+        try{await assert.rejects(x.service.reconciliarWebhook(w),codigo('OPERACAO_EM_ANDAMENTO'));}finally{liberar.resolver();}
+        await worker;await x.service.reconciliarWebhook(w);await x.service.reconciliarWebhook(w);
+        const d=await ativo(x);assert.equal(d.ev.length,4);assert.equal(d.outbox.length,1);
+        assert.equal(x.sim.chamadas.capturar,1);assert.equal(x.sim.efeitosCaptura,1);
+    });
     await caso('captura, repeticao, reconciliacao e webhook preservam uma ativacao e uma captura',async()=>{
         const x=await compra();await x.capturar();await ativo(x);const antes=JSON.stringify(await dados(x));
         await x.capturar();await x.reconciliar();

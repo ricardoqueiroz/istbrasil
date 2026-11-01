@@ -210,3 +210,20 @@ test('classificacao e sanitizada, validada e nao inferida de HTTP ou propriedade
     assert.throws(() => criarFalhaPagamento({ categoria: 'VALIDACAO_LOCAL', envio: 'INDETERMINADO' }));
     assert.throws(() => criarFalhaPagamento({ categoria: 'INVENTADA', envio: 'NAO_ENVIADO' }));
 });
+
+test('S2 timestamps opcionais preservam legado, UTC e rejeicao de getters',()=>{
+    const e=envelopeReconciliacao();
+    const legado=normalizarReconciliacaoPagamento(e);
+    assert(!Object.hasOwn(legado.resultado,'capturaCriadaEm'));
+    e.resultado.capturaCriadaEm='2026-10-16T12:00:00.000Z';
+    e.resultado.capturaAtualizadaEm='2026-10-16T12:01:00.000Z';
+    const n=normalizarReconciliacaoPagamento(e);
+    assert.equal(n.resultado.capturaCriadaEm,e.resultado.capturaCriadaEm);
+    assert.equal(n.resultado.capturaAtualizadaEm,e.resultado.capturaAtualizadaEm);
+    for(const campo of ['capturaCriadaEm','capturaAtualizadaEm']){
+        assert.throws(()=>normalizarResultadoPagamento({...e.resultado,[campo]:'2026-02-30T12:00:00.000Z'}));
+        const getter=Object.defineProperty({...e.resultado},campo,{enumerable:true,get(){assert.fail('getter executado');}});
+        assert.throws(()=>normalizarResultadoPagamento(getter),{codigo:'ERRO_INTERNO'});
+        assert.throws(()=>normalizarReconciliacaoPagamento({...e,resultado:getter}),{codigo:'ERRO_INTERNO'});
+    }
+});

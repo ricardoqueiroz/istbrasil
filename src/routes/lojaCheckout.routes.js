@@ -32,6 +32,12 @@ export const criarLojaCheckoutRouter = ({ obterFinanceiro, env = process.env, se
         const entrada = camposExatos(req.body, ['pedidoPublicId']);
         res.json(await obterFinanceiro().service.consultarCheckout(res.locals.sessaoLoja, entrada));
     });
+    router.post('/preparar-captura', async (req, res) => {
+        const entrada = camposExatos(req.body, ['pagamentoPublicId']);
+        const chave = uuidPagamento(req.get('Idempotency-Key'));
+        await obterFinanceiro().service.registrarIntencaoCaptura(res.locals.sessaoLoja, entrada, chave);
+        res.status(204).end();
+    });
     for (const acao of ['capturar', 'reconciliar']) router.post(`/${acao}`, async (req, res) => {
         const entrada = camposExatos(req.body, ['pagamentoPublicId']);
         const chave = acao === 'capturar' ? uuidPagamento(req.get('Idempotency-Key')) : undefined;
