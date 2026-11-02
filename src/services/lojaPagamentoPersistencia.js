@@ -77,15 +77,16 @@ export const criarPersistenciaPagamento = ({ db, agora }) => {
             } finally { if (c) c.release(); }
         }
     };
-    const candidatosRecuperacao = async (contexto, limite) => {
+    const candidatosRecuperacao = async (contexto, limite, pedidoPublicId = null) => {
         let c;
         try {
             c = await db.getConnection();
             const [linhas] = await c.query(`SELECT p.id AS pagamentoId, p.pedido_id AS pedidoId,
-                d.sessao_id AS sessaoId, o.id AS operacaoId
+                d.sessao_id AS sessaoId, d.public_id AS pedidoPublicId, o.id AS operacaoId
                 FROM ist_loja_pagamentos p JOIN ist_loja_pedidos d ON d.id=p.pedido_id
                 JOIN ist_loja_pagamento_operacoes o ON o.pagamento_id=p.id AND o.pedido_id=d.id
                 WHERE p.provedor=? AND p.ambiente=? AND p.conta_recebedora=? AND p.reserva_ativa=1
+                AND (? IS NULL OR d.public_id=?)
                 AND (p.estado IN ('CRIANDO','CAPTURANDO','DESCONHECIDO','PENDENTE')
                     OR (p.estado IN ('AGUARDANDO_APROVACAO','APROVADO') AND o.acao='CAPTURAR'
                         AND o.envio_iniciado_em IS NULL AND o.estado IN ('PREPARADA','DESCONHECIDA','EM_EXECUCAO')))
@@ -97,7 +98,7 @@ export const criarPersistenciaPagamento = ({ db, agora }) => {
                     OR (o.acao='CAPTURAR' AND o.estado='PREPARADA' AND o.envio_iniciado_em IS NULL))
                 AND GREATEST(COALESCE(o.proxima_tentativa_em,o.atualizado_em),DATE_ADD(o.atualizado_em,INTERVAL 1 MINUTE))<=?
                 ORDER BY COALESCE(o.proxima_tentativa_em,DATE_ADD(o.atualizado_em,INTERVAL 1 MINUTE)),o.id LIMIT ?`,
-            [contexto.provedor, contexto.ambiente, contexto.contaRecebedora,
+            [contexto.provedor, contexto.ambiente, contexto.contaRecebedora, pedidoPublicId, pedidoPublicId,
                 sqlUtcPagamento(agora().toISOString()), sqlUtcPagamento(agora().toISOString()), limite]);
             return linhas;
         } catch { throw erroPagamento('ERRO_INTERNO'); }

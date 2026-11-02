@@ -250,6 +250,7 @@ export const criarLojaPagamentoService = ({ db, adaptador, contexto, agora = () 
     const executar = async (job, reconciliar = false) => {
         const etapa = await transacao(job.referencia, async ctx => {
             const { pg, op } = operacaoCtx(ctx, job);
+            if (job.pedidoPublicId && ctx.pedido.public_id !== job.pedidoPublicId) falhar('PEDIDO_NAO_ENCONTRADO');
             // O marco e persistido ANTES de chamar o provider e nunca e apagado.
             // Lease vencida nao prova ausencia de envio; somente NULL permite continuar.
             const continuarCaptura = job.recuperacao && op.acao === 'CAPTURAR' && op.envio_iniciado_em === null
@@ -495,15 +496,22 @@ export const criarLojaPagamentoService = ({ db, adaptador, contexto, agora = () 
         if (!concluido) falhar('RESULTADO_DESCONHECIDO');
     };
     // Entrada interna, sem HTTP, timer, pool padrao ou sessao fornecida pelo comprador.
-    const recuperarPendencias = async ({ limite = 10 } = {}) => {
+    const recuperarPendencias = async (opcoes = {}) => {
+        if (!opcoes || Object.getPrototypeOf(opcoes) !== Object.prototype
+            || Reflect.ownKeys(opcoes).some(k => !['limite', 'pedidoPublicId'].includes(k)
+                || !Object.getOwnPropertyDescriptor(opcoes, k)?.enumerable
+                || !Object.hasOwn(Object.getOwnPropertyDescriptor(opcoes, k), 'value'))) falhar('SOLICITACAO_INVALIDA');
+        const limite = Object.hasOwn(opcoes, 'limite') ? opcoes.limite : 10;
+        const pedidoPublicId = Object.hasOwn(opcoes, 'pedidoPublicId') ? uuidPagamento(opcoes.pedidoPublicId) : null;
         if (!Number.isInteger(limite) || limite < 1 || limite > 10) falhar('SOLICITACAO_INVALIDA');
         if (typeof adaptador.reconciliar !== 'function') falhar('CONFIGURACAO_INVALIDA');
-        const candidatos = await persistencia.candidatosRecuperacao(contexto, limite);
+        const candidatos = await persistencia.candidatosRecuperacao(contexto, limite, pedidoPublicId);
         const resultados = [];
         for (const c of candidatos) {
             try {
                 const resultado = await executar({ referencia: { sessaoId: c.sessaoId, pedidoId: c.pedidoId, verificarSessao: false },
-                    pagamentoId: c.pagamentoId, operacaoId: c.operacaoId, recuperacao: true }, true);
+                    pagamentoId: c.pagamentoId, operacaoId: c.operacaoId, recuperacao: true,
+                    pedidoPublicId: pedidoPublicId ?? uuidPagamento(c.pedidoPublicId) }, true);
                 resultados.push({ pagamentoId: c.pagamentoId, resultado });
             } catch (e) {
                 resultados.push({ pagamentoId: c.pagamentoId, erro: e.codigo ?? 'ERRO_INTERNO' });

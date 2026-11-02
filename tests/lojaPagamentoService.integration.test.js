@@ -1455,6 +1455,9 @@ test('nucleo transacional em MariaDB descartavel e adaptador exclusivo de testes
 test('Fase A MariaDB 10.3.39: transacao financeira compartilhada e direitos',{
     skip:process.env.IST_LOJA_MARIADB_NATIVO_10339!=='true',timeout:120000
 },async t=>{
+    const nodeEnvAnterior=process.env.NODE_ENV;
+    process.env.NODE_ENV='test';
+    t.after(()=>{if(nodeEnvAnterior===undefined)delete process.env.NODE_ENV;else process.env.NODE_ENV=nodeEnvAnterior;});
     const f=await criarBancoPagamentoIsolado(t),{admin:a,pool,novaCompra}=f;
     assert.match(f.versao,/^10\.3\.39-MariaDB/);
     const ctx={provedor:'paypal',ambiente:'sandbox',contaRecebedora:'RECEBEDOR-SINTETICO'};
@@ -1545,6 +1548,34 @@ test('Fase A MariaDB 10.3.39: transacao financeira compartilhada e direitos',{
         await x.service.recuperarPendencias();await ativo(x);
         await x.service.recuperarPendencias();assert.equal(x.sim.efeitosCaptura,1);assert.equal(x.sim.chamadas.capturar,1);
     });
+    await caso('S1 filtro seleciona o pedido antes do LIMIT e preserva historico elegivel',async()=>{
+        const historico=await continuidade();await historico.intencao();historico.avancar();
+        const alvo=await continuidade();await alvo.intencao();alvo.avancar();
+        const antes=JSON.stringify(await dados(historico));
+        const r=await alvo.service.recuperarPendencias({limite:1,pedidoPublicId:alvo.pedidoPublicId});
+        assert.equal(r.length,1);await ativo(alvo);
+        assert.equal(JSON.stringify(await dados(historico)),antes);
+        assert.equal(historico.sim.chamadas.capturar,0);assert.equal(alvo.sim.chamadas.capturar,1);
+    });
+    await caso('S1 filtro de outro pedido nao seleciona nem modifica a intencao',async()=>{
+        const x=await continuidade();await x.intencao();x.avancar();const antes=JSON.stringify(await dados(x));
+        assert.deepEqual(await x.service.recuperarPendencias({limite:1,pedidoPublicId:randomUUID()}),[]);
+        assert.equal(JSON.stringify(await dados(x)),antes);assert.equal(x.sim.chamadas.consultar,0);assert.equal(x.sim.chamadas.capturar,0);
+    });
+    await caso('S1 revalida identidade publica dentro da transacao antes do provider',async()=>{
+        const alvo=await continuidade();await alvo.intencao();alvo.avancar();
+        const outro=await continuidade();await outro.intencao();outro.avancar();
+        const d=await dados(outro),op=d.ops.find(o=>o.acao==='CAPTURAR'),pg=d.pg[0];
+        const antes=JSON.stringify(d);
+        const db=envolver(async sql=>sql.includes('SELECT p.id AS pagamentoId')&&sql.includes('d.public_id AS pedidoPublicId')
+            ? [[{pagamentoId:pg.id,pedidoId:outro.pedidoId,sessaoId:outro.sessao.id,
+                pedidoPublicId:alvo.pedidoPublicId,operacaoId:op.id}]] : undefined);
+        const service=criarLojaPagamentoService({db,contexto:ctx,agora:alvo.agora,adaptador:comReconciliacaoTeste(alvo.sim.adaptador)});
+        const r=await service.recuperarPendencias({limite:1,pedidoPublicId:alvo.pedidoPublicId});
+        assert.equal(r.length,1);assert.equal(r[0].erro,'PEDIDO_NAO_ENCONTRADO');
+        assert.equal(JSON.stringify(await dados(outro)),antes);
+        assert.equal(alvo.sim.chamadas.consultar,0);assert.equal(alvo.sim.chamadas.capturar,0);
+    });
     await caso('S1 callback e worker concorrentes compartilham a reserva InnoDB',async()=>{
         const x=await continuidade();await x.intencao();x.avancar();
         const entrou=adiar(),liberar=adiar();const original=x.sim.adaptador;
@@ -1564,7 +1595,8 @@ test('Fase A MariaDB 10.3.39: transacao financeira compartilhada e direitos',{
     await caso('S1 envio incerto sem efeito nao e retransmitido',async()=>{
         const x=await continuidade();await x.intencao();x.sim.modos.captura='timeoutAntes';
         await assert.rejects(x.capturar(),codigo('RESULTADO_DESCONHECIDO'));x.avancar();
-        await x.service.recuperarPendencias();await pendente(x);assert.equal(x.sim.chamadas.capturar,1);
+        await x.service.recuperarPendencias({limite:1,pedidoPublicId:x.pedidoPublicId});
+        await pendente(x);assert.equal(x.sim.chamadas.capturar,1);
     });
     await caso('S1 lease vencida antes do envio permite continuar sem trocar identidade',async()=>{
         const x=await continuidade();await x.intencao();const antes=await dados(x);
@@ -1587,6 +1619,11 @@ test('Fase A MariaDB 10.3.39: transacao financeira compartilhada e direitos',{
         const x=await continuidade();await x.reconciliar();x.avancar();
         await x.service.recuperarPendencias();const d=await pendente(x);
         assert.equal(d.pg[0].estado,'APROVADO');assert.equal(d.ops.length,1);assert.equal(x.sim.chamadas.capturar,0);
+    });
+    await caso('S1 filtro nao recaptura pagamento concluido',async()=>{
+        const x=await continuidade();await x.intencao();await x.capturar();await ativo(x);
+        assert.deepEqual(await x.service.recuperarPendencias({limite:1,pedidoPublicId:x.pedidoPublicId}),[]);
+        assert.equal(x.sim.chamadas.capturar,1);assert.equal(x.sim.efeitosCaptura,1);
     });
     await caso('S1 captura parcial continua bloqueando pedido e direitos',async()=>{
         const x=await continuidade();await x.intencao();
@@ -1646,7 +1683,9 @@ test('Fase A MariaDB 10.3.39: transacao financeira compartilhada e direitos',{
     });
     await caso('S2 intencao ainda nao enviada nao inicia captura apos vencer pedido',async()=>{
         const x=await continuidade();await x.intencao();x.avancar(31*60000);
-        await x.service.recuperarPendencias();await pendente(x);assert.equal(x.sim.chamadas.capturar,0);
+        const r=await x.service.recuperarPendencias({limite:1,pedidoPublicId:x.pedidoPublicId});
+        assert.equal(r.length,1);assert.equal(r[0].resultado.ignorada,true);
+        await pendente(x);assert.equal(x.sim.chamadas.capturar,0);
         await assert.rejects(x.capturar(),codigo('PEDIDO_EXPIRADO'));assert.equal(x.sim.chamadas.capturar,0);
     });
     await caso('S2 webhook e recuperador concorrentes nao duplicam confirmacao, direito ou recibo',async()=>{
