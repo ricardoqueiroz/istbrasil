@@ -1479,7 +1479,7 @@ test('Fase A MariaDB 10.3.39: transacao financeira compartilhada e direitos',{
         beginTransaction:()=>c.beginTransaction(),commit:()=>commit?commit(c):c.commit(),
         rollback:()=>c.rollback(),release:()=>c.release(),destroy:()=>c.destroy()
     };}});
-    const compra=async(db=pool,agora=()=>new Date(),aprovar=true)=>{
+    const compra=async(db=pool,agora=()=>new Date(),aprovar=true,contextoLocal=ctx)=>{
         const x=await novaCompra();x.direitos=[];
         for(const id of [1,2]){
             const [i]=await a.execute(`INSERT INTO ist_loja_pedido_itens(pedido_id,produto_id,posicao,sku_snapshot,titulo_snapshot,tipo_snapshot,
@@ -1489,7 +1489,7 @@ test('Fase A MariaDB 10.3.39: transacao financeira compartilhada e direitos',{
             await a.execute(`INSERT INTO ist_loja_download_direito_eventos(direito_id,direito_versao,estado_anterior,estado_novo,origem,motivo_codigo,ocorrido_em)
                 VALUES(?,1,NULL,'AGUARDANDO_CONFIRMACAO','PEDIDO','DIREITO_CRIADO',UTC_TIMESTAMP(3))`,[d.insertId]);
         }
-        x.sim=criarPagamentoSimulado({agora});x.service=criarLojaPagamentoService({db,contexto:ctx,agora,adaptador:comReconciliacaoTeste(x.sim.adaptador)});
+        x.sim=criarPagamentoSimulado({agora});x.service=criarLojaPagamentoService({db,contexto:contextoLocal,agora,adaptador:comReconciliacaoTeste(x.sim.adaptador)});
         x.pg=await x.service.criarTentativa(x.sessao,{pedidoPublicId:x.pedidoPublicId},randomUUID());
         if(aprovar)x.sim.aprovado(x.pg.publicId);x.chave=randomUUID();
         x.capturar=()=>x.service.capturar(x.sessao,{pagamentoPublicId:x.pg.publicId},x.chave);
@@ -1526,9 +1526,9 @@ test('Fase A MariaDB 10.3.39: transacao financeira compartilhada e direitos',{
         if(falha)throw new Error('VALIDACAO_CRITICA_INTERROMPIDA',{cause:falha});
     };
     // S1: provider simulado, banco/socket privados e relogio compartilhado; nenhuma API externa.
-    const continuidade=async(aprovar=true)=>{
+    const continuidade=async(aprovar=true,contextoLocal=ctx)=>{
         let deslocamento=0; const agora=()=>new Date(Date.now()+deslocamento);
-        const x=await compra(pool,agora,aprovar);
+        const x=await compra(pool,agora,aprovar,contextoLocal);
         x.agora=agora;
         x.intencao=()=>x.service.registrarIntencaoCaptura(x.sessao,{pagamentoPublicId:x.pg.publicId},x.chave);
         x.avancar=(ms=120000)=>{deslocamento+=ms;};
@@ -1681,12 +1681,24 @@ test('Fase A MariaDB 10.3.39: transacao financeira compartilhada e direitos',{
         const x=await temporal(r=>({...r,valorCentavos:'9500'}));x.sim.concluirPendente(x.pg.publicId);x.avancar(31*60000);
         await x.service.recuperarPendencias();const d=await pendente(x);assert.equal(d.pg[0].estado,'REVISAO');assert.equal(d.outbox.length,0);
     });
-    await caso('S2 intencao ainda nao enviada nao inicia captura apos vencer pedido',async()=>{
+    await caso('S2 intencao ainda nao enviada nao e selecionada apos vencer pedido',async()=>{
         const x=await continuidade();await x.intencao();x.avancar(31*60000);
         const r=await x.service.recuperarPendencias({limite:1,pedidoPublicId:x.pedidoPublicId});
-        assert.equal(r.length,1);assert.equal(r[0].resultado.ignorada,true);
+        assert.deepEqual(r,[]);
         await pendente(x);assert.equal(x.sim.chamadas.capturar,0);
         await assert.rejects(x.capturar(),codigo('PEDIDO_EXPIRADO'));assert.equal(x.sim.chamadas.capturar,0);
+    });
+    await caso('selecao LIMIT 1 ignora captura expirada antiga e recupera vigente',async()=>{
+        const contextoLocal={...ctx,contaRecebedora:'RECEBEDOR-LIMITE'};
+        const expirado=await continuidade(true,contextoLocal);await expirado.intencao();
+        const vigente=await continuidade(true,contextoLocal);await vigente.intencao();vigente.avancar();
+        await a.query('UPDATE ist_loja_pedidos SET expira_em=DATE_ADD(criado_em,INTERVAL 2 SECOND) WHERE id=?',[expirado.pedidoId]);
+        await a.query('UPDATE ist_loja_pagamentos SET expira_em=DATE_ADD(criado_em,INTERVAL 2 SECOND) WHERE public_id=?',[expirado.pg.publicId]);
+        const antes=JSON.stringify(await dados(expirado));
+        const r=await vigente.service.recuperarPendencias({limite:1});
+        assert.equal(r.length,1);assert.equal(r[0].pagamentoId,(await dados(vigente)).pg[0].id);
+        await ativo(vigente);assert.equal(JSON.stringify(await dados(expirado)),antes);
+        assert.equal(expirado.sim.chamadas.capturar,0);assert.equal(vigente.sim.chamadas.capturar,1);
     });
     await caso('S2 webhook e recuperador concorrentes nao duplicam confirmacao, direito ou recibo',async()=>{
         const x=await temporal();x.sim.concluirPendente(x.pg.publicId);x.avancar(31*60000);

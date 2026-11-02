@@ -10,7 +10,7 @@ const ambiente = { NODE_ENV: 'production', DB_HOST: '127.0.0.1', DB_PORT: '3307'
     IST_LOJA_PAYPAL_CLIENT_ID: 'fixture-client', IST_LOJA_PAYPAL_CLIENT_SECRET: 'fixture-secret',
     IST_LOJA_PAYPAL_CONTA_RECEBEDORA: contexto.contaRecebedora };
 
-test('filtro de recuperacao e parametrizado no SELECT antes da ordenacao e do LIMIT', async () => {
+test('filtros de pedido e captura expirada nunca enviada precedem ordenacao e LIMIT', async () => {
     const pedidoPublicId = randomUUID(), consultas = []; let liberada = 0;
     const db = { async getConnection() { return {
         async query(sql, params) { consultas.push({ sql, params }); return [[{
@@ -21,14 +21,19 @@ test('filtro de recuperacao e parametrizado no SELECT antes da ordenacao e do LI
     assert.equal((await persistencia.candidatosRecuperacao(contexto, 1, pedidoPublicId))[0].pedidoPublicId, pedidoPublicId);
     const filtrada = consultas[0];
     const filtro = 'AND (? IS NULL OR d.public_id=?)';
+    const expirada = "AND NOT (o.acao='CAPTURAR' AND o.envio_iniciado_em IS NULL AND d.expira_em<=?)";
     assert(filtrada.sql.includes(filtro));
-    assert(filtrada.sql.indexOf(filtro) < filtrada.sql.indexOf('ORDER BY'));
-    assert(filtrada.sql.indexOf(filtro) < filtrada.sql.indexOf('LIMIT ?'));
-    assert.deepEqual(filtrada.params.slice(0, 5), [contexto.provedor, contexto.ambiente,
-        contexto.contaRecebedora, pedidoPublicId, pedidoPublicId]);
-    assert.equal(filtrada.params.at(-1), 1);
+    assert(filtrada.sql.includes(expirada));
+    for (const condicao of [filtro, expirada]) {
+        assert(filtrada.sql.indexOf(condicao) < filtrada.sql.indexOf('ORDER BY'));
+        assert(filtrada.sql.indexOf(condicao) < filtrada.sql.indexOf('LIMIT ?'));
+    }
+    const instante = '2026-11-02 12:00:00.000';
+    assert.deepEqual(filtrada.params, [contexto.provedor, contexto.ambiente,
+        contexto.contaRecebedora, pedidoPublicId, pedidoPublicId, instante, instante, instante, 1]);
     await persistencia.candidatosRecuperacao(contexto, 10);
     assert.deepEqual(consultas[1].params.slice(3, 5), [null, null]);
+    assert.deepEqual(consultas[1].params.slice(5, 8), [instante, instante, instante]);
     assert.equal(consultas[1].params.at(-1), 10);
     assert.equal(liberada, 2);
 });

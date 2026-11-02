@@ -81,6 +81,7 @@ export const criarPersistenciaPagamento = ({ db, agora }) => {
         let c;
         try {
             c = await db.getConnection();
+            const instante = sqlUtcPagamento(agora().toISOString());
             const [linhas] = await c.query(`SELECT p.id AS pagamentoId, p.pedido_id AS pedidoId,
                 d.sessao_id AS sessaoId, d.public_id AS pedidoPublicId, o.id AS operacaoId
                 FROM ist_loja_pagamentos p JOIN ist_loja_pedidos d ON d.id=p.pedido_id
@@ -93,13 +94,14 @@ export const criarPersistenciaPagamento = ({ db, agora }) => {
                 AND (o.acao='CAPTURAR' OR NOT EXISTS (SELECT 1 FROM ist_loja_pagamento_operacoes x
                     WHERE x.pagamento_id=p.id AND x.acao='CAPTURAR'))
                 AND (o.codigo_erro IS NULL OR o.codigo_erro NOT IN ('RECUPERACAO_LIMITE','RECUPERACAO_SEM_ORDEM'))
+                AND NOT (o.acao='CAPTURAR' AND o.envio_iniciado_em IS NULL AND d.expira_em<=?)
                 AND (o.estado='DESCONHECIDA' OR (o.estado='EM_EXECUCAO' AND o.execucao_ate<=?)
                     OR (p.estado='PENDENTE' AND o.estado='SUCESSO')
                     OR (o.acao='CAPTURAR' AND o.estado='PREPARADA' AND o.envio_iniciado_em IS NULL))
                 AND GREATEST(COALESCE(o.proxima_tentativa_em,o.atualizado_em),DATE_ADD(o.atualizado_em,INTERVAL 1 MINUTE))<=?
                 ORDER BY COALESCE(o.proxima_tentativa_em,DATE_ADD(o.atualizado_em,INTERVAL 1 MINUTE)),o.id LIMIT ?`,
             [contexto.provedor, contexto.ambiente, contexto.contaRecebedora, pedidoPublicId, pedidoPublicId,
-                sqlUtcPagamento(agora().toISOString()), sqlUtcPagamento(agora().toISOString()), limite]);
+                instante, instante, instante, limite]);
             return linhas;
         } catch { throw erroPagamento('ERRO_INTERNO'); }
         finally { if (c) c.release(); }
