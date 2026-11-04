@@ -13,8 +13,14 @@ cleanup() { if [[ -n "$TMP" && -d "$TMP" ]]; then rm -rf -- "$TMP"; fi; }
 trap 'fail "$LINENO" "$BASH_COMMAND"' ERR
 trap cleanup EXIT
 
+MODE=${1:-}
+if [[ $# -gt 1 || ( -n "$MODE" && "$MODE" != '--deploy-only' ) ]]; then
+  printf 'Uso: %s [--deploy-only]\n' "$0" >&2
+  exit 2
+fi
+
 say 'Verificações prévias (sem modificar a instalação)'
-for cmd in git tar rsync node pm2 ss; do
+for cmd in git tar rsync node pm2 ss curl; do
   command -v "$cmd" >/dev/null || { echo "Comando ausente: $cmd" >&2; exit 1; }
 done
 cd "$REPO"
@@ -29,28 +35,40 @@ if git diff --name-only --diff-filter=U | grep -q . || git diff --cached --name-
   echo 'Conflitos de merge no Git.' >&2; exit 1
 fi
 
-printf '\nMensagem do commit: '
-IFS= read -r MESSAGE
-[[ -n "${MESSAGE//[[:space:]]/}" ]] || { echo 'Mensagem vazia.' >&2; exit 1; }
+if [[ "$MODE" == '--deploy-only' ]]; then
+  if [[ -n "$(git status --porcelain)" ]]; then
+    echo 'Modo --deploy-only exige diretório Git limpo. Registre ou descarte as alterações antes de republicar.' >&2
+    exit 1
+  fi
+  REV=$(git rev-parse HEAD)
+  say "Republicando commit existente: $REV"
+  printf 'Confirmar republicação deste commit na homologação? [s/N] '
+  IFS= read -r CONFIRM
+  [[ "$CONFIRM" == s || "$CONFIRM" == S ]] || { echo 'Cancelado sem publicar.'; exit 0; }
+else
+  printf '\nMensagem do commit: '
+  IFS= read -r MESSAGE
+  [[ -n "${MESSAGE//[[:space:]]/}" ]] || { echo 'Mensagem vazia.' >&2; exit 1; }
 
-say 'Preparando arquivos para revisão (sem incluir SQL locais)'
-git add -A -- . ':!*.sql' ':!*.sql:Zone.Identifier'
-if git diff --cached --quiet; then
-  echo 'Nenhuma alteração preparada; não será feita publicação.' >&2; exit 1
+  say 'Preparando arquivos para revisão (sem incluir SQL locais)'
+  git add -A -- . ':!*.sql' ':!*.sql:Zone.Identifier'
+  if git diff --cached --quiet; then
+    echo 'Nenhuma alteração preparada; não será feita publicação.' >&2; exit 1
+  fi
+  git diff --cached --check
+  printf '\nResumo das alterações preparadas:\n'
+  git diff --cached --stat | tail -30
+  printf '\nArquivos adicionados ou modificados (revisar):\n'
+  git -c core.quotePath=false diff --cached --name-status --diff-filter=AMRT
+  printf '\nATENÇÃO: arquivos listados acima entrarão no commit.\n'
+  printf 'Confirmar commit e publicação? [s/N] '
+  IFS= read -r CONFIRM
+  [[ "$CONFIRM" == s || "$CONFIRM" == S ]] || { echo 'Cancelado. O índice Git permanece preparado.'; exit 0; }
+
+  git commit -m "$MESSAGE"
+  REV=$(git rev-parse HEAD)
+  say "Commit local criado: $REV"
 fi
-git diff --cached --check
-printf '\nResumo das alterações preparadas:\n'
-git diff --cached --stat | tail -30
-printf '\nArquivos adicionados ou modificados (revisar):\n'
-git -c core.quotePath=false diff --cached --name-status --diff-filter=AMRT
-printf '\nATENÇÃO: arquivos listados acima entrarão no commit.\n'
-printf 'Confirmar commit e publicação? [s/N] '
-IFS= read -r CONFIRM
-[[ "$CONFIRM" == s || "$CONFIRM" == S ]] || { echo 'Cancelado. O índice Git permanece preparado.'; exit 0; }
-
-git commit -m "$MESSAGE"
-REV=$(git rev-parse HEAD)
-say "Commit local criado: $REV"
 
 TMP=$(mktemp -d)
 mkdir -p "$TMP/export"
@@ -78,7 +96,6 @@ say 'Reiniciando backend PM2'
 pm2 restart "$PM2_APP" --update-env
 
 say 'Validando HTTPS após publicação'
-command -v curl >/dev/null || { echo 'curl ausente.' >&2; exit 1; }
 for endpoint in / /api/releases; do
   ok=0
   for tentativa in 1 2 3 4 5; do
