@@ -70,3 +70,24 @@ istbrasil.private/projetos/
 /istbrasil.private/products/livros/*.pdf
 /npm-audit-local.json
 /docs/loja-d6-f2-resultado-*.json
+
+# IST - conteudo persistente fora do Git
+/istbrasil.private/partituras/
+/istbrasil.private/products/livros/
+/istbrasil.private/documents/
+/istbrasil.private/usuarios/fotos/
+/istbrasil.private/projetos/
+
+# IST - recursos estaticos gerenciados fora do Git
+/src/assets/demo/
+/src/assets/flipbooks/
+/src/assets/images/
+/src/assets/releases/
+/src/assets/iconografia/
+
+# IST - arquivos locais de administracao
+/DB-IST-HOMOLOG-2004.session.sql
+*.sql:Zone.Identifier
+
+# Metadados de arquivos transferidos do Windows
+*:Zone.Identifier

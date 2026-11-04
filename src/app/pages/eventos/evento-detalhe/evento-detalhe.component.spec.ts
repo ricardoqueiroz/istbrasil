@@ -91,6 +91,19 @@ describe('EventoDetalheComponent CTA e regressão do card', () => {
         expect(fixture.componentInstance.cta?.estado).toBe('informativo');
         expect(fixture.componentInstance.isInternalLink('//example.com')).toBeFalse();
     });
+    it('exibe o banner de apoio responsivo quando a URL está disponível', () => {
+        carregar({ ...base, banner_apoio_url: 'https://example.com/apoiadores.jpg' });
+        const container = fixture.nativeElement.querySelector('[data-testid="banner-apoio"]');
+        const imagem = container.querySelector('img');
+        expect(imagem.getAttribute('src')).toBe('https://example.com/apoiadores.jpg');
+        expect(imagem.getAttribute('alt')).toBe('Apoiadores do evento Evento');
+        expect(imagem.classList).toContain('w-full');
+        expect(imagem.classList).toContain('h-auto');
+    });
+    it('não gera o container do banner de apoio quando a URL é nula', () => {
+        carregar({ ...base, banner_apoio_url: null });
+        expect(fixture.nativeElement.querySelector('[data-testid="banner-apoio"]')).toBeNull();
+    });
 });
 
 describe('EventoDetalheComponent contexto assíncrono', () => {

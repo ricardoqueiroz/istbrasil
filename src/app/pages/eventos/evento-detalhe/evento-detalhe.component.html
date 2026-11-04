@@ -104,6 +104,14 @@
                  class="prose prose-slate max-w-none text-slate-600 leading-relaxed space-y-4"
                  [innerHTML]="evento.descricao_completa">
             </div>
+
+            <!-- Banner de apoio -->
+            <div *ngIf="evento.banner_apoio_url" data-testid="banner-apoio" class="mt-8 w-full">
+              <img [src]="evento.banner_apoio_url"
+                  [alt]="'Apoiadores do evento ' + evento.nome"
+                  class="block w-full h-auto rounded-2xl shadow-md">
+            </div>
+
           </section>
 
           <!-- ETAPAS DO CRONOGRAMA -->

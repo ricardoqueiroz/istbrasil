@@ -1,16 +1,16 @@
 {
   "/assets/images/livros/**": {
-    "target": "http://localhost:3000",
+    "target": "http://localhost:3001",
     "secure": false,
     "changeOrigin": true
   },
   "/istbrasil.private/projetos": {
-    "target": "http://localhost:3000",
+    "target": "http://localhost:3001",
     "secure": false,
     "changeOrigin": true
   },
   "/api": {
-    "target": "http://localhost:3000",
+    "target": "http://localhost:3001",
     "secure": false,
     "changeOrigin": true
   }

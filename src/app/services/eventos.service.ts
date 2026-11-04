@@ -28,6 +28,7 @@ export interface Evento {
   descricao_completa?: string;
   imagem_card_url?: string;
   banner_capa_url?: string;
+  banner_apoio_url?: string | null;
   data_inicio?: string | Date;
   data_fim?: string | Date;
   local_nome?: string;
