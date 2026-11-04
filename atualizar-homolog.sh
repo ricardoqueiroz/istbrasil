@@ -5,8 +5,6 @@ REPO=/home/ist_user/istbrasil-git
 APP=/var/www/istbrasil.org.br/backend-node/istbrasil
 WEB=/var/www/istbrasil.org.br/html
 PM2_APP=ist-api-homolog
-ANGULAR_APP=ist-angular-homolog
-ANGULAR_PORT=4200
 TMP=''
 
 say() { printf '\n==> %s\n' "$*"; }
@@ -27,10 +25,6 @@ cd "$REPO"
 [[ -f "$APP/proxy.conf.json" ]] || { echo 'Proxy da instalação ausente.' >&2; exit 1; }
 node -e 'const fs=require("fs"); const p=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); for (const k of ["/api","/istbrasil.private/projetos","/assets/images/livros/**"]) {if(p[k]?.target!=="http://localhost:3001") {console.error("Proxy incorreto:",k);process.exit(1)}}' "$APP/proxy.conf.json"
 pm2 describe "$PM2_APP" >/dev/null 2>&1 || { echo "Processo PM2 $PM2_APP não encontrado." >&2; exit 1; }
-if ! pm2 describe "$ANGULAR_APP" >/dev/null 2>&1 && ss -ltnH "( sport = :$ANGULAR_PORT )" | grep -q .; then
-  echo "Porta $ANGULAR_PORT já ocupada por processo não gerenciado como $ANGULAR_APP. Interrompido." >&2
-  exit 1
-fi
 if git diff --name-only --diff-filter=U | grep -q . || git diff --cached --name-only --diff-filter=U | grep -q .; then
   echo 'Conflitos de merge no Git.' >&2; exit 1
 fi
@@ -83,16 +77,22 @@ rsync -a --exclude='/istdbadmin/' "$APP/dist/sakai-ng/browser/" "$WEB/"
 say 'Reiniciando backend PM2'
 pm2 restart "$PM2_APP" --update-env
 
-say 'Iniciando ou reiniciando Angular PM2'
-if pm2 describe "$ANGULAR_APP" >/dev/null 2>&1; then
-  pm2 restart "$ANGULAR_APP" --update-env
-else
-  (cd "$APP" && pm2 start ./node_modules/.bin/ng --name "$ANGULAR_APP" -- serve --host 127.0.0.1 --port "$ANGULAR_PORT")
-fi
+say 'Validando HTTPS após publicação'
+command -v curl >/dev/null || { echo 'curl ausente.' >&2; exit 1; }
+for endpoint in / /api/releases; do
+  ok=0
+  for tentativa in 1 2 3 4 5; do
+    status=$(curl --silent --show-error --insecure --output /dev/null --write-out '%{http_code}' --max-time 10 "https://localhost:8443${endpoint}") || status=000
+    if [[ "$status" == 200 ]]; then ok=1; break; fi
+    sleep 2
+  done
+  [[ "$ok" == 1 ]] || { echo "Falha HTTPS ${endpoint}: HTTP ${status}" >&2; exit 1; }
+  printf 'HTTPS %s: HTTP %s\n' "$endpoint" "$status"
+done
 
 say 'Estado final'
 pm2 status
-ss -ltnp | grep -E ':(3001|4200|8443)\b' || true
+ss -ltnp | grep -E ':(3001|8443)\b' || true
 printf '\nCommit implantado: %s\n' "$REV"
-printf 'Angular: http://localhost:%s/\nNginx: https://localhost:8443/\n' "$ANGULAR_PORT"
+printf 'Nginx: https://localhost:8443/\n'
 printf 'Observação: arquivos removidos do Git não são apagados automaticamente da instalação.\n'
