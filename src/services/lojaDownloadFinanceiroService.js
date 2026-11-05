@@ -49,11 +49,13 @@ export const avaliarElegibilidadeFinanceiraNaConexao = async (conexao, pedidoId,
             ordem_externa_id,captura_externa_id,CAST(valor_centavos AS CHAR) valor_centavos,
             CAST(capturado_centavos AS CHAR) capturado_centavos,CAST(reembolsado_centavos AS CHAR) reembolsado_centavos,
             ${instante('criado_em')},${instante('capturado_em')} FROM ist_loja_pagamentos WHERE pedido_id=? ORDER BY id`, [pedidoId]);
-        const [ops] = await conexao.query(`SELECT id,pedido_id,pagamento_id,acao,estado,versao,resultado_json,
+        const [ops] = await conexao.query(`SELECT id,pedido_id,pagamento_id,acao,estado,versao,codigo_erro,resultado_json,
             ${instante('envio_iniciado_em')},${instante('concluido_em')}
             FROM ist_loja_pagamento_operacoes WHERE pedido_id=? ORDER BY id`, [pedidoId]);
         const [eventos] = await conexao.query(`SELECT e.id,e.pagamento_id,e.provedor,e.ambiente,e.conta_recebedora,
-            e.origem,e.tipo,e.estado,e.codigo_erro,e.evidencia_json,${instante('e.recebido_em','recebido_em')} FROM ist_loja_pagamento_eventos e
+            e.origem,e.evento_id,e.tipo,e.recurso_externo_id,e.estado,e.codigo_erro,e.evidencia_json,
+            ${instante('e.recebido_em','recebido_em')},${instante('e.autenticado_em','autenticado_em')},
+            ${instante('e.processado_em','processado_em')} FROM ist_loja_pagamento_eventos e
             JOIN ist_loja_pagamentos pg ON pg.id=e.pagamento_id WHERE pg.pedido_id=? ORDER BY e.id`, [pedidoId]);
         const [itens] = await conexao.query(`SELECT id,produto_id,posicao,tipo_snapshot,quantidade,
             CAST(preco_unitario_centavos AS CHAR) preco_unitario_centavos,CAST(subtotal_centavos AS CHAR) subtotal_centavos
@@ -67,11 +69,6 @@ export const avaliarElegibilidadeFinanceiraNaConexao = async (conexao, pedidoId,
         if (total === null || total <= 0n) conflito('TOTAL_INVALIDO');
         if (p.moeda !== 'BRL' || p.ambiente !== contextoEsperado.ambiente) conflito('PEDIDO_CONTEXTO_DIVERGENTE');
         const reembolsos = ['PARCIALMENTE_REEMBOLSADO','REEMBOLSADO','ESTORNADO'];
-        if (reembolsos.includes(p.estado)) adverso('ESTADO_ADVERSO_PEDIDO');
-        if (p.estado === 'REVISAO' || p.motivo_revisao !== null) { revisao=true; motivos.add('REVISAO_FINANCEIRA'); }
-        if (p.estado !== 'PAGO') { pendente=true; motivos.add('PEDIDO_NAO_PAGO'); }
-        if (p.estado === 'PAGO' && (data(p.pagamento_confirmado_em) === null || data(p.criado_em) === null
-            || data(p.pagamento_confirmado_em) < data(p.criado_em))) falta('CONFIRMACAO_AUSENTE_OU_INVALIDA');
         const capturas = pagamentos.filter(pg => pg.estado === 'CAPTURADO' || (centavos(pg.capturado_centavos) ?? 0n) > 0n);
         if (capturas.length > 1) conflito('CAPTURAS_MULTIPLAS');
         const vistos = new Set();
@@ -79,24 +76,45 @@ export const avaliarElegibilidadeFinanceiraNaConexao = async (conexao, pedidoId,
             if (!id(pg.id) || pg.pedido_id !== p.id) conflito('PAGAMENTO_VINCULO_INVALIDO');
             if (reembolsos.includes(pg.estado) || (centavos(pg.reembolsado_centavos) ?? 0n) > 0n) adverso('REEMBOLSO_OU_ESTORNO_PERSISTIDO');
             if (centavos(pg.reembolsado_centavos) === null || centavos(pg.capturado_centavos) === null) conflito('VALORES_PAGAMENTO_INVALIDOS');
-            if (pg.estado === 'REVISAO' || pg.motivo_revisao !== null) { revisao=true; motivos.add('REVISAO_FINANCEIRA'); }
             if (pg.captura_externa_id) {
                 if (vistos.has(pg.captura_externa_id)) conflito('CAPTURA_DUPLICADA');
                 vistos.add(pg.captura_externa_id);
             }
-            if (['CRIANDO','CAPTURANDO','PENDENTE','DESCONHECIDO','APROVADO','AGUARDANDO_APROVACAO'].includes(pg.estado)) {
+        }
+        const pg = capturas.length === 1 ? capturas[0] : null;
+        const candidatas=pg?ops.filter(o=>o.pagamento_id===pg.id && o.acao==='CAPTURAR'):[];
+        const confirmadora=candidatas.length===1?candidatas[0]:null;
+        // Excecao deliberadamente estreita: os estados de revisao, o motivo e a
+        // operacao precisam representar apenas a divergencia de valor observada.
+        // As provas externas obrigatorias sao validadas mais abaixo.
+        const divergenciaSomenteValor=Boolean(pg&&pagamentos.length===1&&confirmadora
+            &&p.estado==='REVISAO'&&p.motivo_revisao==='DIVERGENCIA_FINANCEIRA'
+            &&pg.estado==='REVISAO'&&pg.motivo_revisao==='DIVERGENCIA_FINANCEIRA'
+            &&confirmadora.estado==='REVISAO'&&confirmadora.codigo_erro==='DIVERGENCIA_FINANCEIRA'
+            &&centavos(pg.valor_centavos)===total&&centavos(pg.capturado_centavos)!==null
+            &&centavos(pg.capturado_centavos)>0n&&centavos(pg.capturado_centavos)!==total);
+        if (reembolsos.includes(p.estado)) adverso('ESTADO_ADVERSO_PEDIDO');
+        if (!divergenciaSomenteValor&&(p.estado === 'REVISAO' || p.motivo_revisao !== null)) { revisao=true; motivos.add('REVISAO_FINANCEIRA'); }
+        if (p.estado !== 'PAGO'&&!divergenciaSomenteValor) { pendente=true; motivos.add('PEDIDO_NAO_PAGO'); }
+        if (p.estado === 'PAGO' && (data(p.pagamento_confirmado_em) === null || data(p.criado_em) === null
+            || data(p.pagamento_confirmado_em) < data(p.criado_em))) falta('CONFIRMACAO_AUSENTE_OU_INVALIDA');
+        for(const pagamento of pagamentos){
+            if (!divergenciaSomenteValor&&(pagamento.estado === 'REVISAO' || pagamento.motivo_revisao !== null)) { revisao=true; motivos.add('REVISAO_FINANCEIRA'); }
+            if (['CRIANDO','CAPTURANDO','PENDENTE','DESCONHECIDO','APROVADO','AGUARDANDO_APROVACAO'].includes(pagamento.estado)) {
                 pendente=true; motivos.add('PAGAMENTO_NAO_CONFIRMADO');
             }
         }
-        const pg = capturas.length === 1 ? capturas[0] : null;
         if (!pg) { pendente=true; motivos.add('CAPTURA_CONFIRMADA_AUSENTE'); }
         if (p.estado === 'PAGO' && !pg) falta('PAGO_SEM_CAPTURA');
-        const checarResultado = (r, alvo, exigirCapturado) => {
+        const valorCapturado=pg?centavos(pg.capturado_centavos):null;
+        const checarResultado = (r, alvo, exigirCapturado,valorEsperado=total) => {
+            let valido=true;
             if (r.referencia !== alvo.public_id || r.ordemId !== alvo.ordem_externa_id || r.capturaId !== alvo.captura_externa_id
-                || r.ambiente !== alvo.ambiente || r.moeda !== p.moeda || centavos(r.valorCentavos) !== total) conflito('RESULTADO_DIVERGENTE');
-            if (r.contaRecebedora === null) falta('RECEBEDOR_OBSERVADO_AUSENTE');
-            else if (r.contaRecebedora !== contextoEsperado.contaRecebedora || r.contaRecebedora !== alvo.conta_recebedora) conflito('RECEBEDOR_OBSERVADO_DIVERGENTE');
-            if (exigirCapturado && (r.estado !== 'CAPTURADO' || Date.parse(r.capturadoEm) !== data(alvo.capturado_em))) conflito('RESULTADO_CAPTURA_INVALIDO');
+                || r.ambiente !== alvo.ambiente || r.moeda !== p.moeda || centavos(r.valorCentavos) !== valorEsperado) {conflito('RESULTADO_DIVERGENTE');valido=false;}
+            if (r.contaRecebedora === null) {falta('RECEBEDOR_OBSERVADO_AUSENTE');valido=false;}
+            else if (r.contaRecebedora !== contextoEsperado.contaRecebedora || r.contaRecebedora !== alvo.conta_recebedora) {conflito('RECEBEDOR_OBSERVADO_DIVERGENTE');valido=false;}
+            if (exigirCapturado && (r.estado !== 'CAPTURADO' || Date.parse(r.capturadoEm) !== data(alvo.capturado_em))) {conflito('RESULTADO_CAPTURA_INVALIDO');valido=false;}
+            return valido;
         };
         const observar = obs => {
             if (['REFUNDED','PARTIALLY_REFUNDED'].includes(obs.statusCaptura) || ['CHARGEBACK','BUYER_COMPLAINT','REFUNDED'].includes(obs.motivoPendencia)) adverso('OBSERVACAO_ADVERSA_PERSISTIDA');
@@ -112,10 +130,9 @@ export const avaliarElegibilidadeFinanceiraNaConexao = async (conexao, pedidoId,
             }
             return normalizarResultadoPagamento(bruto);
         };
-        let confirmadora = null;
         for (const o of ops) {
             if (o.pedido_id !== p.id || !pagamentos.some(x=>x.id===o.pagamento_id)) conflito('OPERACAO_VINCULO_INVALIDO');
-            if (o.estado === 'REVISAO') { revisao=true; motivos.add('REVISAO_FINANCEIRA'); }
+            if (o.estado === 'REVISAO'&&!(divergenciaSomenteValor&&o.id===confirmadora.id)) { revisao=true; motivos.add('REVISAO_FINANCEIRA'); }
             if (['PREPARADA','EM_EXECUCAO','DESCONHECIDA'].includes(o.estado) && o.acao === 'CAPTURAR') { pendente=true; motivos.add('OPERACAO_INCERTA'); }
             if (o.acao === 'CAPTURAR' && o.pagamento_id !== pg?.id && o.resultado_json !== null) {
                 try {
@@ -131,27 +148,38 @@ export const avaliarElegibilidadeFinanceiraNaConexao = async (conexao, pedidoId,
             if (pg.provedor !== contextoEsperado.provedor || pg.ambiente !== contextoEsperado.ambiente
                 || pg.conta_recebedora !== contextoEsperado.contaRecebedora) conflito('PAGAMENTO_CONTEXTO_DIVERGENTE');
             if (!externo(pg.ordem_externa_id) || !externo(pg.captura_externa_id)) falta('IDENTIFICADORES_EXTERNOS_AUSENTES');
-            if (centavos(pg.valor_centavos) !== total || centavos(pg.capturado_centavos) !== total) conflito('VALOR_CAPTURADO_DIVERGENTE');
+            if (centavos(pg.valor_centavos) !== total || (!divergenciaSomenteValor&&centavos(pg.capturado_centavos) !== total)) conflito('VALOR_CAPTURADO_DIVERGENTE');
             if (data(pg.capturado_em) === null || data(pg.criado_em) === null || data(pg.capturado_em) < data(pg.criado_em)
-                || data(pg.capturado_em) !== data(p.pagamento_confirmado_em)) conflito('DATAS_CAPTURA_DIVERGENTES');
-            const candidatas=ops.filter(o=>o.pagamento_id===pg.id && o.acao==='CAPTURAR');
+                || (!divergenciaSomenteValor&&data(pg.capturado_em) !== data(p.pagamento_confirmado_em))) conflito('DATAS_CAPTURA_DIVERGENTES');
             if (candidatas.length !== 1) falta('OPERACAO_CAPTURA_AUSENTE_OU_MULTIPLA');
             else {
-                confirmadora=candidatas[0];
-                if (confirmadora.estado !== 'SUCESSO') { pendente=true; motivos.add('OPERACAO_NAO_CONCLUIDA'); }
+                if (confirmadora.estado !== 'SUCESSO'&&!(divergenciaSomenteValor&&confirmadora.estado==='REVISAO')) { pendente=true; motivos.add('OPERACAO_NAO_CONCLUIDA'); }
                 if (data(confirmadora.envio_iniciado_em) === null || data(confirmadora.concluido_em) === null
                     || data(confirmadora.envio_iniciado_em) > data(pg.capturado_em) || data(confirmadora.concluido_em) < data(pg.capturado_em)) falta('DATAS_OPERACAO_INVALIDAS');
-                try { checarResultado(lerResultado(confirmadora.resultado_json,true),pg,true); }
+                try { if(!checarResultado(lerResultado(confirmadora.resultado_json,true),pg,true,
+                    divergenciaSomenteValor?valorCapturado:total))throw Error(); }
                 catch { falta('RESULTADO_CAPTURA_AUSENTE_OU_INVALIDO'); }
             }
         }
         // Eventos antigos PENDING podem ter sido superados por COMPLETED; adversos
         // ou contraditorios permanecem impeditivos. Nao inventar resolucao de disputa.
         const ultimas = new Map(), capturasComprovadas = [];
+        let aprovacaoComprovada=false,capturaDivergenteComprovada=false,webhookCapturaComprovado=false,
+            revisaoDivergenciaComprovada=false;
         for (const e of eventos) {
             const alvo=pagamentos.find(x=>x.id===e.pagamento_id);
             if (!alvo || e.provedor!==alvo.provedor || e.ambiente!==alvo.ambiente || e.conta_recebedora!==alvo.conta_recebedora) { conflito('EVENTO_CONTEXTO_DIVERGENTE'); continue; }
-            if (e.tipo==='REVISAO_FINANCEIRA') { revisao=true; motivos.add('REVISAO_FINANCEIRA'); }
+            if (e.tipo==='REVISAO_FINANCEIRA') {
+                if(divergenciaSomenteValor&&alvo.id===pg.id){
+                    try{
+                        const ev=json(e.evidencia_json),r=ev?.resultado?.resultado??ev?.resultado;
+                        if(e.origem!=='INTERNO'||e.estado!=='PROCESSADO'||ev?.motivo!=='DIVERGENCIA_FINANCEIRA'
+                            ||data(e.autenticado_em)===null||data(e.processado_em)===null||!r)throw Error();
+                        if(!checarResultado(normalizarResultadoPagamento(r),alvo,true,valorCapturado))throw Error();
+                        revisaoDivergenciaComprovada=true;
+                    }catch{conflito('REVISAO_DIVERGENCIA_INVALIDA');}
+                }else { revisao=true; motivos.add('REVISAO_FINANCEIRA'); }
+            }
             if (e.origem==='RECONCILIACAO' && ['EVIDENCIA_ADVERSA','REEMBOLSO_COMPROVADO'].includes(e.tipo)) {
                 try {
                     const f=validarEvidenciaAdversa(json(e.evidencia_json),alvo,contextoEsperado);
@@ -164,29 +192,69 @@ export const avaliarElegibilidadeFinanceiraNaConexao = async (conexao, pedidoId,
             }
             if (e.origem==='WEBHOOK') {
                 // Assinatura valida nao e prova financeira; payload nao e resultado normalizado.
-                if(e.estado==='REVISAO'){
+                if(divergenciaSomenteValor&&alvo.id===pg.id
+                    &&['PAYMENT.CAPTURE.PENDING','PAYMENT.CAPTURE.DENIED','PAYMENT.CAPTURE.DECLINED'].includes(e.tipo)){
+                    conflito('WEBHOOK_CAPTURA_IMPEDITIVO');
+                }else if(divergenciaSomenteValor&&alvo.id===pg.id&&e.tipo==='PAYMENT.CAPTURE.COMPLETED'){
+                    try{
+                        const w=json(e.evidencia_json);
+                        if(e.estado!=='PROCESSADO'||data(e.autenticado_em)===null||data(e.processado_em)===null
+                            ||w?.eventoId!==e.evento_id||w?.tipo!==e.tipo||w?.ordemId!==pg.ordem_externa_id
+                            ||w?.capturaId!==pg.captura_externa_id||e.recurso_externo_id!==pg.captura_externa_id)throw Error();
+                        webhookCapturaComprovado=true;
+                    }catch{conflito('WEBHOOK_CAPTURA_INVALIDO');}
+                }else if(e.estado==='REVISAO'){
                     if(e.codigo_erro==='D8_EVIDENCIA_CONTRADITORIA')conflito('EVIDENCIA_ADVERSA_CONTRADITORIA');
                     else {revisao=true;motivos.add('WEBHOOK_EM_REVISAO');}
                 }else if (e.estado !== 'PROCESSADO') { pendente=true; motivos.add('WEBHOOK_PROCESSAMENTO_PENDENTE'); }
                 continue;
             }
             if (!['API','RECONCILIACAO'].includes(e.origem) || !['CAPTURADO','PENDENTE','DESCONHECIDO','RECUSADO','APROVADO','AGUARDANDO_APROVACAO','CANCELADO','EXPIRADO'].includes(e.tipo)) continue;
+            if(divergenciaSomenteValor&&alvo.id===pg.id&&['PENDENTE','DESCONHECIDO','RECUSADO','CANCELADO','EXPIRADO'].includes(e.tipo)){
+                conflito('EVENTO_FINANCEIRO_IMPEDIMENTO');
+            }
             try {
                 const r=lerResultado(e.evidencia_json);
                 if (e.origem==='RECONCILIACAO') ultimas.set(e.pagamento_id,{e,r,observacao:json(e.evidencia_json)?.observacao});
+                if(divergenciaSomenteValor&&alvo.id===pg.id&&e.tipo==='APROVADO'){
+                    if(e.origem!=='API'||e.estado!=='PROCESSADO'||data(e.autenticado_em)===null
+                        ||r.estado!=='APROVADO'||r.referencia!==alvo.public_id||r.ordemId!==alvo.ordem_externa_id
+                        ||r.capturaId!==null||r.capturadoEm!==null||r.ambiente!==alvo.ambiente||r.moeda!==p.moeda
+                        ||centavos(r.valorCentavos)!==total||r.contaRecebedora!==contextoEsperado.contaRecebedora)conflito('APROVACAO_INVALIDA');
+                    else aprovacaoComprovada=true;
+                }
                 if (e.tipo==='CAPTURADO' && pg?.id===alvo.id) {
-                    checarResultado(r,alvo,true);
+                    const capturaValida=checarResultado(r,alvo,true,divergenciaSomenteValor?valorCapturado:total);
+                    if(divergenciaSomenteValor){
+                        const envelopeEvento=json(e.evidencia_json),obs=envelopeEvento?.observacao;
+                        const provaApi=e.origem==='API'&&envelopeEvento?.resultado===undefined;
+                        const provaReconciliada=e.origem==='RECONCILIACAO'&&obs?.evidencia==='PRESENTE'
+                            &&obs?.associacaoOrdem==='CONFIRMADA'&&obs?.validacao==='CONSISTENTE'&&obs?.statusCaptura==='COMPLETED';
+                        if(!capturaValida||e.estado!=='PROCESSADO'||data(e.autenticado_em)===null||data(e.processado_em)===null
+                            ||(!provaApi&&!provaReconciliada))conflito('CAPTURA_COMPROVADA_INVALIDA');
+                        else capturaDivergenteComprovada=true;
+                    }
                     if (e.origem==='API' && json(e.evidencia_json)?.resultado===undefined
                         && e.estado==='PROCESSADO' && r.estado==='CAPTURADO'
                         && r.referencia===alvo.public_id && r.ordemId===alvo.ordem_externa_id
                         && r.capturaId===alvo.captura_externa_id && r.ambiente===alvo.ambiente
-                        && r.moeda===p.moeda && centavos(r.valorCentavos)===total
+                        && r.moeda===p.moeda && centavos(r.valorCentavos)===(divergenciaSomenteValor?valorCapturado:total)
                         && r.contaRecebedora===contextoEsperado.contaRecebedora
                         && Date.parse(r.capturadoEm)===data(alvo.capturado_em)
                         && data(e.recebido_em)!==null && data(e.recebido_em)>=data(alvo.capturado_em))
                         capturasComprovadas.push(e);
                 }
             } catch { falta('EVENTO_FINANCEIRO_INVALIDO'); }
+        }
+        let criterioExcepcional=null;
+        if(divergenciaSomenteValor){
+            if(aprovacaoComprovada&&capturaDivergenteComprovada&&webhookCapturaComprovado&&revisaoDivergenciaComprovada){
+                criterioExcepcional='DIVERGENCIA_FINANCEIRA_CAPTURA_COMPROVADA';
+                motivos.add(criterioExcepcional);
+            }else{
+                revisao=true;motivos.add('REVISAO_FINANCEIRA');
+                falta('EVIDENCIAS_DIVERGENCIA_INSUFICIENTES');
+            }
         }
         if (pg && ultimas.has(pg.id)) {
             const {e,r,observacao}=ultimas.get(pg.id);
@@ -228,9 +296,10 @@ export const avaliarElegibilidadeFinanceiraNaConexao = async (conexao, pedidoId,
             if(!['PUBLICADA','RETIRADA'].includes(d.versao_estado)||data(d.versao_publicada_em)===null
                 ||data(d.versao_publicada_em)>data(p.criado_em))conflito('VERSAO_NAO_PUBLICADA_NA_COMPRA');
         }
-        return saida({pedidoId:p.id,sessaoId:p.sessao_id,pedidoVersao:p.versao,
+        const resultado=saida({pedidoId:p.id,sessaoId:p.sessao_id,pedidoVersao:p.versao,
             pagamentos:pagamentos.map(x=>({id:x.id,versao:x.versao})),operacoes:ops.map(x=>({id:x.id,versao:x.versao})),
             eventosIds:eventos.map(e=>e.id),direitos:direitos.map(d=>({id:d.id,versao:d.versao,estado:d.estado,itemId:d.pedido_item_id,produtoId:d.produto_id,arquivoVersaoId:d.arquivo_versao_id}))});
+        return {...resultado,criterioExcepcional};
     } catch {
         falta('LEITURA_FINANCEIRA_INDISPONIVEL');return saida();
     }

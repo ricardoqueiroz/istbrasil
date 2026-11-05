@@ -22,7 +22,7 @@ export const criarFixtureDireitos=async t=>{
     for(const id of [1,2])await a.execute(`INSERT INTO ist_loja_arquivo_versoes
         (id,public_id,produto_id,arquivo_logico_id,numero_versao,caminho_relativo,tamanho_bytes,sha256,mime,estado,criado_em,publicado_em,retirado_em)
         VALUES(?,?,?, ?,1,?,32,?,'application/pdf','RETIRADA','2026-01-01','2026-01-01','2026-01-01')`,[id,randomUUID(),id,randomUUID(),`sintetico-${id}.pdf`,Buffer.alloc(32,id)]);
-    const preparar=async({estadoDireito='AGUARDANDO_CONFIRMACAO',semDireitos=false}={})=>{
+    const preparar=async({estadoDireito='AGUARDANDO_CONFIRMACAO',semDireitos=false,divergenciaFinanceira=false}={})=>{
         const [s]=await a.execute("INSERT INTO ist_loja_sessoes(token_hash,criada_em,expira_em) VALUES(?,'2026-01-01','2026-01-02')",[randomBytes(32)]);
         const [p]=await a.execute(`INSERT INTO ist_loja_pedidos(public_id,sessao_id,comprador_email,estado,ambiente,moeda,total_centavos,
             idempotencia_criacao,solicitacao_hash,criado_em,atualizado_em,expira_em,pagamento_confirmado_em)
@@ -30,15 +30,33 @@ export const criarFixtureDireitos=async t=>{
         const pgPublic=randomUUID(),ordem=randomUUID(),captura=randomUUID();
         const [pg]=await a.execute(`INSERT INTO ist_loja_pagamentos(public_id,pedido_id,provedor,ambiente,conta_recebedora,estado,reserva_ativa,moeda,
             valor_centavos,capturado_centavos,ordem_externa_id,captura_externa_id,criado_em,atualizado_em,expira_em,capturado_em,encerrado_em)
-            VALUES(?,?,'paypal','sandbox',?,'CAPTURADO',NULL,'BRL',200,200,?,?,'2026-01-01','2026-01-01 12:00:00','2026-01-02','2026-01-01 12:00:00','2026-01-01 12:00:00')`,[pgPublic,p.insertId,contextoDireitos.contaRecebedora,ordem,captura]);
-        const resultado={estado:'CAPTURADO',referencia:pgPublic,ordemId:ordem,capturaId:captura,valorCentavos:'200',moeda:'BRL',ambiente:'sandbox',contaRecebedora:contextoDireitos.contaRecebedora,capturadoEm:'2026-01-01T12:00:00.000Z'};
+            VALUES(?,?,'paypal','sandbox',?,? ,NULL,'BRL',200,?, ?,?,'2026-01-01','2026-01-01 12:00:00','2026-01-02','2026-01-01 12:00:00','2026-01-01 12:00:00')`,
+        [pgPublic,p.insertId,contextoDireitos.contaRecebedora,divergenciaFinanceira?'REVISAO':'CAPTURADO',divergenciaFinanceira?180:200,ordem,captura]);
+        const resultado={estado:'CAPTURADO',referencia:pgPublic,ordemId:ordem,capturaId:captura,valorCentavos:divergenciaFinanceira?'180':'200',moeda:'BRL',ambiente:'sandbox',contaRecebedora:contextoDireitos.contaRecebedora,capturadoEm:'2026-01-01T12:00:00.000Z'};
         const [op]=await a.execute(`INSERT INTO ist_loja_pagamento_operacoes(pagamento_id,pedido_id,acao,chave_idempotencia,solicitacao_hash,
             request_id_provedor,estado,resultado_json,criado_em,atualizado_em,envio_iniciado_em,concluido_em)
-            VALUES(?,?,'CAPTURAR',?,?,?,'SUCESSO',?,'2026-01-01','2026-01-01 12:00:00','2026-01-01','2026-01-01 12:00:00')`,[pg.insertId,p.insertId,randomUUID(),randomBytes(32),randomUUID(),JSON.stringify(resultado)]);
+            VALUES(?,?,'CAPTURAR',?,?,?, ?,?,'2026-01-01','2026-01-01 12:00:00','2026-01-01','2026-01-01 12:00:00')`,
+        [pg.insertId,p.insertId,randomUUID(),randomBytes(32),randomUUID(),divergenciaFinanceira?'REVISAO':'SUCESSO',JSON.stringify(resultado)]);
         await a.execute(`INSERT INTO ist_loja_pagamento_eventos(pagamento_id,provedor,ambiente,conta_recebedora,origem,evento_id,tipo,
             conteudo_hash,evidencia_json,estado,recebido_em,autenticado_em,atualizado_em,processado_em)
             VALUES(?,'paypal','sandbox',?,'API',?,'CAPTURADO',?,?,'PROCESSADO','2026-01-01 12:00:00','2026-01-01 12:00:00','2026-01-01 12:00:00','2026-01-01 12:00:00')`,
         [pg.insertId,contextoDireitos.contaRecebedora,randomUUID(),createHash('sha256').update(JSON.stringify(resultado)).digest(),JSON.stringify(resultado)]);
+        if(divergenciaFinanceira){
+            const aprovado={...resultado,estado:'APROVADO',capturaId:null,valorCentavos:'200',capturadoEm:null};
+            const webhook={eventoId:`WH-${randomUUID()}`,tipo:'PAYMENT.CAPTURE.COMPLETED',ordemId:ordem,capturaId:captura};
+            const revisao={motivo:'DIVERGENCIA_FINANCEIRA',resultado};
+            await a.execute("UPDATE ist_loja_pedidos SET estado='REVISAO',motivo_revisao='DIVERGENCIA_FINANCEIRA',pagamento_confirmado_em=NULL WHERE id=?",[p.insertId]);
+            await a.execute("UPDATE ist_loja_pagamentos SET motivo_revisao='DIVERGENCIA_FINANCEIRA' WHERE id=?",[pg.insertId]);
+            await a.execute("UPDATE ist_loja_pagamento_operacoes SET codigo_erro='DIVERGENCIA_FINANCEIRA' WHERE id=?",[op.insertId]);
+            for(const [origem,eventoId,tipo,recurso,evidencia]of [
+                ['API',randomUUID(),'APROVADO',ordem,aprovado],
+                ['WEBHOOK',webhook.eventoId,webhook.tipo,captura,webhook],
+                ['INTERNO',randomUUID(),'REVISAO_FINANCEIRA',ordem,revisao]
+            ])await a.execute(`INSERT INTO ist_loja_pagamento_eventos(pagamento_id,provedor,ambiente,conta_recebedora,origem,evento_id,tipo,
+                recurso_externo_id,conteudo_hash,evidencia_json,estado,recebido_em,autenticado_em,atualizado_em,processado_em)
+                VALUES(?,'paypal','sandbox',?,?,?,?,?,?,?,'PROCESSADO','2026-01-01 12:00:00','2026-01-01 12:00:00','2026-01-01 12:00:00','2026-01-01 12:00:00')`,
+            [pg.insertId,contextoDireitos.contaRecebedora,origem,eventoId,tipo,recurso,createHash('sha256').update(JSON.stringify(evidencia)).digest(),JSON.stringify(evidencia)]);
+        }
         const direitos=[];
         for(const produto of [1,2]){
             const [i]=await a.execute(`INSERT INTO ist_loja_pedido_itens(pedido_id,produto_id,posicao,sku_snapshot,titulo_snapshot,tipo_snapshot,quantidade,preco_unitario_centavos,subtotal_centavos)

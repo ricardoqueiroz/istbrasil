@@ -88,6 +88,14 @@ test('D6-B1 autorizacao interna em MariaDB descartavel',{
         }finally{await c.rollback();c.release();}
         assert.equal(await snapshot(x),antes);
     });
+    await t.test('download autoriza direito regularizado por divergencia financeira comprovada',async()=>{
+        const x=await preparar({divergenciaFinanceira:true});
+        const r=await criarLojaDownloadDireitosService({db:pool,agora}).reavaliarDireitosDoPedido(x.pedidoId,contexto);
+        assert(r.transicoes.every(e=>e.motivo==='DIVERGENCIA_FINANCEIRA_REGULARIZADA'));
+        const antes=await snapshot(x),arquivo=await autorizar(x);
+        assert.equal(arquivo.caminhoRelativo,'sintetico-1.pdf');assert.equal(arquivo.mime,'application/pdf');
+        assert.equal(await snapshot(x),antes);
+    });
     for(const caso of ['adverso','insuficiente','recebedor','live'])await t.test(`ATIVO nao basta: ${caso}`,async()=>{
         const x=await preparar({estadoDireito:'ATIVO'});
         if(caso==='adverso')await a.execute('UPDATE ist_loja_pagamentos SET reembolsado_centavos=50 WHERE id=?',[x.pagamentoId]);

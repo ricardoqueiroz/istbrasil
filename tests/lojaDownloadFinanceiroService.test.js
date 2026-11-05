@@ -31,6 +31,26 @@ const banco=b=>{const calls=[];return {calls,async query(sql,args){calls.push([s
     throw Error('Consulta inesperada');
 }};};
 const alterarResultado=(b,changes)=>{b.ops[0].resultado_json=JSON.stringify({...b.r,...changes});};
+const divergenciaFinanceira=()=>{
+    const b=base(),capturado='12150',total='13500';
+    b.p.public_id='ed0838f0-f3d0-4156-889e-8f3f2b9a70e1';b.p.comprador_email='baldilp@gmail.com';
+    b.r.capturaId='0UG10738YC144323G';b.pagamentos[0].captura_externa_id=b.r.capturaId;
+    b.p.estado='REVISAO';b.p.motivo_revisao='DIVERGENCIA_FINANCEIRA';b.p.total_centavos=total;b.p.pagamento_confirmado_em=null;
+    Object.assign(b.pagamentos[0],{estado:'REVISAO',motivo_revisao:'DIVERGENCIA_FINANCEIRA',valor_centavos:total,capturado_centavos:capturado});
+    b.itens[0].preco_unitario_centavos=total;b.itens[0].subtotal_centavos=total;
+    const captura={...b.r,valorCentavos:capturado};b.r=captura;
+    Object.assign(b.ops[0],{estado:'REVISAO',codigo_erro:'DIVERGENCIA_FINANCEIRA',resultado_json:JSON.stringify(captura)});
+    const comum={pagamento_id:1,provedor:'paypal',ambiente:'sandbox',conta_recebedora:ctx.contaRecebedora,
+        estado:'PROCESSADO',codigo_erro:null,recebido_em:dt,autenticado_em:dt,processado_em:dt};
+    const adicionar=(origem,tipo,evidencia,recurso=null)=>b.eventos.push({id:b.eventos.length+1,...comum,origem,
+        evento_id:`EVENTO-${b.eventos.length+1}`,tipo,recurso_externo_id:recurso,evidencia_json:JSON.stringify(evidencia)});
+    adicionar('API','APROVADO',{...captura,estado:'APROVADO',capturaId:null,valorCentavos:total,capturadoEm:null},captura.ordemId);
+    adicionar('API','CAPTURADO',captura,captura.capturaId);
+    const webhook={eventoId:'EVENTO-3',tipo:'PAYMENT.CAPTURE.COMPLETED',ordemId:captura.ordemId,capturaId:captura.capturaId};
+    adicionar('WEBHOOK',webhook.tipo,webhook,captura.capturaId);
+    adicionar('INTERNO','REVISAO_FINANCEIRA',{motivo:'DIVERGENCIA_FINANCEIRA',resultado:captura},captura.ordemId);
+    return b;
+};
 const casos=[
     ['pedido nao pago',b=>{b.p.estado='AGUARDANDO_PAGAMENTO';b.p.pagamento_confirmado_em=null;b.pagamentos=[];b.ops=[];},'PENDENTE'],
     ['captura pendente',b=>{b.p.estado='AGUARDANDO_PAGAMENTO';b.p.pagamento_confirmado_em=null;Object.assign(b.pagamentos[0],{estado:'PENDENTE',capturado_centavos:'0',capturado_em:null});b.ops[0].resultado_json=JSON.stringify({...b.r,estado:'PENDENTE',capturadoEm:null});},'PENDENTE'],
@@ -80,6 +100,31 @@ test('captura valida e repeticao sem alteracoes, sem efeitos colaterais ou dados
     assert.equal(r.classificacao,'ELEGIVEL');assert.equal(r.elegivel,true);assert.deepEqual(await avaliar(c,1,ctx),r);assert.deepEqual(b,antes);
     assert.equal(r.limiteEvidencia,'SOMENTE_PERSISTENCIA_LOCAL');
     assert.doesNotMatch(JSON.stringify(r),/RECEBEDOR|CAPTURA-SINTETICA|ORDEM-SINTETICA|resultado_json|email|caminho/);
+});
+test('divergencia de valor isolada com aprovacao, captura e webhook autenticado e elegivel',async()=>{
+    const b=divergenciaFinanceira(),antes=structuredClone(b),r=await avaliar(banco(b),1,ctx);
+    assert.equal(r.classificacao,'ELEGIVEL');assert.equal(r.elegivel,true);
+    assert.equal(r.criterioExcepcional,'DIVERGENCIA_FINANCEIRA_CAPTURA_COMPROVADA');
+    assert(r.motivos.includes('DIVERGENCIA_FINANCEIRA_CAPTURA_COMPROVADA'));assert.deepEqual(b,antes);
+});
+for(const [nome,mudar,esperado]of [
+    ['aprovacao ausente',b=>b.eventos=b.eventos.filter(e=>e.tipo!=='APROVADO'),'INCONSISTENTE'],
+    ['captura comprovada ausente',b=>b.eventos=b.eventos.filter(e=>e.tipo!=='CAPTURADO'),'INCONSISTENTE'],
+    ['webhook concluido ausente',b=>b.eventos=b.eventos.filter(e=>e.tipo!=='PAYMENT.CAPTURE.COMPLETED'),'INCONSISTENTE'],
+    ['webhook nao autenticado',b=>b.eventos.find(e=>e.origem==='WEBHOOK').autenticado_em=null,'INCONSISTENTE'],
+    ['evento de outro pagamento',b=>b.eventos.find(e=>e.tipo==='CAPTURADO').pagamento_id=2,'INCONSISTENTE'],
+    ['captura pendente',b=>{b.eventos.find(e=>e.tipo==='CAPTURADO').tipo='PENDENTE';},'INCONSISTENTE'],
+    ['captura recusada',b=>{b.eventos.find(e=>e.tipo==='CAPTURADO').tipo='RECUSADO';},'INCONSISTENTE'],
+    ['webhook pendente adicional',b=>{const w=b.eventos.find(e=>e.origem==='WEBHOOK');b.eventos.push({...w,id:5,evento_id:'EVENTO-5',tipo:'PAYMENT.CAPTURE.PENDING',evidencia_json:JSON.stringify({...JSON.parse(w.evidencia_json),eventoId:'EVENTO-5',tipo:'PAYMENT.CAPTURE.PENDING'})});},'INCONSISTENTE'],
+    ['moeda divergente',b=>{const e=b.eventos.find(e=>e.tipo==='CAPTURADO');e.evidencia_json=JSON.stringify({...JSON.parse(e.evidencia_json),moeda:'USD'});},'INCONSISTENTE'],
+    ['recebedor divergente',b=>{const e=b.eventos.find(e=>e.tipo==='CAPTURADO');e.evidencia_json=JSON.stringify({...JSON.parse(e.evidencia_json),contaRecebedora:'OUTRO'});},'INCONSISTENTE'],
+    ['reembolso persistido',b=>b.pagamentos[0].reembolsado_centavos='1','ADVERSO'],
+    ['disputa persistida',b=>{const e=envelope({...b.r,estado:'PENDENTE',capturadoEm:null});e.observacao.motivoPendencia='CHARGEBACK';e.observacao.validacao='INCONCLUSIVA';evento(b,e);},'ADVERSO'],
+    ['outro motivo de revisao',b=>b.p.motivo_revisao='CAPTURA_TARDIA_OU_INESPERADA','INCONSISTENTE']
+])test(`divergencia nao libera: ${nome}`,async()=>{const b=divergenciaFinanceira();mudar(b);const r=await avaliar(banco(b),1,ctx);assert.equal(r.classificacao,esperado);assert.equal(r.elegivel,false);});
+test('webhook duplicado identico nao altera elegibilidade',async()=>{
+    const b=divergenciaFinanceira(),w=b.eventos.find(e=>e.origem==='WEBHOOK');b.eventos.push({...w,id:5,evento_id:'EVENTO-5',evidencia_json:JSON.stringify({...JSON.parse(w.evidencia_json),eventoId:'EVENTO-5'})});
+    assert.equal((await avaliar(banco(b),1,ctx)).elegivel,true);
 });
 for(const [nome,mudar,esperado]of casos)test(nome,async()=>{const b=base();mudar(b);const r=await avaliar(banco(b),1,ctx);assert.equal(r.classificacao,esperado);assert.equal(r.elegivel,false);});
 test('reconciliacao consistente na operacao e evento',async()=>{

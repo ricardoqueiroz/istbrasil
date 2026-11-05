@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {randomBytes,randomUUID} from 'node:crypto';
 import {criarLojaDownloadRecuperacaoService} from '../src/services/lojaDownloadRecuperacaoService.js';
+import {criarLojaDownloadDireitosService} from '../src/services/lojaDownloadDireitosService.js';
 import {criarFixtureDireitos,contextoDireitos} from './fixtures/lojaDownloadDireitosFixture.js';
 const chaveEmail=Buffer.alloc(32,1),chaveCodigo=Buffer.alloc(32,2),chaveLimites=Buffer.alloc(32,3);
 const sql=async nome=>(await readFile(new URL(`../migrations/${nome}`,import.meta.url),'utf8'));
@@ -22,9 +23,11 @@ test('B7-C4 OTP/LINK no MariaDB 10.3.39 exclusivo',{
     await a.query("SET @ist_b7c3_schema=DATABASE(),@ist_b7c3_autorizacao='FUNDACAO_OTP_B7_C3'");
     await a.query((await sql('ist_loja_download_recuperacao_otp_fundacao.sql')).replace(/^DELIMITER[^\r\n]*$/gm,'').replace(/END\$\$\s*$/,'END'));
     let contador=0;
-    const preparar=async({sortearCodigo=()=>0,estadoDireito='ATIVO'}={})=>{
-        const x=await f.preparar({estadoDireito}),i=++contador,email=`sintetico${i}@example.invalid`;
+    const preparar=async({sortearCodigo=()=>0,estadoDireito='ATIVO',divergenciaFinanceira=false}={})=>{
+        const x=await f.preparar({estadoDireito,divergenciaFinanceira}),i=++contador,email=`sintetico${i}@example.invalid`;
         await a.query('UPDATE ist_loja_pedidos SET comprador_email=? WHERE id=?',[email,x.pedidoId]);
+        if(divergenciaFinanceira)await criarLojaDownloadDireitosService({db:pool,agora:()=>new Date('2026-01-01T13:00:00Z')})
+            .reavaliarDireitosDoPedido(x.pedidoId,contextoDireitos);
         const [[p]]=await a.query('SELECT public_id FROM ist_loja_pedidos WHERE id=?',[x.pedidoId]);
         let n=Date.parse('2026-01-01T13:00:00.000Z');
         const op={email,pedidoPublicId:p.public_id,ip:`127.0.0.${i}`};
@@ -44,6 +47,12 @@ test('B7-C4 OTP/LINK no MariaDB 10.3.39 exclusivo',{
         assert.deepEqual(await f.ler(y.x),antes);
         assert.equal((await y.s.revogarSessao(v.token)).revogada,true);
         await assert.rejects(y.s.obterSessao(v.token),{codigo:'SESSAO_INVALIDA'});
+    });
+    await t.test('OTP recupera direito ativado por divergencia financeira comprovada',async()=>{
+        const y=await preparar({estadoDireito:'AGUARDANDO_CONFIRMACAO',divergenciaFinanceira:true});
+        const r=await y.s.solicitarCodigo(y.op);assert(r.entrega);
+        const v=await validar(y,r);assert.deepEqual(v.sessao.direitos.map(d=>d.direitoId),y.x.direitos);
+        assert((await f.ler(y.x)).direitos.every(d=>d.estado==='ATIVO'));
     });
     await t.test('gerador padrao randomInt emite seis digitos e nao registra segredos',async()=>{
         const y=await preparar({sortearCodigo:undefined});

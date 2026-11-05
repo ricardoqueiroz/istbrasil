@@ -54,6 +54,17 @@ test('transicoes financeiras em MariaDB descartavel',{
         assert.equal(chamadas.some(sql=>/GET_LOCK|FROM ist_loja_produtos .*FOR UPDATE|FROM ist_loja_arquivo_versoes .*FOR UPDATE/.test(sql)),false);
         assert.deepEqual(await financeiro(x),antes);
     });
+    await t.test('reavaliacao historica ativa divergencia de valor comprovada sem reescrever financeiro',async()=>{
+        const x=await preparar({divergenciaFinanceira:true}),antes=await financeiro(x);
+        const r=await executar(x);assert.equal(r.avaliacao.classificacao,'ELEGIVEL');
+        assert.equal(r.avaliacao.criterioExcepcional,'DIVERGENCIA_FINANCEIRA_CAPTURA_COMPROVADA');
+        assert.equal(r.transicoes.length,2);assert(r.transicoes.every(e=>e.motivo==='DIVERGENCIA_FINANCEIRA_REGULARIZADA'));
+        const dados=await ler(x);assert(dados.direitos.every(d=>d.estado==='ATIVO'));
+        assert(dados.eventos.filter(e=>e.direito_versao===2).every(e=>e.origem==='FINANCEIRO'
+            &&e.motivo_codigo==='DIVERGENCIA_FINANCEIRA_REGULARIZADA'));
+        assert.deepEqual(await financeiro(x),antes);
+        assert.deepEqual((await executar(x)).transicoes,[]);assert.deepEqual(await ler(x),dados);
+    });
     await t.test('pagamento apenas pendente nao suspende direito aguardando',async()=>{
         const x=await preparar();await a.execute("UPDATE ist_loja_pedidos SET estado='AGUARDANDO_PAGAMENTO',pagamento_confirmado_em=NULL WHERE id=?",[x.pedidoId]);
         await a.execute("UPDATE ist_loja_pagamentos SET estado='PENDENTE',reserva_ativa=1,encerrado_em=NULL,capturado_centavos=0,capturado_em=NULL WHERE id=?",[x.pagamentoId]);

@@ -18,7 +18,8 @@ const camposDireito = `id,pedido_item_id,produto_id,arquivo_versao_id,estado,ver
 const decidir = (d,a) => {
     if (['REVOGADO','SUSPENSO'].includes(d.estado)) return null;
     if (a.classificacao==='ELEGIVEL' && a.elegivel===true) return d.estado==='AGUARDANDO_CONFIRMACAO'
-        ? { estado:'ATIVO',motivo:'CAPTURA_CONFIRMADA' } : null;
+        ? { estado:'ATIVO',motivo:a.criterioExcepcional==='DIVERGENCIA_FINANCEIRA_CAPTURA_COMPROVADA'
+            ? 'DIVERGENCIA_FINANCEIRA_REGULARIZADA' : 'CAPTURA_CONFIRMADA' } : null;
     let motivo=null;
     if(a.evidenciaAdversaPersistida.length)motivo='EVIDENCIA_ADVERSA';
     else if(a.evidenciaContraditoria)motivo='EVIDENCIA_CONTRADITORIA';
