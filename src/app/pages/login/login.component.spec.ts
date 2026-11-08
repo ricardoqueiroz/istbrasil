@@ -66,4 +66,53 @@ describe('LoginComponent', () => {
       http.verify();
     });
   }
+
+  it('garante a participação e deixa o diálogo global decidir o envio dos vídeos', async () => {
+    const usuario = { id_usuario: 20, id_tipo_usuario: 2, nome: 'Concorrente Teste', foto_url: null };
+    const fetchSpy = spyOn(window, 'fetch').and.callFake(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/usuarios/login') {
+        return new Response(JSON.stringify(usuario), { status: 200 });
+      }
+      if (url === '/api/usuarios/concorrente/aderir') {
+        return new Response(JSON.stringify({ usuario }), { status: 200 });
+      }
+      throw new Error(`URL inesperada: ${url}`);
+    });
+    spyOn(component, 'criptografarSenha').and.resolveTo('hash');
+    const navigate = spyOn(TestBed.inject(Router), 'navigate').and.resolveTo(true);
+    component.email = 'concorrente@example.com';
+    component.password = 'senha';
+
+    await component.login();
+
+    expect(fetchSpy.calls.allArgs().map(([url]) => String(url))).toEqual([
+      '/api/usuarios/login',
+      '/api/usuarios/concorrente/aderir'
+    ]);
+    expect(navigate).toHaveBeenCalledOnceWith(['/']);
+    expect(TestBed.inject(AuthService).usuario()).toEqual(usuario);
+    TestBed.inject(HttpTestingController).verify();
+  });
+
+  it('não abre a página de vídeos quando a participação do concorrente não pode ser preparada', async () => {
+    const usuario = { id_usuario: 20, id_tipo_usuario: 2, nome: 'Concorrente Teste', foto_url: null };
+    spyOn(window, 'fetch').and.callFake(async (input: RequestInfo | URL) => {
+      if (String(input) === '/api/usuarios/login') {
+        return new Response(JSON.stringify(usuario), { status: 200 });
+      }
+      return new Response(JSON.stringify({ message: 'Participação indisponível.' }), { status: 409 });
+    });
+    spyOn(component, 'criptografarSenha').and.resolveTo('hash');
+    const navigate = spyOn(TestBed.inject(Router), 'navigate').and.resolveTo(true);
+    component.email = 'concorrente@example.com';
+    component.password = 'senha';
+
+    await component.login();
+
+    expect(navigate).not.toHaveBeenCalled();
+    expect(component.tipoMensagem).toBe('error');
+    expect(component.mensagem).toBe('Participação indisponível.');
+    TestBed.inject(HttpTestingController).verify();
+  });
 });

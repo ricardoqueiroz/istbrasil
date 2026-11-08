@@ -30,8 +30,12 @@ import { PerfilService, PerfilServiceError } from '../../../perfil/services/perf
 
                 <div *ngIf="mensagem" class="mt-6 rounded-md border px-3 py-2 text-sm" [ngClass]="{
                     'border-red-200 bg-red-50 text-red-700': tipoMensagem === 'error',
-                    'border-green-200 bg-green-50 text-green-700': tipoMensagem === 'success'
-                }">{{ mensagem }}</div>
+                    'border-green-200 bg-green-50 text-green-700': tipoMensagem === 'success',
+                    'border-amber-200 bg-amber-50 text-amber-800': tipoMensagem === 'warning'
+                }">
+                    {{ mensagem }}
+                    <button *ngIf="!carregando && !usuario" pButton type="button" label="Tentar novamente" class="p-button-sm p-button-outlined ml-3" (click)="recarregar()"></button>
+                </div>
 
                 <p *ngIf="carregando" class="py-12 text-center text-surface-600 dark:text-surface-300">Carregando participação...</p>
 
@@ -135,7 +139,7 @@ export class ConcorrenteVideosComponent implements OnInit {
     carregando = true;
     salvando = false;
     mensagem: string | null = null;
-    tipoMensagem: 'success' | 'error' = 'error';
+    tipoMensagem: 'success' | 'error' | 'warning' = 'error';
 
     constructor(
         private readonly perfilService: PerfilService,
@@ -148,6 +152,10 @@ export class ConcorrenteVideosComponent implements OnInit {
     }
 
     ngOnInit(): void {
+        void this.carregar();
+    }
+
+    recarregar(): void {
         void this.carregar();
     }
 
@@ -215,19 +223,35 @@ export class ConcorrenteVideosComponent implements OnInit {
 
     private async carregar(): Promise<void> {
         this.carregando = true;
+        this.mensagem = null;
         try {
-            const [perfil, obrasParticipacao] = await Promise.all([
+            const [perfilResultado, obrasResultado] = await Promise.allSettled([
                 this.perfilService.obterPerfil(),
                 this.perfilService.carregarObrasParticipacao()
             ]);
+
+            if (perfilResultado.status === 'rejected') {
+                throw perfilResultado.reason;
+            }
+
+            const perfil = perfilResultado.value;
             if (perfil.usuario.idTipoUsuario !== 2 || !perfil.concorrente) {
                 throw new PerfilServiceError('Esta página está disponível apenas para concorrentes.', 403);
             }
             this.usuario = perfil.usuario;
-            this.obraPrincipal = obrasParticipacao.obraPrincipal;
-            this.obrasElegiveis = obrasParticipacao.obrasElegiveis;
             this.aplicarParticipacao(perfil.concorrente);
+
+            if (obrasResultado.status === 'fulfilled') {
+                this.obraPrincipal = obrasResultado.value.obraPrincipal;
+                this.obrasElegiveis = obrasResultado.value.obrasElegiveis;
+            } else {
+                this.obraPrincipal = null;
+                this.obrasElegiveis = [];
+                this.tipoMensagem = 'warning';
+                this.mensagem = 'Sua participação foi carregada, mas a lista de obras opcionais está temporariamente indisponível. Você ainda pode informar o vídeo da obra obrigatória.';
+            }
         } catch (error) {
+            this.usuario = null;
             this.exibirErro(error instanceof PerfilServiceError ? error.message : 'Não foi possível carregar a participação.');
         } finally {
             this.carregando = false;

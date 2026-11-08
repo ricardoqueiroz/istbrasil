@@ -160,6 +160,25 @@ export class LoginComponent {
 
             this.tipoMensagem = 'success';
             this.mensagem = 'Login realizado com sucesso.';
+
+            if (Number(data?.id_tipo_usuario) === 2) {
+                const adesaoResponse = await fetch('/api/usuarios/concorrente/aderir', {
+                    method: 'POST',
+                    credentials: 'include'
+                });
+                const adesao = await adesaoResponse.json().catch(() => ({}));
+
+                if (!adesaoResponse.ok) {
+                    this.tipoMensagem = 'error';
+                    this.mensagem = adesao?.message || 'Login realizado, mas não foi possível preparar sua participação no Festival.';
+                    return;
+                }
+
+                this.authService.definirUsuario(adesao?.usuario || data);
+                await this.router.navigate(['/']);
+                return;
+            }
+
             this.authService.definirUsuario(data);
             const destino = await firstValueFrom(this.juradoService.destinoAposLogin());
             await this.router.navigate(destino);

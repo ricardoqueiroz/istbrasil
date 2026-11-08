@@ -12,6 +12,7 @@ export class AuthService {
     readonly usuario = signal<UsuarioLogado | null>(null);
     readonly carregando = signal<boolean>(true);
     private restauracaoSessao: Promise<void> | null = null;
+    private avisoVideosAdiadoUsuarioId: number | null = null;
 
     async verificarSessao(): Promise<void> {
         if (this.restauracaoSessao) {
@@ -46,7 +47,18 @@ export class AuthService {
     }
 
     definirUsuario(usuario: UsuarioLogado): void {
+        if (this.usuario()?.id_usuario !== usuario.id_usuario) {
+            this.avisoVideosAdiadoUsuarioId = null;
+        }
         this.usuario.set(usuario);
+    }
+
+    adiarAvisoEnvioVideos(idUsuario: number): void {
+        this.avisoVideosAdiadoUsuarioId = idUsuario;
+    }
+
+    avisoEnvioVideosFoiAdiado(idUsuario: number): boolean {
+        return this.avisoVideosAdiadoUsuarioId === idUsuario;
     }
 
     atualizarNomeUsuarioLogado(nome: string): void {
@@ -79,6 +91,7 @@ export class AuthService {
         try {
             await fetch('/api/usuarios/logout', { method: 'POST', credentials: 'include' });
         } finally {
+            this.avisoVideosAdiadoUsuarioId = null;
             this.usuario.set(null);
         }
     }
