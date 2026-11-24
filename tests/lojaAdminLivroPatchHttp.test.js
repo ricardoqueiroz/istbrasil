@@ -3,11 +3,16 @@ import assert from 'node:assert/strict';
 import express from 'express';
 import http from 'node:http';
 import jwt from 'jsonwebtoken';
+import cors from 'cors';
+import cookieParser from 'cookie-parser';
+import bodyParser from 'body-parser';
+import {criarLojaAdminRouter} from '../src/routes/lojaAdmin.routes.js';
+import {criarArmazenamentoLoja} from '../src/config/lojaArmazenamento.js';
 import {randomBytes} from 'node:crypto';
 import {pool} from '../src/config/db.js';
 import {prepararArmazenamentoSintetico} from './fixtures/lojaArmazenamentoSintetico.js';
 
-test('PATCH editorial na composicao real do server, sem banco ou servidor IST',async t=>{
+test('PATCH editorial na composição legada sintética, sem banco ou servidor IST',async t=>{
     const armazenamento=await prepararArmazenamentoSintetico(t);
     const chaves=['NODE_ENV','JWT_SECRET','COOKIE_NAME','LOJA_CSRF_SECRET','LOJA_ORIGENS_PERMITIDAS','PRODUCTS_LIVROS_PATH','CAPAS_LIVROS_STORAGE_PATH','DOTENV_CONFIG_PATH'];
     const anteriores=new Map(chaves.map(k=>[k,process.env[k]]));
@@ -65,16 +70,24 @@ test('PATCH editorial na composicao real do server, sem banco ou servidor IST',a
         rollback:async()=>{logs.push('rollback');if(falha==='rollback')throw Error('SEGREDO_SQL');if(backup){row={...backup};produto={...backupProduto};}},
         release:()=>{logs.push('release');liberar?.();},destroy:()=>{logs.push('destroy');liberar?.();}};
     };
-    const escutar=express.application.listen;
-    express.application.listen=function(){app=this;return {close(){}};};
     t.after(async()=>{
         if(server){server.closeAllConnections();await new Promise(r=>server.close(r));}
-        express.application.listen=escutar;
         for(const [k,fn]of metodos)pool[k]=fn;
         await pool.end();
         for(const [k,v]of anteriores){if(v===undefined)delete process.env[k];else process.env[k]=v;}
     });
-    try {await import('../server.js');}finally{express.application.listen=escutar;}
+    const storage=criarArmazenamentoLoja({env:{PRODUCTS_LIVROS_PATH:armazenamento.pdf,CAPAS_LIVROS_STORAGE_PATH:armazenamento.capas}});
+    app=express(); app.set('trust proxy','loopback'); app.use(cors()); app.use(cookieParser());
+    const ignorar=Symbol('parserEditorial');
+    for (const [method,path] of [['post','/api/admin/loja/livros/:id/versoes-pdf/:versaoPublicId/publicar'],
+        ['patch','/api/admin/loja/livros/:id'],['post','/api/admin/loja/livros'],['post','/api/admin/loja/livros/capa'],
+        ['post','/api/admin/loja/livros/:id/pdf'],['delete','/api/admin/loja/livros/:id']]) {
+        app[method](path,(req,_res,next)=>{req[ignorar]=true;next();});
+    }
+    const json=express.json(), bodyJson=bodyParser.json();
+    app.use((req,res,next)=>req[ignorar]?next():json(req,res,next));
+    app.use((req,res,next)=>req[ignorar]?next():bodyJson(req,res,next));
+    app.use('/api/admin/loja',criarLojaAdminRouter({db:pool,configuracaoArquivos:storage.arquivos,configuracaoCapas:storage.capas}));
     // Sonda apenas de teste depois da composicao real para conferir parsers das outras rotas.
     app.post('/__parser_sintetico',(req,res)=>res.json({body:req.body}));
     app.use((e,req,res,next)=>res.status(e.status??500).json({erro:'ERRO_PARSER_GLOBAL'}));

@@ -27,16 +27,14 @@ test('inexistencia e sobreposicao impedem inicializacao e nao criam diretorios',
     }
     assert.deepEqual(await readdir(f.raiz),antes);
 });
-test('configuracao invalida interrompe server antes de listen ou conexao SQL',async t=>{
+test('configuracao comercial invalida nao impede inicializacao institucional nem consulta SQL',async t=>{
     const f=await prepararArmazenamentoSintetico(t);
     await writeFile(f.arquivo,'PRODUCTS_PATH=/legado\n');
     const script=`import http from 'node:http'; import mysql from 'mysql2/promise';
-        http.Server.prototype.listen=()=>{throw Error('LISTEN_PROIBIDO');};
+        let escutas=0; http.Server.prototype.listen=function(...args){escutas++; const cb=args.at(-1);if(typeof cb==='function')queueMicrotask(cb);return this;};
         mysql.createPool=()=>({getConnection(){throw Error('SQL_PROIBIDO');},query(){throw Error('SQL_PROIBIDO');},execute(){throw Error('SQL_PROIBIDO');}});
-        try{await import('./server.js');process.exitCode=2;}catch(e){
-            if(e.message!=='PRODUCTS_LIVROS_PATH: configuracao de armazenamento ausente ou invalida.')throw e;
-            process.stdout.write('INICIALIZACAO_BLOQUEADA');
-        }`;
+        console.log=()=>{}; await import('./server.js'); await new Promise(r=>setImmediate(r));
+        if(escutas!==1)throw Error('LISTEN_AUSENTE');process.stdout.write('INICIALIZACAO_INSTITUCIONAL_OK');`;
     assert.equal(execFileSync(process.execPath,['--input-type=module'],{input:script,encoding:'utf8',windowsHide:true,
-        cwd:new URL('..',import.meta.url),env:{...process.env,DOTENV_CONFIG_PATH:f.arquivo},stdio:['pipe','pipe','pipe']}),'INICIALIZACAO_BLOQUEADA');
+        cwd:new URL('..',import.meta.url),env:{PATH:process.env.PATH,DOTENV_CONFIG_PATH:f.arquivo,NODE_ENV:'production'},stdio:['pipe','pipe','pipe']}),'INICIALIZACAO_INSTITUCIONAL_OK');
 });
