@@ -77,19 +77,17 @@ describe('Contratos editoriais e navegacao comercial R3.5/R3.6', () => {
     it('nao presume moeda BRL para oferta em outra moeda', () => {
         expect(precoEditorial({ ...livro, comercial: { ...livro.comercial!, moeda: 'USD' } })).toBeNull();
     });
-    for (const layout of ['list', 'grid'] as const) it(`vitrine ${layout} preserva livros sem oferta e navegacao editorial`, async () => {
-        const books = [livro, { ...livro, id: 3, title: 'Sem oferta', comercial: null },
-            { ...livro, id: 4, title: 'Fora de venda', comercial: { ...livro.comercial!, podeComprar: false } }];
-        TestBed.overrideComponent(EditoraComponent, { set: { providers: [{ provide: BookService, useValue: { getBooks: () => of(books) } }] } });
-        const f = TestBed.createComponent(EditoraComponent); f.componentInstance.layout = layout;
-        f.detectChanges(); await f.whenStable(); f.detectChanges();
-        const el: HTMLElement = f.nativeElement;
-        expect(f.componentInstance.books.length).toBe(3);
-        expect(el.textContent).toContain('Sem oferta'); expect(el.textContent).toContain('Fora de venda');
-        expect(el.textContent).toContain('SKU-OFICIAL');
-        expect(el.querySelector('a[href="/editora/livro/2"]')).not.toBeNull();
-        expect(Array.from(el.querySelectorAll('a')).filter(a => a.textContent?.includes('Comprar')).length).toBe(1);
-        expect(el.querySelector('a[href="/loja/produto/2"]')).toBeNull();
-        verificarCompra(el);
+    it('apresenta a Editora sem consultar o catálogo ou mostrar ações comerciais', () => {
+        const fixture = TestBed.createComponent(EditoraComponent);
+        fixture.detectChanges();
+        const el: HTMLElement = fixture.nativeElement;
+        expect(el.querySelector('h1')?.textContent).toContain('IST Editora');
+        expect(el.textContent).toContain('A Voz e a Memória da Amazônia');
+        expect(el.textContent).toContain('Nossa Linha Editorial');
+        expect(el.querySelector('footer-widget')).not.toBeNull();
+        expect(el.querySelector('p-dataview')).toBeNull();
+        expect(el.querySelector('a[href^="/loja"]')).toBeNull();
+        expect(el.textContent).not.toContain('Livros Disponíveis');
+        TestBed.inject(HttpTestingController).expectNone(req => req.url.includes('/api/books'));
     });
 });
