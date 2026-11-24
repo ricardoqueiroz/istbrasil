@@ -2,96 +2,87 @@ import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { provideZoneChangeDetection } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
+import { provideNoopAnimations } from '@angular/platform-browser/animations';
 import { Router, provideRouter } from '@angular/router';
 import { RouterTestingHarness } from '@angular/router/testing';
 import { appRoutes } from '../../../app.routes';
-import { environment } from '../../../environments/environment';
+import { adminGuard } from '../../guards/admin.guard';
+import { juradoGuard } from '../../guards/jurado.guard';
+import { perfilGuard } from '../../guards/perfil.guard';
 import { AppLayout } from '../../layout/component/app.layout';
-import { AppMenu } from '../../layout/component/app.menu';
-import { CARRINHO_STORAGE, CarrinhoService } from '../../services/carrinho.service';
-import { LojaCatalogoComponent } from './loja-catalogo.component';
-import { LojaCarrinhoComponent } from './loja-carrinho.component';
-import { LojaProdutoComponent } from './loja-produto.component';
-import { LojaProduto } from './models/loja.model';
+import { AuthService } from '../../shared/auth.service';
+import { EditoraComponent } from '../editora/editora.component';
+import { Notfound } from '../notfound/notfound';
+import { REDIRECIONAR_LOJA } from '../loja-redirecionamento/loja-redirecionamento.component';
 
-describe('Integracao de navegacao da Loja', () => {
+describe('Rotas após desativação da loja legada', () => {
     let http: HttpTestingController;
-    const url = `${environment.apiUrl}/loja`;
-    const livro: LojaProduto = { id: 1, sku: 'SKU1', titulo: 'Livro de teste', descricao: null,
-        categoria: { id: 2, nome: 'Música', slug: 'musica', categoriaPaiId: 1, ordem: 1 }, idioma: 'pt-br',
-        imagemUrl: null, precoCentavos: 9500, moeda: 'BRL', disponivel: true, tipo: 'DIGITAL', livroId: 1, formatoEditorial: 'E-Book', quantidadeMaxima: 1 };
-
+    let redirecionar: jasmine.Spy;
     beforeEach(() => {
-        TestBed.configureTestingModule({ providers: [provideZoneChangeDetection(), provideRouter(appRoutes),
-            provideHttpClient(), provideHttpClientTesting(), { provide: CARRINHO_STORAGE, useValue: null }] });
-        // Exercita as rotas e paginas reais; omite somente o chrome visual do layout.
+        redirecionar = jasmine.createSpy('redirecionar');
+        TestBed.configureTestingModule({ providers: [provideZoneChangeDetection(), provideNoopAnimations(),
+            provideRouter(appRoutes), provideHttpClient(), provideHttpClientTesting(),
+            { provide: REDIRECIONAR_LOJA, useValue: redirecionar }] });
         TestBed.overrideComponent(AppLayout, { set: { template: '<router-outlet />' } });
+        TestBed.overrideComponent(EditoraComponent, { set: { template: '<p>IST Editora</p>' } });
+        TestBed.overrideComponent(Notfound, { set: { template: '<p>Página não encontrada</p>' } });
         http = TestBed.inject(HttpTestingController);
     });
     afterEach(() => http.verify());
 
-    it('registra uma unica Loja em AppLayout com catalogo exato e filhos lazy', () => {
-        const lojas = appRoutes.filter((route) => route.path === 'loja');
-        expect(lojas.length).toBe(1); expect(lojas[0].component).toBe(AppLayout);
-        expect(lojas[0].children?.map((route) => route.path)).toEqual(['', 'carrinho', 'produto/:id', 'biblioteca/recuperar', 'biblioteca']);
-        expect(lojas[0].children?.[0].pathMatch).toBe('full');
-        expect(lojas[0].children?.every((route) => !!route.loadComponent && !route.component)).toBeTrue();
+    for (const url of ['/loja', '/loja/', '/loja?token=segredo', '/loja#fragmento', '/loja/?token=segredo#fragmento']) {
+        it(`redireciona somente ${url} para destino fixo sem dados da URL`, async () => {
+            await RouterTestingHarness.create(url);
+            expect(redirecionar).toHaveBeenCalledOnceWith('https://loja.istbrasil.org.br/');
+            http.expectNone(req => req.url.includes('/api/loja'));
+        });
+    }
+    for (const url of ['/loja/carrinho', '/loja/produto/1', '/loja/biblioteca',
+        '/loja/biblioteca/recuperar', '/loja/recuperar', '/loja/biblioteca/confirmar', '/editora/livro/1', '/inexistente',
+        '/loja;x=1', '/loja;x=1/carrinho', '/loja/(aux:x)', '/loja(aux:x)', '/(loja//aux:x)', '/lojavirtual', '/lojas']) {
+        it(`${url} não carrega loja e segue o wildcard`, async () => {
+            await RouterTestingHarness.create(url);
+            expect(TestBed.inject(Router).url).toBe('/notfound');
+            expect(redirecionar).not.toHaveBeenCalled();
+            http.expectNone(req => req.url.includes('/api/loja') || req.url.includes('/api/books'));
+        });
+    }
+    for (const url of ['/loja//x', '/loja//']) {
+        it(`${url} é normalizada pelo Router para /loja antes do reconhecimento`, async () => {
+            const router = TestBed.inject(Router);
+            expect(router.serializeUrl(router.parseUrl(url))).toBe('/loja');
+            await RouterTestingHarness.create(url);
+            expect(redirecionar).toHaveBeenCalledOnceWith('https://loja.istbrasil.org.br/');
+            http.expectNone(req => req.url.includes('/api/loja'));
+        });
+    }
+    for (const autenticado of [true, false]) {
+        for (const url of ['/admin/loja/livros', '/admin/loja/livros/novo', '/admin/loja/livros/1/editar']) {
+            it(`${url} não carrega rota comercial com sessão ${autenticado}`, async () => {
+                const auth = TestBed.inject(AuthService);
+                if (autenticado) auth.definirUsuario({ id_usuario: 1, id_tipo_usuario: 1, nome: 'Admin', foto_url: null });
+                auth.carregando.set(false);
+                await RouterTestingHarness.create(url);
+                expect(TestBed.inject(Router).url).not.toContain('/admin/loja');
+                expect(redirecionar).not.toHaveBeenCalled();
+                http.expectNone(req => req.url.includes('/api/admin/loja'));
+            });
+        }
+    }
+    it('preserva a Editora e não consulta livros', async () => {
+        const harness = await RouterTestingHarness.create('/editora');
+        expect(harness.routeNativeElement?.textContent).toContain('IST Editora');
+        http.expectNone(req => req.url.includes('/api/books'));
     });
-
-    it('acesso direto a /loja resolve e renderiza o catalogo lazy', async () => {
-        const harness = await RouterTestingHarness.create('/loja');
-        http.expectOne(`${url}/categorias`).flush([livro.categoria]);
-        http.expectOne(`${url}/produtos`).flush([livro]); harness.detectChanges();
-        expect(TestBed.inject(Router).routerState.snapshot.root.firstChild?.firstChild?.component).toBe(LojaCatalogoComponent);
-        expect(harness.routeNativeElement?.textContent).toContain('Livro de teste');
-    });
-
-    it('acesso direto a /loja/carrinho resolve o carrinho sem requisitar produto', async () => {
-        const harness = await RouterTestingHarness.create('/loja/carrinho');
-        expect(TestBed.inject(Router).routerState.snapshot.root.firstChild?.firstChild?.component).toBe(LojaCarrinhoComponent);
-        expect(harness.routeNativeElement?.textContent).toContain('Seu carrinho está vazio');
-        http.expectNone((request) => request.url.includes('/produtos/'));
-    });
-
-    for (const id of [1, 2]) it(`acesso direto a /loja/produto/${id} resolve detalhes com parametro correto`, async () => {
-        const harness = await RouterTestingHarness.create(`/loja/produto/${id}`);
-        http.expectOne(`${url}/produtos/${id}`).flush({ ...livro, id, titulo: `Livro ${id}` }); harness.detectChanges();
-        const rota = TestBed.inject(Router).routerState.snapshot.root.firstChild?.firstChild;
-        expect(rota?.component).toBe(LojaProdutoComponent); expect(rota?.params['id']).toBe(String(id));
-        expect(harness.routeNativeElement?.textContent).toContain(`Livro ${id}`);
-    });
-
-    it('RouterLink interno preserva AppLayout e itens ao abrir o carrinho', async () => {
-        const harness = await RouterTestingHarness.create('/loja');
-        http.expectOne(`${url}/categorias`).flush([]); http.expectOne(`${url}/produtos`).flush([livro]);
-        const layout = harness.routeDebugElement?.componentInstance;
-        TestBed.inject(CarrinhoService).adicionar(1); harness.detectChanges();
-        const link = harness.routeNativeElement?.querySelector<HTMLAnchorElement>('a[href="/loja/carrinho"]');
-        expect(link).not.toBeNull(); link?.click(); await harness.fixture.whenStable(); harness.detectChanges();
-        expect(TestBed.inject(Router).url).toBe('/loja/carrinho');
-        expect(harness.routeDebugElement?.componentInstance).toBe(layout);
-        const request = http.expectOne(`${url}/cotacao`);
-        expect(request.request.body).toEqual({ itens: [{ produtoId: 1, quantidade: 1 }] });
-        request.flush({ itens: [{ produtoId: 1, quantidade: 1, produto: livro, precoUnitarioCentavos: 9500, subtotalCentavos: 9500 }], moeda: 'BRL', totalCentavos: 9500, geradaEm: '2026-10-15T12:00:00Z' }); harness.detectChanges();
-        expect(harness.routeNativeElement?.textContent).toContain('95,00');
-    });
-
-    it('preserva as duas declaracoes editora e seus filhos', () => {
-        const editoras = appRoutes.filter((route) => route.path === 'editora');
-        expect(editoras.length).toBe(2); expect(editoras.every((route) => route.component === AppLayout)).toBeTrue();
-        expect(editoras.map((route) => route.children?.map((child) => child.path))).toEqual([[''], ['', 'livro/:id']]);
-        expect(editoras.some(route => route.children?.some(child => child.path === 'checkout'))).toBeFalse();
-        expect(appRoutes[appRoutes.length - 1]).toEqual({ path: '**', redirectTo: '/notfound' });
-    });
-
-    it('menu mantem Editora e adiciona Loja Virtual sem duplicar secao', () => {
-        const menu = new AppMenu(); menu.ngOnInit();
-        expect(menu.model.length).toBe(4);
-        const lojas = menu.model.filter((item) => item.label === 'LOJA'); expect(lojas.length).toBe(1);
-        expect(lojas[0].items).toEqual([
-            { label: 'IST Editora', icon: 'pi pi-fw pi-shopping-cart', routerLink: ['/editora'] },
-            { label: 'Loja Virtual', icon: 'pi pi-fw pi-shopping-bag', routerLink: ['/loja'] }
-        ]);
-        expect(menu.model.slice(0, 3).map((item) => item.items?.length)).toEqual([4, 3, 4]);
+    it('preserva rotas e guards institucionais', () => {
+        for (const path of ['login', 'confirmar-email', 'esqueci-senha', 'redefinir-senha', 'eventos', 'eventos/:slug', 'projetos', 'projetos/:slug']) {
+            expect(appRoutes.some(route => route.path === path)).withContext(path).toBeTrue();
+        }
+        expect(appRoutes.find(route => route.path === 'admin')?.canActivate).toEqual([adminGuard]);
+        expect(appRoutes.find(route => route.path === 'jurado')?.children?.every(route => route.canActivate?.includes(juradoGuard))).toBeTrue();
+        const cadastro = appRoutes.find(route => route.path === 'cadastro')?.children;
+        expect(cadastro?.find(route => route.path === 'concorrente/perfil')?.canActivate).toEqual([perfilGuard]);
+        expect(cadastro?.find(route => route.path === 'concorrente/videos')?.canActivate).toEqual([perfilGuard]);
+        expect(appRoutes.at(-1)).toEqual({ path: '**', redirectTo: '/notfound' });
     });
 });

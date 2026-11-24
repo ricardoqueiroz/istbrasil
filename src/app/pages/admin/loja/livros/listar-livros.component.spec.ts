@@ -10,7 +10,6 @@ import { provideRouter } from '@angular/router';
 import { provideNoopAnimations } from '@angular/platform-browser/animations';
 import { ListarLivrosComponent } from './listar-livros.component';
 import adminRoutes from '../../admin.routes';
-import { adminGuard } from '../../../../guards/admin.guard';
 
 describe('Listagem administrativa de Livros', () => {
     let fixture: ComponentFixture<ListarLivrosComponent>;
@@ -82,11 +81,10 @@ describe('Listagem administrativa de Livros', () => {
         const atual = requisicao(); atual.flush(dto(1)); expect(c.dados()?.paginacao.total).toBe(1);
         c.recarregar(); const final = requisicao(); fixture.destroy(); expect(final.cancelled).toBeTrue();
     });
-    it('rota lazy preserva guard e nao oferece operacoes de escrita', async () => {
+    it('rota comercial está desativada e listagem isolada não oferece operações de escrita', () => {
         requisicao().flush(dto());
         const rota = adminRoutes[0].children?.find(r => r.path === 'loja/livros');
-        expect(rota?.canActivate).toEqual([adminGuard]);
-        expect(await (rota!.loadComponent! as () => Promise<unknown>)()).toBe(ListarLivrosComponent);
+        expect(rota).toBeUndefined();
         expect(fixture.nativeElement.querySelectorAll('a[href*="editar"],input[type="file"]').length).toBe(0);
         c.recarregar(); const r = requisicao(); expect(r.request.method).toBe('GET'); r.flush(dto());
     });

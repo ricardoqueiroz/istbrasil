@@ -1,4 +1,4 @@
-import { Routes } from '@angular/router';
+import { PRIMARY_OUTLET, Routes, UrlSegment, UrlSegmentGroup } from '@angular/router';
 import { AppLayout } from './app/layout/component/app.layout';
 import { Documentation } from './app/pages/documentation/documentation';
 import { Landing } from './app/pages/landing/landing';
@@ -12,11 +12,17 @@ import { TIPO_USUARIO_MAP } from './app/pages/cadastro/models/cadastro.model';
 import { perfilGuard } from './app/guards/perfil.guard';
 import { adminGuard } from './app/guards/admin.guard';
 import { juradoGuard } from './app/guards/jurado.guard';
-// import { LivroComponent } from './app/pages/editora/livro/livro.component';
+
+const rotaLojaExata = (segments: UrlSegment[], group: UrlSegmentGroup) => {
+    if (segments[0]?.path !== 'loja' || segments.length > 2
+        || (segments.length === 2 && segments[1].path !== '')
+        || segments.some(segment => Object.keys(segment.parameters).length > 0)
+        || group.hasChildren()
+        || (group.parent && Object.keys(group.parent.children).some(outlet => outlet !== PRIMARY_OUTLET))) return null;
+    return { consumed: segments };
+};
 
 export const appRoutes: Routes = [
-    { path: 'loja/recuperar', data: { confirmar: true }, loadComponent: () => import('./app/pages/loja/loja-recuperacao.component').then(m => m.LojaRecuperacaoComponent) },
-    { path: 'loja/biblioteca/confirmar', data: { confirmar: true }, loadComponent: () => import('./app/pages/loja/loja-recuperacao.component').then(m => m.LojaRecuperacaoComponent) },
     { path: '', component: Landing },
     {
         path: 'disclaimers',
@@ -79,31 +85,8 @@ export const appRoutes: Routes = [
         ]
     },
     {
-        path: 'loja',
-        component: AppLayout,
-        children: [
-            {
-                path: '',
-                pathMatch: 'full',
-                loadComponent: () => import('./app/pages/loja/loja-catalogo.component').then(m => m.LojaCatalogoComponent)
-            },
-            {
-                path: 'carrinho',
-                loadComponent: () => import('./app/pages/loja/loja-carrinho.component').then(m => m.LojaCarrinhoComponent)
-            },
-            {
-                path: 'produto/:id',
-                loadComponent: () => import('./app/pages/loja/loja-produto.component').then(m => m.LojaProdutoComponent)
-            },
-            {
-                path: 'biblioteca/recuperar',
-                loadComponent: () => import('./app/pages/loja/loja-recuperacao.component').then(m => m.LojaRecuperacaoComponent)
-            },
-            {
-                path: 'biblioteca',
-                loadComponent: () => import('./app/pages/loja/loja-biblioteca.component').then(m => m.LojaBibliotecaComponent)
-            }
-        ]
+        matcher: rotaLojaExata,
+        loadComponent: () => import('./app/pages/loja-redirecionamento/loja-redirecionamento.component').then(m => m.LojaRedirecionamentoComponent)
     },
     {
         path: 'admin',
@@ -148,17 +131,6 @@ export const appRoutes: Routes = [
             {
                 path: 'book01',
                 loadComponent: () => import('./app/pages/flipbooks/book01/book01.component').then(m => m.ReaderPageComponent)
-            }
-        ]
-    },
-    {
-        path: 'editora',
-        component: AppLayout,
-        children: [
-            { path: '', component: EditoraComponent },
-            {
-                path: 'livro/:id',
-                loadComponent: () => import('./app/pages/editora/livro/livro.component').then(m => m.LivroComponent)
             }
         ]
     },
