@@ -2,6 +2,7 @@
   "type": "module",
   "name": "sakai-ng",
   "version": "20.0.0",
+  "istStorageContract": "institutional-v1",
   "scripts": {
     "ng": "ng",
     "start": "ng serve",

@@ -11,11 +11,15 @@ STAGE=arguments
 log() { printf '[IST deploy] %s\n' "$*"; }
 fail() { log "ERROR [$STAGE]: $*" >&2; exit 1; }
 trap 'printf "[IST deploy] ERROR [%s]: interrupted; sensitive details omitted.\n" "$STAGE" >&2' ERR
-[[ $# -ge 1 && $# -le 4 ]] || fail 'Usage: deploy.sh --check | --prepare git | --prepare package ABSOLUTE_TAR SHA256 | --activate PREPARATION_UUID | --deploy | --rollback BACKUP_UUID'
+[[ $# -ge 1 && $# -le 4 ]] || fail 'Usage: deploy.sh --check | --prepare git | --prepare package ABSOLUTE_TAR SHA256 | --activate PREPARATION_UUID | --install | --homologate RELEASE_UUID MANIFEST_SHA256 | --deploy | --rollback BACKUP_UUID'
 MODE=$1
-case "$MODE" in --check|--prepare|--activate|--deploy|--rollback) ;; *) fail 'Unknown operation.' ;; esac
+case "$MODE" in --check|--prepare|--activate|--install|--homologate|--deploy|--rollback) ;; *) fail 'Unknown operation.' ;; esac
 [[ $MODE != --check || $# == 1 ]] || fail '--check does not accept arguments.'
 [[ $MODE != --deploy || $# == 1 ]] || fail '--deploy does not accept arguments.'
+[[ $MODE != --install || $# == 1 ]] || fail '--install does not accept arguments.'
+if [[ $MODE == --homologate ]]; then
+    [[ $# == 3 && $2 =~ ^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$ && $3 =~ ^[a-f0-9]{64}$ ]] || fail 'Homologation requires a release UUID and manifest SHA-256.'
+fi
 [[ $MODE != --rollback || $# == 2 ]] || fail 'Rollback unavailable: explicit backup UUID required.'
 [[ $MODE != --activate || $# == 2 ]] || fail 'Activation unavailable: explicit preparation UUID required.'
 if [[ $MODE == --activate ]]; then
@@ -34,6 +38,7 @@ STAGE=tools
 TOOLS=(node npm df realpath stat awk)
 if [[ $MODE != --activate && ( $MODE != --prepare || ${2:-} == git ) ]]; then TOOLS+=(git); fi
 if [[ $MODE != --prepare ]]; then TOOLS+=(pm2 flock rsync curl ss ps cut grep sort getent getfacl); fi
+if [[ $MODE == --homologate ]]; then TOOLS=(node realpath stat flock pm2); fi
 for tool in "${TOOLS[@]}"; do
     command -v "$tool" >/dev/null 2>&1 || fail "Missing tool: $tool"
 done
@@ -57,6 +62,26 @@ process.stdout.write(JSON.stringify(value)); } catch { process.exit(2); }
     fi
     printf '%s\n' "$output"
 }
+
+if [[ $MODE == --install || $MODE == --homologate ]]; then
+    STAGE=install
+    for dir in "$BASE" "$REPO" "$BASE/.deploy" "$BASE/.deploy/state"; do
+        [[ -d $dir && ! -L $dir && $(realpath -e -- "$dir") == "$dir" ]] || fail 'Required installation path is unsafe.'
+    done
+    if [[ $MODE == --install ]]; then
+        [[ $(git -C "$REPO" rev-parse --show-toplevel) == "$REPO" && $(git -C "$REPO" branch --show-current) == main ]] || fail 'Canonical Git main required.'
+        git -C "$REPO" diff --quiet && git -C "$REPO" diff --cached --quiet || fail 'Git changes require review.'
+        TARGET=$(git -C "$REPO" rev-parse --verify refs/remotes/origin/main)
+    fi
+    APPROVAL="$BASE/.deploy/state/PRODUCTION_APPROVED"
+    [[ -f $APPROVAL && ! -L $APPROVAL && $(stat -c %u -- "$APPROVAL") == "$ADMIN_UID" && $(stat -c %a -- "$APPROVAL") == 600
+       && $(< "$APPROVAL") == IST_DEPLOY_PRODUCTION_APPROVED_V1 ]] || fail 'Production approval marker missing.'
+    [[ -f $BASE/.deploy.lock && ! -L $BASE/.deploy.lock ]] || fail 'Administrative lock not provisioned.'
+    exec 9< "$BASE/.deploy.lock"
+    flock -n -x 9 || fail 'Concurrent operation holds lock.'
+    if [[ $MODE == --install ]]; then run_runner install "$TARGET"; else run_runner homologate "$2" "$3"; fi
+    exit 0
+fi
 
 if [[ $MODE == --prepare ]]; then
     STAGE=prepare
@@ -100,13 +125,31 @@ GITBASE
     log 'prepare completed successfully; activation requires a separate explicit command.'
     exit 0
 fi
+INSTITUTIONAL_ACTIVE=false
+if [[ -e $BASE/.deploy/state/active.json || -L $BASE/.deploy/state/active.json ]]; then
+    ACTIVE_KIND=$(node --input-type=module - "$BASE" "$REPO/scripts/deploy/production-contract.mjs" "$MODE" <<'ACTIVEKIND'
+import fs from 'node:fs';
+const [base,modulePath,mode]=process.argv.slice(2), c=await import('file://'+modulePath), paths=c.canonicalPaths(base);
+const st=fs.lstatSync(paths.active);
+if(!st.isFile()||st.isSymbolicLink()||st.nlink!==1||st.uid!==process.getuid()||(st.mode&0o7777)!==0o600)process.exit(2);
+const active=JSON.parse(fs.readFileSync(paths.active,'utf8'));
+if(!c.validateActive(active,paths)||active.homologation==='pending'&&mode!=='--check')process.exit(3);
+const release=c.releasePaths(paths,active.backend.releaseId), bytes=fs.readFileSync(release.manifest), manifest=JSON.parse(bytes);
+if(c.sha256(bytes)!==active.backend.manifestSha256||manifest.releaseId!==active.backend.releaseId||manifest.declaredCommitSha!==active.backend.commitSha)process.exit(4);
+process.stdout.write(c.classifyStorageContract(manifest,'release',paths));
+ACTIVEKIND
+    ) || fail 'Active state or initial homologation is invalid.'
+    [[ $ACTIVE_KIND == institutional-v1 ]] && INSTITUTIONAL_ACTIVE=true
+fi
 STAGE=paths
 for dir in "$BASE" "$REPO" "$PUBLIC" "$BASE/uploads" "$REPO/istbrasil.private"; do
     [[ -d $dir && ! -L $dir ]] || fail 'Required directory missing or replaced by symlink.'
     [[ $(realpath -e -- "$dir") == "$dir" ]] || fail 'Unexpected canonical path.'
 done
-[[ -L $PUBLIC/istdbadmin ]] || fail 'istdbadmin must be a symlink.'
-[[ $(realpath -e -- "$PUBLIC/istdbadmin") == /usr/share/phpmyadmin ]] || fail 'Unexpected phpMyAdmin target.'
+if [[ $INSTITUTIONAL_ACTIVE != true ]]; then
+    [[ -L $PUBLIC/istdbadmin ]] || fail 'istdbadmin must be a symlink.'
+    [[ $(realpath -e -- "$PUBLIC/istdbadmin") == /usr/share/phpmyadmin ]] || fail 'Unexpected phpMyAdmin target.'
+fi
 # Only admin's exclusive primary group is accepted, including for mode 600.
 GROUP_RECORD=$(getent group "$ADMIN_GID") || fail 'Cannot validate admin primary group.'
 [[ $(printf '%s' "$GROUP_RECORD" | awk -F: '{print $3}') == "$ADMIN_GID" ]] || fail 'Invalid primary group record.'
@@ -183,6 +226,7 @@ STAGE=pm2
 RUNTIME_CWD=$REPO
 RUNTIME_SCRIPT="$REPO/server.js"
 RUNTIME_KIND=legacy
+RUNTIME_CONTRACT=legacy-unverified
 if [[ -e $BASE/.deploy/state/active.json ]]; then
     [[ -f $BASE/.deploy/state/active.json && ! -L $BASE/.deploy/state/active.json
        && $(stat -c %u -- "$BASE/.deploy/state/active.json") == "$ADMIN_UID"
@@ -198,6 +242,16 @@ ACTIVE
     ) || fail 'Active state metadata is invalid.'
     RUNTIME_SCRIPT="$RUNTIME_CWD/server.js"
     RUNTIME_KIND=release
+    RUNTIME_CONTRACT=$(node --input-type=module - "$BASE" "$REPO/scripts/deploy/production-contract.mjs" <<'CONTRACT'
+import fs from 'node:fs';
+const [base,modulePath]=process.argv.slice(2), c=await import('file://'+modulePath);
+const paths=c.canonicalPaths(base), active=JSON.parse(fs.readFileSync(paths.active,'utf8'));
+if (!c.validateActive(active,paths)) process.exit(2);
+const release=c.releasePaths(paths,active.backend.releaseId), bytes=fs.readFileSync(release.manifest), manifest=JSON.parse(bytes);
+if (c.sha256(bytes)!==active.backend.manifestSha256 || manifest.releaseId!==active.backend.releaseId || manifest.declaredCommitSha!==active.backend.commitSha) process.exit(3);
+process.stdout.write(c.classifyStorageContract(manifest,'release',paths));
+CONTRACT
+    ) || fail 'Active release storage contract is invalid.'
 fi
 # Do not invoke PM2 CLI: even --version/jlist may start a missing daemon.
 [[ -f $EXPECTED_PM2_HOME/pm2.pid && ! -L $EXPECTED_PM2_HOME/pm2.pid
@@ -270,25 +324,28 @@ try {
 } catch { reject('Insufficient /proc visibility or process changed during inspection; no process action taken.'); }
 PM2CHECK
 STAGE=runtime
-node --input-type=commonjs - "$RUNTIME_CWD" "$RUNTIME_SCRIPT" "$RUNTIME_KIND" "$API_PID" "$DAEMON_PID" "$(command -v pm2)" <<'NODE'
+node --input-type=commonjs - "$RUNTIME_CWD" "$RUNTIME_SCRIPT" "$RUNTIME_KIND" "$API_PID" "$DAEMON_PID" "$(command -v pm2)" "$RUNTIME_CONTRACT" <<'NODE'
 const fs = require('node:fs');
 const path = require('node:path');
 const { createRequire } = require('node:module');
-const [runtimeCwd, runtimeScript, runtimeKind, pid, daemon, pm2bin] = process.argv.slice(2);
+const [runtimeCwd, runtimeScript, runtimeKind, pid, daemon, pm2bin, storageContract] = process.argv.slice(2);
 const reject = message => { console.error('[IST deploy] ERROR [runtime]: '+message); process.exit(1); };
 try {
     const req = createRequire(path.join(runtimeCwd,'package.json'));
     const semver = req('semver'), dotenv = req('dotenv');
     if (process.versions.node !== '20.19.6') reject('Node version differs from the homologated runtime.');
     if (!['legacy','release'].includes(runtimeKind)) reject('Unknown runtime kind.');
-    for (const name of ['@angular/cli','@angular/core','primeng','express','sharp','bcrypt']) {
+    const required = runtimeKind === 'legacy' || storageContract !== 'institutional-v1'
+        ? ['@angular/cli','@angular/core','primeng','express','sharp','bcrypt']
+        : ['express','sharp','bcrypt'];
+    for (const name of required) {
         const installed = JSON.parse(fs.readFileSync(path.join(runtimeCwd,'node_modules',name,'package.json'),'utf8'));
         if (!installed.version || !semver.satisfies(process.versions.node, installed.engines?.node || '*')) reject('Installed runtime dependency is invalid or incompatible with Node.');
     }
     const pkgs = runtimeKind === 'release'
         ? JSON.parse(fs.readFileSync(path.join(runtimeCwd,'package-lock.json'),'utf8')).packages || {}
         : null;
-    if (runtimeKind === 'release') for (const name of ['@angular/cli','@angular/core','primeng','express','sharp','bcrypt']) {
+    if (runtimeKind === 'release') for (const name of required) {
         const info = pkgs['node_modules/'+name];
         const installed = JSON.parse(fs.readFileSync(path.join(runtimeCwd,'node_modules',name,'package.json'),'utf8'));
         if (!info || !semver.satisfies(process.versions.node, info.engines?.node || '*')) reject('Node incompatible or lock incomplete.');

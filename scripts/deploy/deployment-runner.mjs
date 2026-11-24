@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { createExportWorkspace, exportCommit, requireExportWorkspace } from './git-export.mjs';
 import { importPackage } from './package-import.mjs';
 import { prepareRelease, verifyPreparedRelease, publishPersistentPreparation, verifyPersistentPreparation } from './release-prepare.mjs';
-import { activatePreparedRelease, activatePersistentRelease, rollbackRelease, createPm2Adapter } from './production-operation.mjs';
+import { activatePreparedRelease, activatePersistentRelease, installInitialRelease, homologateInitialRelease, rollbackRelease, createPm2Adapter } from './production-operation.mjs';
 import { canonicalPaths, validId, validSha } from './production-contract.mjs';
 
 const execute = promisify(execFile);
@@ -99,9 +99,9 @@ export async function activateDeployment({ base, preparationId, adapter = create
     return activator({ base, preparationId, adapter });
 }
 
-export async function prepareAndActivate({ base, repo, targetSha, adapter = createPm2Adapter({base}), allowRegistry = true,
+export async function prepareAndActivate({ base, repo, targetSha, initial = false, adapter = createPm2Adapter({base}), allowRegistry = true,
     createWorkspace = createExportWorkspace, cloneRepository = cloneLocalGit, exporter = exportCommit,
-    preparer = prepareRelease, activator = activatePreparedRelease }) {
+    preparer = prepareRelease, activator = initial ? installInitialRelease : activatePreparedRelease }) {
     if (!validSha(targetSha) || path.resolve(repo) !== repo) throw fail('DEPLOY_ARGUMENT_INVALID');
     const paths = canonicalPaths(base); await requireApproval(paths);
     const workspace = await createWorkspace(); let completed = false;
@@ -125,8 +125,14 @@ export async function executeRollback({ base, backupId, adapter = createPm2Adapt
     return rollback({ base, backupId, adapter });
 }
 
+export async function homologateDeployment({base, releaseId, manifestSha256, adapter = createPm2Adapter({base}), homologate = homologateInitialRelease}) {
+    if (!validId(releaseId) || !SHA256.test(manifestSha256 || '')) throw fail('HOMOLOGATION_ARGUMENT_INVALID');
+    const paths = canonicalPaths(base); await requireApproval(paths);
+    return homologate({base,releaseId,manifestSha256,adapter});
+}
+
 export async function dispatchCli(args, { base = '/var/www/istbrasil.org.br', prepare = prepareDeployment,
-    activate = activateDeployment, deploy = prepareAndActivate, rollback = executeRollback } = {}) {
+    activate = activateDeployment, deploy = prepareAndActivate, rollback = executeRollback, homologate = homologateDeployment } = {}) {
     const [mode, ...values] = args, paths = canonicalPaths(base);
     let result;
     if (mode === 'prepare-git' && values.length === 1 && validSha(values[0])) {
@@ -136,7 +142,11 @@ export async function dispatchCli(args, { base = '/var/www/istbrasil.org.br', pr
         result = await prepare({ base, packagePath: values[0], expectedSha256: values[1] });
         return { status: 'SUCCESS', operation: 'prepare', preparationId: result.preparationId, source: result.source, integrity: result.integrity };
     } else if (mode === 'activate' && values.length === 1 && validId(values[0])) result = await activate({ base, preparationId: values[0] });
-    else if (mode === 'deploy' && values.length === 1 && validSha(values[0])) result = await deploy({ base, repo: paths.repo, targetSha: values[0] });
+    else if (mode === 'homologate' && values.length === 2 && validId(values[0]) && SHA256.test(values[1])) {
+        const active = await homologate({base,releaseId:values[0],manifestSha256:values[1]});
+        return {status:'SUCCESS',operation:mode,releaseId:active.backend.releaseId,manifestSha256:active.backend.manifestSha256,approvedAt:active.homologation.approvedAt};
+    }
+    else if (['deploy', 'install'].includes(mode) && values.length === 1 && validSha(values[0])) result = await deploy({ base, repo: paths.repo, targetSha: values[0], initial: mode === 'install' });
     else if (mode === 'rollback' && values.length === 1 && validId(values[0])) result = await rollback({ base, backupId: values[0] });
     else throw fail('USAGE_INVALID');
     return { status: 'SUCCESS', operation: mode, transactionId: result.transactionId, backupId: result.backupId,

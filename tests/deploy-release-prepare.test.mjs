@@ -100,6 +100,7 @@ test('normal flow creates a verified PREPARED_INACTIVE release with strict comma
         ['npm', ['--version'], 'metadata'],
         ['npm', ['ci', '--include=dev', '--strict-peer-deps'], 'install'],
         ['npm', ['run', 'build', '--', '--configuration', 'production'], 'build'],
+        ['npm', ['ci', '--omit=dev', '--strict-peer-deps'], 'runtime-install'],
         ['node', ['-e', "require('bcrypt'); const sharp=require('sharp'); if (!sharp.versions?.sharp) process.exit(2)"], 'native-probe'],
     ]);
     assert.equal(calls[1].network, true); assert.equal(calls[2].network, false);

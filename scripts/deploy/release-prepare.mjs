@@ -6,11 +6,11 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { requireExportWorkspace, verifyExport, safeGitPath } from './git-export.mjs';
 import { verifyPackage } from './package-import.mjs';
-import { preparationPaths, releasePaths, validatePreparedManifest, validatePreparedSeal } from './production-contract.mjs';
+import { preparationPaths, releasePaths, validatePreparedManifest, validatePreparedSeal, STORAGE_CONTRACTS } from './production-contract.mjs';
 
 const execFileAsync = promisify(execFile);
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
-const FORMAT = 'ist-prepared-inactive-v1';
+const FORMAT = 'ist-prepared-inactive-v2';
 const MAX_FILES = 500000;
 const MAX_MANIFEST = 128 * 1024 * 1024;
 const digest = value => createHash('sha256').update(value).digest('hex');
@@ -96,6 +96,24 @@ async function copyExport(record, source, destination) {
         safeGitPath(file.path);
         await fs.copyFile(`${source}/${file.path}`, `${destination}/${file.path}`, fs.constants.COPYFILE_EXCL);
         await fs.chmod(`${destination}/${file.path}`, file.mode);
+        const copied = await fs.readFile(`${destination}/${file.path}`);
+        if (copied.length !== file.size || digest(copied) !== file.sha256) throw fail('SOURCE_COPY_MISMATCH');
+    }
+}
+
+// Remove somente infraestrutura de desenvolvimento do projeto, nunca arquivos
+// dentro dos pacotes instalados pelo npm.
+async function removeProjectTests(directory, root = directory) {
+    for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
+        if (entry.name === 'node_modules') continue;
+        const target = path.join(directory, entry.name);
+        if (entry.isDirectory()) {
+            if (['tests', '__tests__', '__mocks__', 'coverage'].includes(entry.name)) {
+                await fs.rm(target, { recursive: true });
+            } else await removeProjectTests(target, root);
+        } else if (entry.isFile() && (/\.(?:spec|test)\.[cm]?[jt]s$/.test(entry.name)
+            || entry.name === 'tsconfig.spec.json'
+            || path.relative(root, target) === 'src/assets/loja-recuperacao-bootstrap.js')) await fs.unlink(target);
     }
 }
 
@@ -175,11 +193,43 @@ async function resolveSource(workspace, exportId, packageId) {
     } };
 }
 
+// Chamar somente depois de verifyExport: um digest isolado ou uma declaração
+// dentro de pacote importado não prova associação aos objetos Git aprovados.
+async function sourceStorageContract(source) {
+    const {record, directory, reference} = source;
+    if (reference.sourceType === 'package' || record.provenance?.kind !== 'verified-local-git-objects')
+        throw fail('SOURCE_PROVENANCE_UNVERIFIED');
+    const matches = record.files.filter(file => file.path === 'package.json');
+    if (matches.length !== 1 || matches[0].size > 1024 * 1024) throw fail('SOURCE_CONTRACT_INVALID');
+    const filename = `${directory}/package.json`;
+    let bytes;
+    try {
+        const before = await fs.lstat(filename);
+        if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1) throw fail('SOURCE_CONTRACT_INVALID');
+        const handle = await fs.open(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+        try {
+            if (!sameStat(before, await handle.stat())) throw fail('SOURCE_CONTRACT_CHANGED');
+            bytes = await handle.readFile();
+            if (!sameStat(before, await handle.stat()) || !sameStat(before, await fs.lstat(filename))) throw fail('SOURCE_CONTRACT_CHANGED');
+        } finally { await handle.close(); }
+    } catch (error) {
+        if (error.code === 'SOURCE_CONTRACT_CHANGED') throw error;
+        throw fail('SOURCE_CONTRACT_INVALID');
+    }
+    if (bytes.length !== matches[0].size || digest(bytes) !== matches[0].sha256) throw fail('SOURCE_CONTRACT_CHANGED');
+    let declaration;
+    try { declaration = JSON.parse(bytes.toString('utf8')).istStorageContract; }
+    catch { throw fail('SOURCE_CONTRACT_INVALID'); }
+    if (declaration !== STORAGE_CONTRACTS.INSTITUTIONAL) throw fail('SOURCE_CONTRACT_UNSUPPORTED');
+    return declaration;
+}
+
 export async function prepareRelease({ workspace, exportId, packageId, allowRegistry = false, runner = defaultRunner }) {
     await requireExportWorkspace(workspace);
     if (typeof runner !== 'function') throw fail('PREPARATION_ARGUMENT_INVALID');
     if (process.version !== 'v20.19.6') throw fail('NODE_VERSION_UNSUPPORTED');
     const source = await resolveSource(workspace, exportId, packageId), record = source.record;
+    const storageContract = await sourceStorageContract(source);
     const releaseLock = await acquireLock(workspace);
     const preparationId = randomUUID(), root = `${workspace}/preparations`, destination = `${root}/${preparationId}`;
     let completed = false;
@@ -198,17 +248,23 @@ export async function prepareRelease({ workspace, exportId, packageId, allowRegi
         if (!/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(npmVersion)) throw fail('NPM_VERSION_INVALID');
         await runner('npm', ['ci', '--include=dev', '--strict-peer-deps'], { cwd: backend, env, stage: 'install', network: allowRegistry });
         await runner('npm', ['run', 'build', '--', '--configuration', 'production'], { cwd: backend, env, stage: 'build', network: false });
+        await runner('npm', ['ci', '--omit=dev', '--strict-peer-deps'], { cwd: backend, env, stage: 'runtime-install', network: allowRegistry });
         await runner('node', ['-e', "require('bcrypt'); const sharp=require('sharp'); if (!sharp.versions?.sharp) process.exit(2)"], { cwd: backend, env, stage: 'native-probe', network: false });
         const built = `${backend}/dist/sakai-ng/browser`, frontend = `${release}/frontend`;
         await privateDirectory(built);
         await fs.rename(built, frontend);
         await fs.rm(`${backend}/dist`, { recursive: true, force: true });
+        await removeProjectTests(backend);
         await requireEssential(release);
+        const checkedSource = await resolveSource(workspace, exportId, packageId);
+        if (checkedSource.record.commitSha !== record.commitSha || checkedSource.record.treeSha !== record.treeSha
+            || await sourceStorageContract(checkedSource) !== storageContract) throw fail('SOURCE_CONTRACT_CHANGED');
         const entries = await inventory(release);
-        const manifest = { version: 1, format: FORMAT, status: 'PREPARED_INACTIVE', preparationId, ...source.reference,
+        const manifest = { version: 2, format: FORMAT, storageContract, status: 'PREPARED_INACTIVE', preparationId, ...source.reference,
             commitSha: record.commitSha, treeSha: record.treeSha, node: process.version, npm: npmVersion, modulesAbi: process.versions.modules,
             platform: process.platform, architecture: process.arch, commands: {
                 install: ['npm', 'ci', '--include=dev', '--strict-peer-deps'], build: ['npm', 'run', 'build', '--', '--configuration', 'production'],
+                runtimeInstall: ['npm', 'ci', '--omit=dev', '--strict-peer-deps'],
                 nativeProbe: ['node', '-e', "require('bcrypt'); require('sharp')"],
             }, entries };
         const bytes = Buffer.from(JSON.stringify(manifest));
@@ -234,7 +290,7 @@ export async function verifyPreparedRelease({ workspace, preparationId }) {
     await privateDirectory(destination); await privateDirectory(release);
     const bytes = await fs.readFile(`${destination}/manifest.json`), manifest = JSON.parse(bytes);
     const seal = JSON.parse(await fs.readFile(`${destination}/PREPARED_INACTIVE.json`, 'utf8'));
-    if (manifest.format !== FORMAT || manifest.status !== 'PREPARED_INACTIVE' || manifest.preparationId !== preparationId
+    if (!validatePreparedManifest(manifest) || !validatePreparedSeal(seal) || manifest.preparationId !== preparationId
         || seal.preparationId !== preparationId || seal.manifestSha256 !== digest(bytes)) throw fail('PREPARATION_RECORD_INVALID');
     const source = manifest.sourceType === 'package'
         ? await verifyPackage({ workspace, packageId: manifest.packageId })
@@ -242,6 +298,12 @@ export async function verifyPreparedRelease({ workspace, preparationId }) {
     if (manifest.commitSha !== source.commitSha || manifest.treeSha !== source.treeSha || manifest.node !== 'v20.19.6'
         || manifest.sourceType === 'package' && (manifest.packageSha256 !== source.packageSha256 || manifest.releaseVersion !== source.releaseVersion)
         || manifest.modulesAbi !== process.versions.modules || manifest.platform !== 'linux' || !/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(manifest.npm)) throw fail('PREPARATION_RECORD_INVALID');
+    if (manifest.version === 2) {
+        const verifiedSource = {record: source, directory: manifest.sourceType === 'package'
+            ? `${workspace}/packages/${manifest.packageId}/source` : `${workspace}/exports/${manifest.exportId}/source`,
+        reference: manifest.sourceType === 'package' ? {sourceType: 'package'} : {exportId: manifest.exportId}};
+        if (await sourceStorageContract(verifiedSource) !== manifest.storageContract) throw fail('SOURCE_CONTRACT_MISMATCH');
+    }
     await requireEssential(release);
     if (JSON.stringify(await inventory(release)) !== JSON.stringify(manifest.entries)) throw fail('PREPARATION_INTEGRITY_FAILED');
     return manifest;

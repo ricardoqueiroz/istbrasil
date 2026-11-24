@@ -4,6 +4,8 @@ import { createHash } from 'node:crypto';
 import {BASE_IMPLANTACAO_IST,PHPMYADMIN_PUBLICO_IST,limitesArmazenamentoImplantacao} from '../../src/config/lojaImplantacao.js';
 
 export const VERSION = 1;
+export const STORAGE_CONTRACTS = Object.freeze({ INSTITUTIONAL: 'institutional-v1', LEGACY: 'legacy-store-v1' });
+const storageContractValid = value => Object.values(STORAGE_CONTRACTS).includes(value);
 export const RESERVE_BYTES = 10n * 1024n ** 3n;
 export const STATES = Object.freeze(['UNINITIALIZED', 'CONSISTENT', 'IN_PROGRESS', 'RECOVERY_REQUIRED', 'UNKNOWN_PROCESS', 'INCONCLUSIVE', 'INVALID']);
 export const sha256 = data => createHash('sha256').update(data).digest('hex');
@@ -45,16 +47,22 @@ export function preparationPaths(paths, id) {
 
 export function validatePreparedManifest(value) {
     const common = ['version', 'format', 'status', 'preparationId', 'commitSha', 'treeSha', 'node', 'npm', 'modulesAbi', 'platform', 'architecture', 'commands', 'entries'];
+    if (value?.version === 2) common.push('storageContract');
     const git = [...common, 'exportId'], packaged = [...common, 'sourceType', 'packageId', 'packageSha256', 'releaseVersion'];
     const packageSource = value?.sourceType === 'package';
-    if (!keys(value, packageSource ? packaged : git) || value.version !== 1 || value.format !== 'ist-prepared-inactive-v1'
+    if (!keys(value, packageSource ? packaged : git) || !([1, 2].includes(value.version))
+        || value.format !== `ist-prepared-inactive-v${value.version}`
+        || value.version === 2 && !storageContractValid(value.storageContract)
         || value.status !== 'PREPARED_INACTIVE' || !validId(value.preparationId) || !validSha(value.commitSha) || !validSha(value.treeSha)
         || value.node !== 'v20.19.6' || value.platform !== 'linux' || !['x64', 'arm64'].includes(value.architecture)
         || typeof value.modulesAbi !== 'string' || !/^\d+$/.test(value.modulesAbi) || typeof value.npm !== 'string'
         || !/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(value.npm)) return false;
     if (packageSource ? !validId(value.packageId) || !validDigest(value.packageSha256) || typeof value.releaseVersion !== 'string'
         || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(value.releaseVersion) : !validId(value.exportId)) return false;
-    if (!keys(value.commands, ['install', 'build', 'nativeProbe'])
+    if (!(keys(value.commands, ['install', 'build', 'nativeProbe'])
+        || keys(value.commands, ['install', 'build', 'runtimeInstall', 'nativeProbe'])
+        && JSON.stringify(value.commands.runtimeInstall) === JSON.stringify(['npm', 'ci', '--omit=dev', '--strict-peer-deps']))
+        || value.version === 2 && value.storageContract === STORAGE_CONTRACTS.INSTITUTIONAL && !Object.hasOwn(value.commands, 'runtimeInstall')
         || JSON.stringify(value.commands.install) !== JSON.stringify(['npm', 'ci', '--include=dev', '--strict-peer-deps'])
         || JSON.stringify(value.commands.build) !== JSON.stringify(['npm', 'run', 'build', '--', '--configuration', 'production'])
         || JSON.stringify(value.commands.nativeProbe) !== JSON.stringify(['node', '-e', "require('bcrypt'); require('sharp')"])) return false;
@@ -129,7 +137,9 @@ export function checkMetadata(meta, policy, identity) {
 
 export function validateActive(value, paths = PATHS) {
     const fields = ['version', 'generation', 'transactionId', 'previousGeneration', 'confirmedAt', 'backend', 'frontend', 'pm2'];
+    if (Object.hasOwn(value || {}, 'homologation')) fields.push('homologation');
     if (!keys(value, fields) || value.version !== VERSION || !integer(value.generation) || value.generation < 1 || !validId(value.transactionId) || !date(value.confirmedAt)
+        || Object.hasOwn(value, 'homologation') && (value.generation !== 1 || !(value.homologation === 'pending' || validInitialHomologation(value)))
         || !(value.previousGeneration === null && value.generation === 1 || integer(value.previousGeneration) && value.previousGeneration === value.generation - 1)) return false;
     if (!keys(value.backend, ['kind', 'releaseId', 'commitSha', 'manifestSha256']) || value.backend.kind !== 'release' || !validId(value.backend.releaseId) || !validSha(value.backend.commitSha) || !validDigest(value.backend.manifestSha256)) return false;
     if (!keys(value.frontend, ['releaseId', 'manifestSha256', 'indexSha256']) || !validId(value.frontend.releaseId) || !validDigest(value.frontend.manifestSha256) || !validDigest(value.frontend.indexSha256)) return false;
@@ -138,8 +148,20 @@ export function validateActive(value, paths = PATHS) {
         && value.pm2.home === paths.pm2Home && value.pm2.cwd === backend && value.pm2.script === `${backend}/server.js` && value.pm2.node === '20.19.6';
 }
 
+function validInitialHomologation(value) {
+    const approval = value.homologation;
+    return keys(approval, ['status','releaseId','manifestSha256','approvedAt','operator']) && approval.status === 'approved'
+        && approval.releaseId === value.backend?.releaseId && approval.releaseId === value.frontend?.releaseId
+        && approval.manifestSha256 === value.backend?.manifestSha256 && approval.manifestSha256 === value.frontend?.manifestSha256
+        && validId(approval.releaseId) && validDigest(approval.manifestSha256) && date(approval.approvedAt)
+        && keys(approval.operator,['uid','name']) && integer(approval.operator.uid) && approval.operator.uid > 0
+        && typeof approval.operator.name === 'string' && /^[a-z_][a-z0-9_-]{0,31}$/i.test(approval.operator.name);
+}
+
 export function validateManifest(value, paths = PATHS) {
-    if (!keys(value, ['version', 'releaseId', 'declaredCommitSha', 'gitProvenance', 'runtime', 'entries']) || value.version !== VERSION || !validId(value.releaseId) || !validSha(value.declaredCommitSha)) return false;
+    const fields = ['version', 'releaseId', 'declaredCommitSha', 'gitProvenance', 'runtime', 'entries'];
+    if (value?.version === 2) fields.push('storageContract');
+    if (!keys(value, fields) || ![1, 2].includes(value.version) || value.version === 2 && !storageContractValid(value.storageContract) || !validId(value.releaseId) || !validSha(value.declaredCommitSha)) return false;
     // A stored provenance claim is not an independently verified Git attestation.
     if (value.gitProvenance !== null && (!keys(value.gitProvenance, ['commitSha', 'treeSha', 'verifiedAt']) || value.gitProvenance.commitSha !== value.declaredCommitSha || !validSha(value.gitProvenance.treeSha) || !date(value.gitProvenance.verifiedAt))) return false;
     if (!keys(value.runtime, ['platform', 'arch', 'node', 'abi']) || value.runtime.platform !== 'linux' || !['x64', 'arm64'].includes(value.runtime.arch) || value.runtime.node !== '20.19.6' || typeof value.runtime.abi !== 'string' || !/^\d+$/.test(value.runtime.abi)) return false;
@@ -167,11 +189,29 @@ export function validateManifest(value, paths = PATHS) {
 // Proposed production archive schema; separate from Phase 1's isolated format.
 // This validator neither creates archives nor changes the Phase 1 APIs.
 export function validateBackupManifest(value, paths = PATHS) {
-    if (!keys(value, ['version', 'backupId', 'sourceGeneration', 'declaredCommitSha', 'runtime', 'entries']) || !validId(value.backupId) || !integer(value.sourceGeneration) || !Array.isArray(value.entries) || value.entries.some(entry => protectedEntry(entry?.path))) return false;
+    const fields = ['version', 'backupId', 'sourceGeneration', 'declaredCommitSha', 'runtime', 'entries'];
+    if (value?.version === 2) fields.push('storageContract');
+    if (Object.hasOwn(value || {},'sourceApproval')) fields.push('sourceApproval');
+    if (!keys(value, fields) || ![1, 2].includes(value.version) || value.version === 2 && !storageContractValid(value.storageContract) || !validId(value.backupId) || !integer(value.sourceGeneration) || !Array.isArray(value.entries) || value.entries.some(entry => protectedEntry(entry?.path))) return false;
+    if (Object.hasOwn(value,'sourceApproval')) {
+        const approval = value.sourceApproval, identity = {releaseId:approval?.releaseId,manifestSha256:approval?.manifestSha256};
+        if (value.version !== 2 || value.storageContract !== STORAGE_CONTRACTS.INSTITUTIONAL || value.sourceGeneration !== 1
+            || !validInitialHomologation({homologation:approval,backend:identity,frontend:identity})) return false;
+    }
     const backend = value.entries?.find(entry => entry.path === 'backend');
     if (!backend) return false;
     const bindings = [['backend/.env', paths.env], ['backend/istbrasil.private', paths.private]].map(([name, target]) => ({ path: name, type: 'symlink', mode: 0o777, uid: backend.uid, gid: backend.gid, target }));
-    return validateManifest({ version: value.version, releaseId: value.backupId, declaredCommitSha: value.declaredCommitSha, gitProvenance: null, runtime: value.runtime, entries: [...value.entries, ...bindings] }, paths);
+    return validateManifest({ version: value.version, ...(value.version === 2 ? {storageContract: value.storageContract} : {}), releaseId: value.backupId, declaredCommitSha: value.declaredCommitSha, gitProvenance: null, runtime: value.runtime, entries: [...value.entries, ...bindings] }, paths);
+}
+
+// Esta classificação só é válida após o consumidor verificar selo, proveniência
+// e inventário do próprio manifesto. V1 não declara o contrato de armazenamento.
+export function classifyStorageContract(manifest, kind, paths = PATHS) {
+    const valid = kind === 'prepared' ? validatePreparedManifest(manifest)
+        : kind === 'release' ? validateManifest(manifest, paths)
+        : kind === 'backup' ? validateBackupManifest(manifest, paths) : false;
+    if (!valid) throw Object.assign(new Error('STORAGE_MANIFEST_INVALID'), {code: 'STORAGE_MANIFEST_INVALID'});
+    return manifest.version === 1 ? 'legacy-unverified' : manifest.storageContract;
 }
 
 export function validateBackupSeal(value) {
@@ -182,12 +222,25 @@ export const PHASES = Object.freeze(['started', 'prepared', 'backend_activated',
 export function validateJournal(envelope) {
     if (!keys(envelope, ['record', 'sha256']) || !validDigest(envelope.sha256) || sha256(JSON.stringify(envelope.record)) !== envelope.sha256) return false;
     const record = envelope.record;
-    if (!keys(record, ['version', 'transactionId', 'operation', 'generation', 'releaseId', 'events']) || record.version !== VERSION || !validId(record.transactionId) || !validId(record.releaseId) || !['deploy', 'rollback'].includes(record.operation) || !integer(record.generation) || record.generation < 1 || !Array.isArray(record.events) || record.events.length === 0 || record.events.length > 7) return false;
+    const fields = ['version', 'transactionId', 'operation', 'generation', 'releaseId', 'events'];
+    for (const name of ['process', 'releaseIdentity', 'publicIdentity', 'failureCode', 'recoveryFailureCode']) if (Object.hasOwn(record || {}, name)) fields.push(name);
+    if (!keys(record, fields) || record.version !== VERSION || !validId(record.transactionId) || !validId(record.releaseId) || !['install', 'deploy', 'rollback'].includes(record.operation) || !integer(record.generation) || record.generation < 1 || record.operation === 'install' && record.generation !== 1 || !Array.isArray(record.events) || record.events.length === 0 || record.events.length > 8) return false;
+    if (record.operation !== 'install' && ['process','releaseIdentity','publicIdentity'].some(name=>Object.hasOwn(record,name))) return false;
+    if (Object.hasOwn(record,'process') && (!keys(record.process, ['pid','pmId','startTicks','cwd','script']) || !integer(record.process.pid) || record.process.pid < 1 || !integer(record.process.pmId) || !/^\d+$/.test(record.process.startTicks) || typeof record.process.cwd !== 'string' || !record.process.cwd.startsWith('/') || record.process.script !== `${record.process.cwd}/server.js`)) return false;
+    if (Object.hasOwn(record,'releaseIdentity') && (!keys(record.releaseIdentity,['dev','ino']) || !integer(record.releaseIdentity.dev) || !integer(record.releaseIdentity.ino))) return false;
+    if (Object.hasOwn(record,'publicIdentity') && (!keys(record.publicIdentity,['dev','ino','created']) || !integer(record.publicIdentity.dev) || !integer(record.publicIdentity.ino) || typeof record.publicIdentity.created !== 'boolean')) return false;
+    for (const name of ['failureCode','recoveryFailureCode']) if (Object.hasOwn(record,name) && (typeof record[name] !== 'string' || !/^[A-Z][A-Z0-9_]{1,63}$/.test(record[name]))) return false;
     let previous = -1;
     for (let i = 0; i < record.events.length; i++) {
         const event = record.events[i];
         if (!keys(event, ['phase', 'at']) || !date(event.at) || i > 0 && event.at < record.events[i - 1].at) return false;
-        if (['failed', 'interrupted'].includes(event.phase)) return i === record.events.length - 1 && previous >= 0 && previous < PHASES.length - 1;
+        if (['failed', 'interrupted'].includes(event.phase)) {
+            if (previous < 0 || previous >= PHASES.length - 1) return false;
+            if (i === record.events.length - 1) return true;
+            const next = record.events[i + 1];
+            return event.phase === 'failed' && Object.hasOwn(record,'failureCode') && i + 1 === record.events.length - 1
+                && keys(next, ['phase','at']) && next.phase === 'recovered' && date(next.at) && next.at >= event.at;
+        }
         const phase = PHASES.indexOf(event.phase);
         if (phase !== previous + 1) return false;
         previous = phase;
@@ -197,7 +250,7 @@ export function validateJournal(envelope) {
 
 export function validateLock(value) {
     return keys(value, ['version', 'transactionId', 'token', 'operation', 'pid', 'startTicks', 'bootId', 'createdAt']) && value.version === VERSION
-        && validId(value.transactionId) && validId(value.token) && ['deploy', 'rollback'].includes(value.operation) && integer(value.pid) && value.pid > 0
+        && validId(value.transactionId) && validId(value.token) && ['install', 'homologate', 'deploy', 'rollback'].includes(value.operation) && integer(value.pid) && value.pid > 0
         && typeof value.startTicks === 'string' && /^\d+$/.test(value.startTicks) && validId(value.bootId) && date(value.createdAt);
 }
 
@@ -227,6 +280,19 @@ export function assessCapacity(filesystems, budgets) {
     return result;
 }
 
+// Uma ausência só é aceita quando foi observada explicitamente. A avaliação
+// não inicia processos e não é uma autorização para alterar o ambiente.
+export function assessInitialInstallation(observation) {
+    const requirements = ['activeAbsent', 'operationStateClear', 'journalClear',
+        'processVisibilityProven', 'institutionalProcessAbsent', 'backendPortFree',
+        'publicDirectoryEmptyOrAbsent', 'pathsCanonicalSafe', 'accessSafe',
+        'spaceSufficient', 'wordpressIsolated'];
+    if (!observation || typeof observation !== 'object' || Array.isArray(observation))
+        return {eligible: false, missing: requirements};
+    const missing = requirements.filter(name => observation[name] !== true);
+    return {eligible: missing.length === 0, missing};
+}
+
 // Observations are evidence for a diagnostic only, never a mutation capability.
 export function classify(observation) {
     const issues = [...new Set(observation.issues || [])].sort();
@@ -241,5 +307,9 @@ export function classify(observation) {
     else { status = 'INCONCLUSIVE'; issues.push('CONSISTENCY_NOT_PROVEN'); }
     return Object.freeze({ version: VERSION, status, deployAuthorized: false, rollbackAuthorized: false, issues,
         provenance: { declaredSha: observation.declaredSha || null, storedGitClaim: observation.storedGitClaim === true, independentlyVerified: false },
+        storageContract: observation.storageContract || null,
+        initialInstallation: assessInitialInstallation(observation.initialInstallation),
+        initialState: observation.initialState || 'unknown',
+        baseline: observation.baseline || null,
         capacity: observation.capacity || assessCapacity([], []), legacy: observation.legacy === true });
 }

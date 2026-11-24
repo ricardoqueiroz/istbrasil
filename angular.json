@@ -29,7 +29,8 @@
                             {
                                 "glob": "**/*",
                                 "input": "src/assets",
-                                "output": "assets"
+                                "output": "assets",
+                                "ignore": ["loja-recuperacao-bootstrap.js"]
                             },
                             {
                                 "glob": "**/*",

@@ -4,6 +4,7 @@ import {pathToFileURL} from 'node:url';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import {limitesArmazenamentoImplantacao} from '../../src/config/lojaImplantacao.js';
+import {classifyStorageContract, STORAGE_CONTRACTS} from './production-contract.mjs';
 
 const execute=promisify(execFile);
 const fail=code=>Object.assign(Error(code),{code});
@@ -20,8 +21,21 @@ try {
 } catch { process.exit(42); }
 `;
 
-export async function verificarArmazenamentoRelease({backend,arquivoEnv,base,limites=limitesArmazenamentoImplantacao(base),executar=execute}) {
-    if(!path.isAbsolute(backend)||!path.isAbsolute(arquivoEnv))throw fail('STORAGE_PREFLIGHT_ARGUMENT_INVALID');
+// O chamador deve verificar previamente selo, inventário e vínculo do manifesto
+// ao backend selecionado. Sem manifesto validável, esta função falha fechada.
+export async function verificarArmazenamentoRelease({backend,arquivoEnv,base,limites,executar=execute,manifest,kind,paths}) {
+    if(typeof backend!=='string'||!path.isAbsolute(backend))throw fail('STORAGE_PREFLIGHT_ARGUMENT_INVALID');
+    const contrato=classifyStorageContract(manifest,kind,paths);
+    try {
+        const root=await fs.lstat(backend);
+        if(!root.isDirectory()||root.isSymbolicLink()||path.relative(await fs.realpath(backend),backend)!=='')throw fail('STORAGE_CONTRACT_INCOMPATIBLE');
+        const servidor=await fs.lstat(path.join(backend,'server.js'));
+        if(!servidor.isFile()||servidor.isSymbolicLink())throw fail('STORAGE_CONTRACT_INCOMPATIBLE');
+    } catch { throw fail('STORAGE_CONTRACT_INCOMPATIBLE'); }
+    if(contrato===STORAGE_CONTRACTS.INSTITUTIONAL)return {contrato};
+    if(contrato!==STORAGE_CONTRACTS.LEGACY&&contrato!=='legacy-unverified')throw fail('STORAGE_CONTRACT_UNKNOWN');
+    if(typeof arquivoEnv!=='string'||!path.isAbsolute(arquivoEnv))throw fail('STORAGE_PREFLIGHT_ARGUMENT_INVALID');
+    limites ??= limitesArmazenamentoImplantacao(base);
     const modulo=path.join(backend,'src/config/lojaArmazenamento.js');
     try{
         if((await fs.lstat(backend)).isSymbolicLink()||path.relative(await fs.realpath(backend),backend)!=='')throw fail('STORAGE_CONTRACT_INCOMPATIBLE');
@@ -37,10 +51,11 @@ export async function verificarArmazenamentoRelease({backend,arquivoEnv,base,lim
         const r=await executar(process.execPath,['--input-type=module','-e',programa,pathToFileURL(modulo).href,arquivoEnv,backend,JSON.stringify(limites)],
             {cwd:backend,env,timeout:10000,maxBuffer:4096,encoding:'utf8',windowsHide:true});
         if(r.stdout!=='ARMAZENAMENTO_VALIDADO_V1'||r.stderr)throw fail('STORAGE_PREFLIGHT_FAILED');
+        return {contrato: STORAGE_CONTRACTS.LEGACY};
     }catch(e){throw fail(e?.code===41?'STORAGE_CONTRACT_INCOMPATIBLE':'STORAGE_PREFLIGHT_FAILED');}
 }
 
 // Shared gate: an unsuccessful validation never invokes the mutation callback.
-export async function antesDeAtivar({backend,arquivoEnv,base,validar=verificarArmazenamentoRelease},ativar) {
-    await validar({backend,arquivoEnv,base});return ativar();
+export async function antesDeAtivar({validar=verificarArmazenamentoRelease,...argumentos},ativar) {
+    await validar(argumentos);return ativar();
 }

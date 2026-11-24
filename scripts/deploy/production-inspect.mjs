@@ -5,7 +5,8 @@ import { createHash } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
-import { PATHS, releasePaths, parseAcl, checkMetadata, validateActive, validateManifest, validateBackupManifest, validateBackupSeal, validateJournal, validateLock, validId, approvedLink, sha256, classify, assessCapacity, PHASES } from './production-contract.mjs';
+import { PATHS, releasePaths, parseAcl, checkMetadata, validateActive, validateManifest, validateBackupManifest, validateBackupSeal, validateJournal, validateLock, validId, approvedLink, sha256, classify, classifyStorageContract, assessCapacity, PHASES } from './production-contract.mjs';
+import {checkInitialEnvironment, inspectAuthorizedPm2, assertNoInstitutionalPm2Processes} from './production-operation.mjs';
 
 const execute = promisify(execFile);
 const JSON_LIMIT = 32 * 1024 * 1024;
@@ -108,7 +109,7 @@ async function inspectPath(filename, policy, identity, aclReader, problems, opti
     }
 }
 
-async function inventory(root, entries, paths, release, identity, aclReader, published = false, archive = false) {
+async function inventory(root, entries, paths, release, identity, aclReader, published = false, archive = false, initialPublic = false) {
     const expected = new Map(entries.map(entry => [published ? entry.path.slice('frontend/'.length) : entry.path, entry]));
     if (published) expected.delete('');
     const found = new Set();
@@ -121,7 +122,9 @@ async function inventory(root, entries, paths, release, identity, aclReader, pub
             const filename = `${root}/${relativePath}`;
             const stat = await fs.lstat(filename);
             const metadata = meta(stat, stat.isSymbolicLink() ? 'basic' : await aclReader(filename));
-            if (metadata.type !== entry.type || metadata.mode !== entry.mode || metadata.uid !== entry.uid || metadata.gid !== entry.gid) throw new Error('ENTRY_METADATA_MISMATCH');
+            const expectedMode = published && initialPublic && entry.type === 'directory' ? 0o755
+                : published && initialPublic && entry.type === 'file' ? (entry.mode & 0o111 ? 0o755 : 0o644) : entry.mode;
+            if (metadata.type !== entry.type || metadata.mode !== expectedMode || metadata.uid !== entry.uid || metadata.gid !== entry.gid) throw new Error('ENTRY_METADATA_MISMATCH');
             if (metadata.type !== 'symlink' && checkMetadata(metadata, { type: entry.type, trusted: true }, identity) !== 'safe') throw new Error(metadata.acl === 'unknown' ? 'ACL_UNKNOWN' : 'ENTRY_UNSAFE');
             if (stat.isFile() && (stat.nlink !== 1 || stat.size !== entry.size || await hashFile(filename, stat) !== entry.sha256)) throw new Error('ENTRY_HASH_MISMATCH');
             if (stat.isSymbolicLink()) {
@@ -188,7 +191,7 @@ export async function inspectProcesses(paths, identity, lock) {
         for (const item of (await fs.readFile(`/proc/${pid}/environ`)).toString('utf8').split('\0')) {
             const position = item.indexOf('=');
             const name = item.slice(0, position);
-            if (['name', 'pm_cwd', 'pm_exec_path', 'PM2_HOME', 'PRODUCTS_LIVROS_PATH', 'CAPAS_LIVROS_STORAGE_PATH', 'DOTENV_CONFIG_PATH', 'DOTENV_CONFIG_OVERRIDE', 'DOTENV_KEY'].includes(name)) selected[name] = item.slice(position + 1);
+            if (['name', 'pm_cwd', 'pm_exec_path', 'PM2_HOME', 'DOTENV_CONFIG_PATH', 'DOTENV_CONFIG_OVERRIDE', 'DOTENV_KEY'].includes(name)) selected[name] = item.slice(position + 1);
         }
         if (selected.name !== 'ist-api' || selected.pm_cwd !== api.cwd || selected.pm_exec_path !== `${api.cwd}/server.js` || selected.PM2_HOME !== undefined && selected.PM2_HOME !== paths.pm2Home) { result.unknown = true; return result; }
         let parent = pid, linked = false;
@@ -249,16 +252,13 @@ export async function inspectProduction({ paths = PATHS, identityReader = operat
         try { await fs.lstat(filename); return true; }
         catch (error) { return error.code === 'ENOENT' ? false : null; }
     };
-    for (const filename of [paths.base, paths.repo, paths.html, paths.uploads, paths.backendPhp, paths.private]) await inspect(filename, directory);
+    for (const filename of [paths.base, paths.repo, paths.html, paths.uploads, paths.private]) await inspect(filename, directory);
     for (const filename of [paths.env, paths.envBackup, paths.envOld]) await inspect(filename, { type: 'file', private: true, config: true, modes: [0o600, 0o640] }, filename !== paths.env);
-    try {
-        const php = `${paths.html}/istdbadmin`, stat = await fs.lstat(php);
-        if (!stat.isSymbolicLink() || await fs.readlink(php) !== paths.phpMyAdmin) problems('invalid', 'PHPMYADMIN_LINK_INVALID');
-    } catch { problems('inconclusive', 'PHPMYADMIN_LINK_NOT_READABLE'); }
 
     const infrastructure = [];
-    for (const filename of [paths.admin, paths.releases, paths.backups, paths.state, paths.transactions, paths.logs]) infrastructure.push(await inspect(filename, privateDirectory, true));
-    const infrastructurePresence = await Promise.all([paths.admin, paths.releases, paths.backups, paths.state, paths.transactions, paths.logs].map(present));
+    for (const filename of [paths.admin, paths.releases, paths.backups, paths.state, paths.transactions]) infrastructure.push(await inspect(filename, privateDirectory, true));
+    const infrastructurePresence = await Promise.all([paths.admin, paths.releases, paths.backups, paths.state, paths.transactions].map(present));
+    await inspect(paths.logs, privateDirectory, true); // opcional; se existir, continua sujeito à política de segurança
     const partialInfrastructure = infrastructurePresence.includes(true) && infrastructurePresence.includes(false);
     if (partialInfrastructure) problems('recoveryRequired', 'PARTIAL_INFRASTRUCTURE');
     const backupSeals = [];
@@ -318,6 +318,14 @@ export async function inspectProduction({ paths = PATHS, identityReader = operat
     let processes;
     try { processes = await processReader(paths, identity, lock); }
     catch { processes = { proven: false }; }
+    const inspectLegacyPaths = async () => {
+        await inspect(paths.backendPhp, directory);
+        try {
+            const php = `${paths.html}/istdbadmin`, stat = await fs.lstat(php);
+            if (!stat.isSymbolicLink() || await fs.readlink(php) !== paths.phpMyAdmin) problems('invalid', 'PHPMYADMIN_LINK_INVALID');
+        } catch { problems('inconclusive', 'PHPMYADMIN_LINK_NOT_READABLE'); }
+    };
+    if (!active && processes.pm2) await inspectLegacyPaths();
     if (processes.unknown) problems('unknownProcess', 'PROCESS_IDENTITY_UNKNOWN');
     if (processes.proven !== true) problems('inconclusive', 'PROCESS_VISIBILITY_NOT_PROVEN');
     if (processes.runtimePathsProven !== true) problems('inconclusive', 'EFFECTIVE_RUNTIME_PATHS_NOT_PROVEN');
@@ -325,12 +333,39 @@ export async function inspectProduction({ paths = PATHS, identityReader = operat
         if (processes.orphanLock) problems('recoveryRequired', 'ABANDONED_LOCK_REQUIRES_REVIEW');
         else if (processes.liveLock === true && lock) {
             const journal = journals.find(record => record.transactionId === lock.transactionId);
-            if (journal && journal.operation === lock.operation && (!active || journal.generation === active.generation + 1) && !['confirmed', 'failed', 'interrupted'].includes(journal.events.at(-1).phase)) observation.inProgress = true;
+            if (journal && journal.operation === lock.operation && (!active || journal.generation === active.generation + 1) && !['confirmed', 'failed', 'interrupted', 'recovered'].includes(journal.events.at(-1).phase)) observation.inProgress = true;
             else problems('recoveryRequired', 'LOCK_JOURNAL_DIVERGENCE');
         } else problems('inconclusive', 'LOCK_OWNER_NOT_PROVEN');
     }
     for (const journal of journals) {
-        if (journal.events.at(-1).phase !== 'confirmed' && !(observation.inProgress && journal.transactionId === lock?.transactionId)) problems('recoveryRequired', 'TRANSACTION_REQUIRES_REVIEW');
+        if (!['confirmed','recovered'].includes(journal.events.at(-1).phase) && !(observation.inProgress && journal.transactionId === lock?.transactionId)) problems('recoveryRequired', 'TRANSACTION_REQUIRES_REVIEW');
+    }
+    const initialTransaction = journals.find(journal => journal.operation === 'install' && !['confirmed','recovered'].includes(journal.events.at(-1).phase));
+    if (initialTransaction) observation.initialState = observation.inProgress && initialTransaction.transactionId === lock?.transactionId
+        ? 'in_progress' : 'incomplete';
+    else if (active?.homologation === 'pending') observation.initialState = 'awaiting_homologation';
+    // O coletor atual não prova ausência de processo nem disponibilidade da
+    // porta. Não converter falta de observação em elegibilidade.
+    let publicDirectoryEmptyOrAbsent = false;
+    try {
+        const stat = await fs.lstat(paths.html);
+        publicDirectoryEmptyOrAbsent = stat.isDirectory() && !stat.isSymbolicLink()
+            && await fs.realpath(paths.html) === paths.html && (await fs.readdir(paths.html)).length === 0;
+    } catch (error) { if (error.code === 'ENOENT') publicDirectoryEmptyOrAbsent = true; }
+    observation.initialInstallation = {
+        activeAbsent: activePresence === false,
+        operationStateClear: lockPresence === false,
+        journalClear: !observation.invalid && (infrastructurePresence[4] === false || !!infrastructure[4] && journals.every(journal => journal.operation === 'install' && journal.events.at(-1).phase === 'recovered')),
+        publicDirectoryEmptyOrAbsent,
+    };
+    if (activePresence === false && lockPresence === false && identity.verified && !observation.invalid && !observation.recoveryRequired) {
+        try {
+            const initial = await checkInitialEnvironment(paths);
+            const list = await inspectAuthorizedPm2({pm2Home:paths.pm2Home});
+            assertNoInstitutionalPm2Processes(list,paths);
+            observation.initialInstallation = {...initial,institutionalProcessAbsent:true};
+            observation.initialState = 'eligible';
+        } catch { observation.issues.push('INITIAL_ELIGIBILITY_NOT_PROVEN'); }
     }
     if (!active && activePresence === false && processes.pm2) {
         observation.legacy = processes.pm2.cwd === paths.repo && processes.pm2.script === `${paths.repo}/server.js`;
@@ -340,6 +375,7 @@ export async function inspectProduction({ paths = PATHS, identityReader = operat
     if (active) {
         const journal = journals.find(record => record.transactionId === active.transactionId);
         if (!journal || journal.events.at(-1).phase !== PHASES.at(-1) || journal.generation !== active.generation || journal.releaseId !== active.backend.releaseId) problems('recoveryRequired', 'ACTIVE_JOURNAL_NOT_CONFIRMED');
+        if (journal?.operation === 'install' && !Object.hasOwn(active,'homologation') || journal && journal.operation !== 'install' && Object.hasOwn(active,'homologation')) problems('invalid','INITIAL_HOMOLOGATION_STATE_INVALID');
         const pm2 = processes.pm2;
         if (pm2 && ['name', 'user', 'home', 'cwd', 'script', 'node'].some(key => pm2[key] !== active.pm2[key])) problems('recoveryRequired', 'ACTIVE_PM2_DIVERGENCE');
         if (!pm2) problems('inconclusive', 'PM2_NOT_OBSERVED');
@@ -362,16 +398,25 @@ export async function inspectProduction({ paths = PATHS, identityReader = operat
         if (backendManifest) {
             observation.declaredSha = backendManifest.declaredCommitSha;
             observation.storedGitClaim = backendManifest.gitProvenance !== null;
+            observation.storageContract = classifyStorageContract(backendManifest, 'release', paths);
+            if (observation.storageContract === 'legacy-unverified') problems('inconclusive', 'LEGACY_STORAGE_REQUIREMENTS_UNVERIFIED');
             if (backendManifest.declaredCommitSha !== active.backend.commitSha) problems('invalid', 'DECLARED_SHA_DIVERGENCE');
+            if (observation.storageContract !== 'institutional-v1') await inspectLegacyPaths();
         }
         const frontendManifest = manifests.get(active.frontend.releaseId)?.value;
         if (frontendManifest) {
             const entries = frontendManifest.entries.filter(entry => entry.path === 'frontend' || entry.path.startsWith('frontend/'));
             if (entries.find(entry => entry.path === 'frontend/index.html')?.sha256 !== active.frontend.indexSha256) problems('invalid', 'FRONTEND_INDEX_REFERENCE_INVALID');
-            try { await inventory(paths.html, entries, paths, releasePaths(paths, active.frontend.releaseId), identity, aclReader, true); }
+            try { await inventory(paths.html, entries, paths, releasePaths(paths, active.frontend.releaseId), identity, aclReader, true, false, observation.storageContract === 'institutional-v1'); }
             catch (error) { problems(error.message === 'ACL_UNKNOWN' || ['EACCES', 'EPERM'].includes(error.code) ? 'inconclusive' : 'recoveryRequired', 'PUBLISHED_FRONTEND_DIVERGENCE'); }
         }
         observation.consistent = manifests.has(active.backend.releaseId) && manifests.has(active.frontend.releaseId);
+        if (observation.consistent && !observation.invalid && !observation.recoveryRequired) {
+            if (active.homologation?.status === 'approved') {
+                observation.initialState = 'baseline_homologated';
+                observation.baseline = {releaseId:active.backend.releaseId,manifestSha256:active.backend.manifestSha256,approvedAt:active.homologation.approvedAt};
+            } else if (!active.homologation && active.generation > 1) observation.initialState = 'subsequent_release';
+        }
     }
     // Detect metadata transitions during the read. This is not a filesystem snapshot.
     try {
