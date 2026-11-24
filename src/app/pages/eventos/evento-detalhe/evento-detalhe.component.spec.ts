@@ -81,7 +81,7 @@ describe('EventoDetalheComponent CTA e regressão do card', () => {
         const el = fixture.nativeElement;
         expect(el.querySelector('[data-testid="cta-etapa"]').textContent).toContain('Inscrições Virtuais · Pendente');
         const card = el.querySelector('aside').textContent;
-        for (const text of ['13/11/2026', '14/11/2026', 'Local geral', 'Endereço geral', 'Santarém/PA', 'Virtual', 'Realização Oficial']) expect(card).toContain(text);
+        for (const text of ['13/11/2026', '14/11/2026', 'Local geral', 'Endereço geral', 'Santarém/PA', 'Virtual', 'PRODUÇÃO']) expect(card).toContain(text);
         const timeline = fixture.debugElement.query(By.css('p-timeline'));
         expect(timeline.componentInstance.value).toBe(fixture.componentInstance.evento!.etapas);
     });
