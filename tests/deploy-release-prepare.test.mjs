@@ -24,7 +24,7 @@ async function put(git, type, value) {
     return current.oid;
 }
 
-async function fixture(t) {
+async function fixture(t, { institutional = false } = {}) {
     const workspace = await createExportWorkspace();
     t.after(() => fs.rm(workspace, { recursive: true, force: true }));
     const git = `${workspace}/repository/.git`;
@@ -33,7 +33,7 @@ async function fixture(t) {
     await fs.writeFile(`${git}/config`, '[core]\nrepositoryformatversion = 0\n', { mode: 0o600 });
     const files = {
         'server.js': '// fictional backend\n',
-        'package.json': JSON.stringify({ name: 'fictional-release', scripts: { build: 'fictional-build' } }),
+        'package.json': JSON.stringify({ name: 'fictional-release', ...(institutional ? { istStorageContract: 'institutional-v1' } : {}), scripts: { build: 'fictional-build' } }),
         'package-lock.json': JSON.stringify({ name: 'fictional-release', lockfileVersion: 3, packages: {} }),
         'angular.json': '{}', 'src/main.ts': '// fictional frontend\n',
     };
@@ -48,6 +48,52 @@ async function fixture(t) {
     const exported = await exportCommit({ workspace, commitSha: commit, approvedMainSha: commit });
     return { workspace, exported };
 }
+
+test('dependency hardlinks: internal pairs become independent while files and symlinks are preserved', linux, async t => {
+    const f = await fixture(t, { institutional: true });
+    const baseRunner = successfulRunner([]); let originalSingle;
+    const runner = async (command, args, options) => {
+        const result = await baseRunner(command, args, options);
+        if (options.stage === 'runtime-install') {
+            const d = `${options.cwd}/node_modules`;
+            await fs.writeFile(`${d}/first`, 'fixture executable', { mode: 0o755 }); await fs.chmod(`${d}/first`, 0o755);
+            await fs.link(`${d}/first`, `${d}/second`);
+            await fs.writeFile(`${d}/single`, 'unchanged', { mode: 0o600 }); originalSingle = await fs.lstat(`${d}/single`);
+            await fs.symlink('first', `${d}/symbolic`);
+        }
+        return result;
+    };
+    const p = await prepareRelease({ workspace: f.workspace, exportId: f.exported.record.exportId, runner });
+    const d = `${p.release}/backend/node_modules`, a = await fs.lstat(`${d}/first`), b = await fs.lstat(`${d}/second`);
+    assert.equal(a.nlink, 1); assert.equal(b.nlink, 1); assert.notEqual(a.ino, b.ino);
+    for (const name of ['first','second']) { assert.equal(await fs.readFile(`${d}/${name}`, 'utf8'), 'fixture executable'); assert.equal((await fs.lstat(`${d}/${name}`)).mode & 0o777, 0o755); }
+    assert.equal((await fs.lstat(`${d}/single`)).ino, originalSingle.ino);
+    assert.equal((await fs.lstat(`${d}/symbolic`)).isSymbolicLink(), true); assert.equal(await fs.readlink(`${d}/symbolic`), 'first');
+    await verifyPreparedRelease({ workspace: f.workspace, preparationId: p.manifest.preparationId });
+});
+
+test('dependency hardlinks: external link aborts before manifest or seal', linux, async t => {
+    const f = await fixture(t, { institutional: true }), baseRunner = successfulRunner([]);
+    const runner = async (command, args, options) => {
+        const result = await baseRunner(command, args, options);
+        if (options.stage === 'runtime-install') {
+            await fs.writeFile(`${options.cwd}/node_modules/linked`, 'fixture', { mode: 0o600 });
+            await fs.link(`${options.cwd}/node_modules/linked`, `${f.workspace}/outside`);
+        }
+        return result;
+    };
+    await assert.rejects(prepareRelease({ workspace: f.workspace, exportId: f.exported.record.exportId, runner }), { code: 'DEPENDENCY_HARDLINK_UNSAFE' });
+    const [id] = await fs.readdir(`${f.workspace}/preparations`), dir = `${f.workspace}/preparations/${id}`;
+    for (const name of ['manifest.json','PREPARED_INACTIVE.json']) await assert.rejects(fs.lstat(`${dir}/${name}`), { code: 'ENOENT' });
+    assert.equal(JSON.parse(await fs.readFile(`${dir}/FAILED.json`)).code, 'DEPENDENCY_HARDLINK_UNSAFE');
+});
+
+test('dependency hardlinks: prepared verification still rejects hardlinked files', linux, async t => {
+    const f = await fixture(t, { institutional: true });
+    const p = await prepareRelease({ workspace: f.workspace, exportId: f.exported.record.exportId, runner: successfulRunner([]) });
+    await fs.link(`${p.release}/backend/server.js`, `${f.workspace}/external-server`);
+    await assert.rejects(verifyPreparedRelease({ workspace: f.workspace, preparationId: p.manifest.preparationId }), { code: 'PREPARATION_CONTENT_UNSAFE' });
+});
 
 function successfulRunner(calls) {
     return async (command, args, options) => {

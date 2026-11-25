@@ -117,6 +117,70 @@ async function removeProjectTests(directory, root = directory) {
     }
 }
 
+// Only normalize fully accounted hardlinks within the freshly installed tree.
+async function normalizeDependencyHardlinks(root) {
+    const groups = new Map();
+    const visit = async directory => {
+        await privateDirectory(directory);
+        for (const name of (await fs.readdir(directory)).sort()) {
+            safeGitPath(name);
+            const filename = path.join(directory, name), stat = await fs.lstat(filename);
+            if (stat.isDirectory() && !stat.isSymbolicLink()) await visit(filename);
+            else if (stat.isFile() && stat.nlink > 1) {
+                if (stat.uid !== process.getuid() || stat.gid !== process.getgid() || stat.mode & 0o7022) throw fail('DEPENDENCY_HARDLINK_UNSAFE');
+                const key = `${stat.dev}:${stat.ino}`, group = groups.get(key) || [];
+                group.push({ filename, stat }); groups.set(key, group);
+            }
+        }
+    };
+    await visit(root);
+    // Validate every group before changing any path.
+    for (const group of groups.values()) {
+        if (group.length !== group[0].stat.nlink || group.some(item => !sameStat(item.stat, group[0].stat))) throw fail('DEPENDENCY_HARDLINK_UNSAFE');
+        for (const item of group) if (!sameStat(item.stat, await fs.lstat(item.filename))) throw fail('DEPENDENCY_HARDLINK_CHANGED');
+    }
+    for (const group of groups.values()) {
+        const original = group[0].stat;
+        let expectedDigest;
+        for (let i = 0; i < group.length - 1; i++) {
+            const filename = group[i].filename, before = await fs.lstat(filename);
+            if (!before.isFile() || before.isSymbolicLink() || before.dev !== original.dev || before.ino !== original.ino
+                || before.nlink !== group.length - i || before.size !== original.size || before.mtimeMs !== original.mtimeMs || before.mode !== original.mode
+                || before.uid !== original.uid || before.gid !== original.gid) throw fail('DEPENDENCY_HARDLINK_CHANGED');
+            const input = await fs.open(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+            const temporary = path.join(path.dirname(filename), `.ist-hardlink-${randomUUID()}`);
+            let output, created = false;
+            try {
+                if (!sameStat(before, await input.stat())) throw fail('DEPENDENCY_HARDLINK_CHANGED');
+                const bytes = await input.readFile();
+                if (!sameStat(before, await input.stat()) || !sameStat(before, await fs.lstat(filename))) throw fail('DEPENDENCY_HARDLINK_CHANGED');
+                const currentDigest = digest(bytes);
+                if (expectedDigest && currentDigest !== expectedDigest) throw fail('DEPENDENCY_HARDLINK_CHANGED');
+                expectedDigest = currentDigest;
+                output = await fs.open(temporary, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, before.mode & 0o777);
+                created = true; await output.writeFile(bytes); await output.chmod(before.mode & 0o777); await output.close(); output = null;
+                const copy = await fs.lstat(temporary);
+                if (!copy.isFile() || copy.nlink !== 1 || (copy.mode & 0o777) !== (before.mode & 0o777)
+                    || digest(await fs.readFile(temporary)) !== digest(bytes) || !sameStat(before, await fs.lstat(filename))) throw fail('DEPENDENCY_HARDLINK_CHANGED');
+                await fs.rename(temporary, filename); created = false;
+                const result = await fs.lstat(filename);
+                if (result.dev !== copy.dev || result.ino !== copy.ino || result.size !== copy.size || result.mode !== copy.mode
+                    || result.uid !== copy.uid || result.gid !== copy.gid || result.nlink !== 1) throw fail('DEPENDENCY_HARDLINK_CHANGED');
+            } finally {
+                await input.close(); if (output) await output.close(); if (created) await fs.unlink(temporary);
+            }
+        }
+        const last = await fs.lstat(group.at(-1).filename);
+        if (!last.isFile() || last.dev !== original.dev || last.ino !== original.ino || last.nlink !== 1
+            || last.size !== original.size || last.mtimeMs !== original.mtimeMs || last.mode !== original.mode || last.uid !== original.uid || last.gid !== original.gid) throw fail('DEPENDENCY_HARDLINK_CHANGED');
+        const handle = await fs.open(group.at(-1).filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+        try {
+            if (!sameStat(last, await handle.stat()) || digest(await handle.readFile()) !== expectedDigest
+                || !sameStat(last, await handle.stat()) || !sameStat(last, await fs.lstat(group.at(-1).filename))) throw fail('DEPENDENCY_HARDLINK_CHANGED');
+        } finally { await handle.close(); }
+    }
+}
+
 function cleanEnvironment(workspace, allowNetwork) {
     return {
         PATH: '/usr/local/bin:/usr/bin:/bin', HOME: workspace, LANG: 'C.UTF-8', LC_ALL: 'C.UTF-8',
@@ -255,6 +319,7 @@ export async function prepareRelease({ workspace, exportId, packageId, allowRegi
         await fs.rename(built, frontend);
         await fs.rm(`${backend}/dist`, { recursive: true, force: true });
         await removeProjectTests(backend);
+        await normalizeDependencyHardlinks(`${backend}/node_modules`);
         await requireEssential(release);
         const checkedSource = await resolveSource(workspace, exportId, packageId);
         if (checkedSource.record.commitSha !== record.commitSha || checkedSource.record.treeSha !== record.treeSha
