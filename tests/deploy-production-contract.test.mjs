@@ -124,6 +124,39 @@ test('persistent preparation manifest distinguishes Git and package claims', () 
     assert.equal(contract.validatePreparedManifest({ ...common, sourceType: 'package', packageId: randomUUID(), packageSha256: 'd'.repeat(64), releaseVersion: 'release-1', exportId: randomUUID() }), false);
     assert.equal(contract.validatePreparedSeal({ version: 1, preparationId, manifestSha256: 'e'.repeat(64) }), true);
 });
+test('protected uploads paths respect dependency structure across manifest contracts', () => {
+    const allowed = ['backend/node_modules/pkg/uploads/file.js', 'backend/node_modules/@scope/pkg/uploads/file.js',
+        'backend/node_modules/pkg/node_modules/other/uploads/file.js', 'backend/node_modules/different/uploads/file.js'];
+    const denied = ['backend/uploads/a', 'frontend/uploads/a', 'backend/src/uploads/a', 'frontend/node_modules/pkg/uploads/a',
+        'backend/src/node_modules/pkg/uploads/a', 'backend/node_modules-extra/pkg/uploads/a', 'backend/node_modules/uploads/a',
+        'backend/node_modules/pkg/../uploads/a', 'backend/node_modules/pkg/.env', 'backend/node_modules/pkg/.git/config',
+        'backend/node_modules/pkg/.npmrc', 'backend/node_modules/pkg/.ssh/id', 'backend/node_modules/pkg/.aws/key',
+        'backend/node_modules/pkg/.pm2/state', 'backend/node_modules/pkg/istbrasil.private/a', 'backend/node_modules/pkg/backend-php/a',
+        'backend/node_modules/pkg/istdbadmin/a', 'backend/node_modules/pkg/database/a', 'backend/node_modules/pkg/secret.pem'];
+    for (const name of allowed) assert.equal(contract.protectedEntry(name), false, name);
+    for (const name of denied) assert.equal(!contract.relativeEntry(name) || contract.protectedEntry(name), true, name);
+    const paths = contract.PATHS, id = randomUUID(), dirs = new Set(['backend','frontend']);
+    for (const name of allowed) for (let parent = path.posix.dirname(name); parent !== '.'; parent = path.posix.dirname(parent)) dirs.add(parent);
+    const names = ['backend/server.js','backend/package.json','backend/package-lock.json','frontend/index.html', ...allowed];
+    const preparedEntries = [...dirs].map(name => ({path:name,type:'directory',mode:0o700})).concat(names.map(name => ({path:name,type:'file',mode:0o600,size:1,sha256:'b'.repeat(64)})));
+    const prepared = {version:1,format:'ist-prepared-inactive-v1',status:'PREPARED_INACTIVE',preparationId:id,exportId:randomUUID(),commitSha:SHA,treeSha:'c'.repeat(40),node:'v20.19.6',npm:'10.8.2',modulesAbi:'115',platform:'linux',architecture:'x64',commands:{install:['npm','ci','--include=dev','--strict-peer-deps'],build:['npm','run','build','--','--configuration','production'],nativeProbe:['node','-e',"require('bcrypt'); require('sharp')"]},entries:preparedEntries};
+    const runtime = {platform:'linux',arch:'x64',node:'20.19.6',abi:'115'};
+    const releaseEntries = preparedEntries.map(entry => ({...entry,uid:1000,gid:1000}));
+    const bindings = [{path:'backend/.env',type:'symlink',mode:0o777,uid:1000,gid:1000,target:paths.env},{path:'backend/istbrasil.private',type:'symlink',mode:0o777,uid:1000,gid:1000,target:paths.private}];
+    const release = {version:1,releaseId:id,declaredCommitSha:SHA,gitProvenance:null,runtime,entries:[...releaseEntries,...bindings]};
+    const backup = {version:1,backupId:id,sourceGeneration:1,declaredCommitSha:SHA,runtime,entries:releaseEntries};
+    assert.equal(contract.validatePreparedManifest(prepared), true);
+    assert.equal(contract.validateManifest(release,paths), true);
+    assert.equal(contract.validateBackupManifest(backup,paths), true);
+    for (const name of denied) {
+        const entry = {path:name,type:'file',mode:0o600,size:1,sha256:'b'.repeat(64)};
+        assert.equal(contract.validatePreparedManifest({...prepared,entries:[...preparedEntries,entry]}),false,name);
+        assert.equal(contract.validateManifest({...release,entries:[...release.entries,{...entry,uid:1000,gid:1000}]},paths),false,name);
+        assert.equal(contract.validateBackupManifest({...backup,entries:[...backup.entries,{...entry,uid:1000,gid:1000}]},paths),false,name);
+    }
+    assert.equal(contract.validateManifest({...release,entries:releaseEntries},paths),false);
+    assert.equal(contract.validateBackupManifest({...backup,entries:release.entries},paths),false);
+});
 test('only two runtime bindings and internal relative package links are approved', () => {
     const p = contract.PATHS, r = contract.releasePaths(p, randomUUID());
     assert.equal(contract.approvedLink(p, r, 'backend/.env', p.env), true);

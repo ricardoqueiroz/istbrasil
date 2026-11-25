@@ -109,7 +109,12 @@ export function approvedLink(paths, release, relative, target) {
 
 export function protectedEntry(relative) {
     if (typeof relative !== 'string') return true;
-    return relative.split('/').some(part => /^\.env/.test(part) || ['.git', '.npmrc', '.ssh', '.aws', '.pm2', 'istbrasil.private', 'uploads', 'backend-php', 'istdbadmin', 'database'].includes(part)
+    const parts = relative.split('/');
+    const dependencyRoot = relativeEntry(relative) && parts[0] === 'backend' && parts[1] === 'node_modules'
+        && !!parts[2] && parts[2] !== 'uploads' && (!parts[2].startsWith('@') || !!parts[3] && parts[3] !== 'uploads');
+    const packageDepth = parts[2]?.startsWith('@') ? 4 : 3;
+    return parts.some((part, index) => /^\.env/.test(part) || ['.git', '.npmrc', '.ssh', '.aws', '.pm2', 'istbrasil.private', 'backend-php', 'istdbadmin', 'database'].includes(part)
+        || part === 'uploads' && !(dependencyRoot && index >= packageDepth)
         || /\.(pem|key|p12|pfx|session\.sql)$/i.test(part));
 }
 
