@@ -512,7 +512,14 @@ const cadastrar = async (req, res) => {
                 tokenConfirmacao,
                 tokenExpiraEm
             ]
-        );
+        ).catch((error) => {
+            if (error.code === 'ER_DUP_ENTRY' && typeof error.sqlMessage === 'string') {
+                const chave = error.sqlMessage.match(/^Duplicate entry .+ for key '(?:ist_usuarios\.)?(cpf_unico|email_unico)'$/)?.[1];
+                if (chave === 'cpf_unico') error.code = 'DUPLICATE_CPF';
+                if (chave === 'email_unico') error.code = 'DUPLICATE_EMAIL';
+            }
+            throw error;
+        });
 
         if (tipo === 'concorrente') {
             const evento = await resolverEventoPorSlug(FESTIVAL_II.slug, connection);
@@ -540,7 +547,11 @@ const cadastrar = async (req, res) => {
             return res.status(200).json({ message: RESPOSTA_NEUTRA_CADASTRO });
         }
 
-        if (error.code === 'DUPLICATE_CPF' || error.code === 'ER_DUP_ENTRY') {
+        if (error.code === 'DUPLICATE_CPF') {
+            return res.status(409).json({ message: 'Este CPF já está cadastrado.' });
+        }
+
+        if (error.code === 'ER_DUP_ENTRY') {
             return res.status(200).json({ message: RESPOSTA_NEUTRA_CADASTRO });
         }
 
