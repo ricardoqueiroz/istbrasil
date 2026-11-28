@@ -28,28 +28,16 @@ export const obterOpcoesSmtpGeral = (env = process.env) => opcoesCapturaLocal(en
 
 export const mailTransporter = nodemailer.createTransport(obterOpcoesSmtpGeral());
 
-const senderBySubject = {
-    'Dúvida': 'duvida@istbrasil.org.br',
-    'Solicitação': 'solicitacao@istbrasil.org.br',
-    'Parceria': 'parceria@istbrasil.org.br',
-    'Outro assunto': 'contato@istbrasil.org.br'
-};
-
-function getSenderEmail(subject) {
-    const normalizedSubject = String(subject || '')
-        .replace(/^\[Fale Conosco\]\s*/i, '')
-        .trim();
-
-    return senderBySubject[normalizedSubject] || 'contato@istbrasil.org.br';
-}
-
 export async function enviarEmail({ to, subject, html, text, fromName, fromAddress, replyTo }, transporte = mailTransporter) {
     if (!to || !subject || (!html && !text)) {
         throw new TypeError('Destinatário, assunto e conteúdo do e-mail são obrigatórios.');
     }
 
     const nomeRemetente = fromName || process.env.MAIL_FROM_NAME || 'IST Brasil';
-    const enderecoRemetente = fromAddress || process.env.MAIL_FROM_ADDRESS || 'contato@istbrasil.org.br';
+    const enderecoRemetente = fromAddress || process.env.MAIL_FROM_ADDRESS;
+    if (typeof enderecoRemetente !== 'string' || !enderecoRemetente.trim()) {
+        throw new Error('MAIL_FROM_ADDRESS não configurado.');
+    }
     const mensagem = {
         from: { name: nomeRemetente, address: enderecoRemetente },
         to,
@@ -116,7 +104,7 @@ export function criarEnvioRecuperacaoSmtp({ env = process.env, criarTransporte =
 export async function sendMail({ fromName, subject, html, replyTo }) {
     return enviarEmail({
         fromName,
-        fromAddress: getSenderEmail(subject),
+        fromAddress: process.env.MAIL_FROM_ADDRESS,
         to: 'presidencia@istbrasil.org.br',
         subject,
         html,
@@ -128,11 +116,8 @@ export async function sendMail({ fromName, subject, html, replyTo }) {
 // que sempre encaminha para a presidência (fluxo do Fale Conosco).
 export async function sendAccountMail({ to, subject, html }) {
     const fromName = process.env.MAIL_FROM_NAME || 'IST Brasil';
-    const fromAddress = process.env.MAIL_FROM_ADDRESS || 'contato@istbrasil.org.br';
-
     return enviarEmail({
         fromName,
-        fromAddress,
         to,
         subject,
         html

@@ -15,7 +15,6 @@ const sendContact = async (req, res) => {
 
         await sendMail({
             fromName: 'Contato IST Brasil',
-            fromEmail: 'contato@istbrasil.org.br',
             subject: `[Fale Conosco] ${subject || 'Mensagem recebida'}`,
             replyTo: `${name} <${email}>`,
             html: `
