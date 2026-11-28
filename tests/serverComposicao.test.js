@@ -4,6 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 
 const ambiente = () => ({ PATH: process.env.PATH, NODE_ENV: 'production',
+    JWT_SECRET: 'segredo-sintetico-de-teste',
     DOTENV_CONFIG_PATH: '/tmp/ist-inexistente-config-composicao',
     IST_LOJA_RECUPERACAO_ATIVA: 'true', IST_LOJA_ADVERSOS_ATIVA: 'true',
     IST_LOJA_DESCOBERTA_ATIVA: 'true', IST_LOJA_NOTIFICACOES_ATIVAS: 'true' });

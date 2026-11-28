@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
 import { pool as db } from '../config/db.js';
+import { JWT_SECRET } from '../config/jwt.js';
 import { FESTIVAL_II } from '../config/festival.js';
 import { resolverEventoPorSlug } from '../services/festivalEventoService.js';
 import { enviarEmail } from '../services/mailService.js';
@@ -29,14 +30,13 @@ const RESPOSTA_NEUTRA_CADASTRO = 'Se for possível concluir o cadastro, enviarem
 // Acrescenta a funcao do e-mail ao nome institucional, mantendo o mesmo fallback de mailService.
 const remetenteContextual = (contexto) => `${process.env.MAIL_FROM_NAME || 'IST Brasil'} (${contexto})`;
 const COOKIE_NAME = process.env.COOKIE_NAME || 'ist_session';
-// Sem JWT_SECRET definido no .env, cai em um segredo fixo apenas para nunca derrubar o login em dev;
-// em produção o .env DEVE definir JWT_SECRET para os cookies de sessão serem realmente seguros.
-const JWT_SECRET = process.env.JWT_SECRET || 'dev-only-insecure-secret';
 
 const buildCookieOptions = () => {
     const maxAgeSeconds = parseInt(process.env.COOKIE_MAXLIFETIME, 10) || 86400;
     const options = {
-        secure: process.env.COOKIE_SECURE === 'true',
+        secure: process.env.COOKIE_SECURE === undefined
+            ? process.env.NODE_ENV === 'production'
+            : process.env.COOKIE_SECURE === 'true',
         httpOnly: process.env.COOKIE_HTTPONLY !== 'false',
         sameSite: process.env.COOKIE_SAMESITE || 'lax',
         maxAge: maxAgeSeconds * 1000

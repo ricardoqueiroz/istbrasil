@@ -1,7 +1,7 @@
 import jwt from 'jsonwebtoken';
+import { JWT_SECRET } from '../config/jwt.js';
 
 const COOKIE_NAME = process.env.COOKIE_NAME || 'ist_session';
-const JWT_SECRET = process.env.JWT_SECRET || 'dev-only-insecure-secret';
 
 // Factory para composicoes com configuracao explicita. Export legado preservado.
 export const criarAutenticacaoUsuario = ({cookieNome=COOKIE_NAME, segredo=JWT_SECRET,
